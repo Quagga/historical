@@ -1707,7 +1707,7 @@ ripng_output_process (struct interface *ifp, struct sockaddr_in6 *to,
 
 	      ret = route_map_apply (ripng->route_map[rinfo->type].map,
 				     (struct prefix *) p, RMAP_RIPNG,
-				     &rinfo);
+				     rinfo);
 
 	      if (ret == RMAP_DENYMATCH)
 		{
