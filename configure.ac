@@ -106,7 +106,7 @@ AC_ARG_ENABLE(vty_group,
 [  --enable-vty-group=ARG      set vty sockets to have specified group as owner])
 
 AC_ARG_ENABLE(rtadv,
-[  --enable-rtadv         disable IPV6 router advertisment feature])
+[  --enable-rtadv         enable IPV6 router advertisment feature])
 
 if test "${enable_broken_aliases}" = "yes"; then
   if test "${enable_netlink}" = "yes"
@@ -138,7 +138,7 @@ fi
 AC_MSG_CHECKING(Should Zebra's RTADV be used)
 if test "${enable_rtadv}" = "yes"; then
   AC_MSG_RESULT(yes)
-  AC_DEFINE(HAVE_RTADV,,Use zebra routing advertisement)
+  AC_DEFINE(HAVE_RTADV,,Enable Zebra IPv6 Routing Advertisements)
 else
   AC_MSG_RESULT(no)
 fi
@@ -971,7 +971,7 @@ else
   AC_MSG_RESULT(${zebra_statedir})
 fi
 if test $zebra_statedir = "/dev/null"; then
-    echo "STATE DIRECTORY NOT FOUND!"
+    AC_MSG_ERROR('STATE DIRECTORY NOT FOUND! FIX OR SPECIFY --localstatedir!')
 fi
 
 AC_DEFINE_UNQUOTED(PATH_ZEBRA_PID, "$zebra_statedir/zebra.pid",zebra PID)
@@ -1021,6 +1021,6 @@ host operationg system  : ${host_os}
 source code location    : ${srcdir}
 compiler                : ${CC}
 compiler flags          : ${CFLAGS}
-state file directory    : ${zebra_statedir}
 linker flags            : ${LDFLAGS} ${LIBS}
+state file directory    : ${zebra_statedir}
 "

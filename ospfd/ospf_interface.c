@@ -489,9 +489,9 @@ ospf_new_if_params ()
   UNSET_IF_PARAM (oip, auth_simple);
   UNSET_IF_PARAM (oip, auth_crypt);
   UNSET_IF_PARAM (oip, auth_type);
-  
-  oip->auth_crypt = list_new ();
 
+  oip->auth_crypt = list_new ();
+  
   return oip;
 }
 
@@ -625,9 +625,6 @@ ospf_if_new_hook (struct interface *ifp)
   SET_IF_PARAM (IF_DEF_PARAMS (ifp), auth_simple);
   memset (IF_DEF_PARAMS (ifp)->auth_simple, 0, OSPF_AUTH_SIMPLE_SIZE);
   
-  SET_IF_PARAM (IF_DEF_PARAMS (ifp), auth_crypt);
-  IF_DEF_PARAMS (ifp)->auth_crypt = list_new ();
-
   SET_IF_PARAM (IF_DEF_PARAMS (ifp), auth_type);
   IF_DEF_PARAMS (ifp)->auth_type = OSPF_AUTH_NOTSET;
   
@@ -646,6 +643,7 @@ ospf_if_delete_hook (struct interface *ifp)
 #endif /* HAVE_OPAQUE_LSA */
   route_table_finish (IF_OIFS (ifp));
   route_table_finish (IF_OIFS_PARAMS (ifp));
+  ospf_del_if_params ((struct ospf_if_params *) IF_DEF_PARAMS (ifp));
   XFREE (MTYPE_OSPF_IF_INFO, ifp->info);
   ifp->info = NULL;
 
