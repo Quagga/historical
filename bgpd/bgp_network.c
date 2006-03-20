@@ -38,6 +38,66 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 extern struct zebra_privs_t bgpd_privs;
 
 
+#if defined(HAVE_TCP_MD5) && defined(GNU_LINUX)
+/* Set MD5 key to the socket.  */
+int
+bgp_md5_set (int sock, struct peer *peer, char *password)
+{
+  int ret;
+  struct tcp_rfc2385_cmd cmd;
+
+  cmd.command = TCP_MD5_AUTH_ADD;
+  if (sockunion_family (&peer->su) == AF_INET) {
+     cmd.addrlen = 4;
+     cmd.u.addrv4 = peer->su.sin.sin_addr;
+  } else {
+     cmd.addrlen = 16;
+     cmd.u.addrv6 = peer->su.sin6.sin6_addr;
+  }
+  cmd.keylen = strlen (password);
+  cmd.key = password;
+
+  if ( bgpd_privs.change (ZPRIVS_RAISE) )
+    zlog_err ("bgp_md5_set: could not raise privs");
+
+  ret = setsockopt (sock, IPPROTO_TCP, TCP_MD5_AUTH, &cmd, sizeof cmd);
+
+  if (bgpd_privs.change (ZPRIVS_LOWER) )
+    zlog_err ("bgp_md5_set: could not lower privs");
+
+  return ret;
+}
+
+/* Unset MD5 key from the socket.  */
+int
+bgp_md5_unset (int sock, struct peer *peer, char *password)
+{
+  int ret;
+  struct tcp_rfc2385_cmd cmd;
+
+  cmd.command = TCP_MD5_AUTH_DEL;
+  if (sockunion_family (&peer->su) == AF_INET) {
+     cmd.addrlen = 4;
+     cmd.u.addrv4 = peer->su.sin.sin_addr;
+  } else {
+     cmd.addrlen = 16;
+     cmd.u.addrv6 = peer->su.sin6.sin6_addr;
+  }
+  cmd.keylen = strlen (password);
+  cmd.key = password;
+
+  if ( bgpd_privs.change (ZPRIVS_RAISE) )
+    zlog_err ("bgp_md5_unset: could not raise privs");
+
+  ret = setsockopt (sock, IPPROTO_TCP, TCP_MD5_AUTH, &cmd, sizeof cmd);
+
+  if (bgpd_privs.change (ZPRIVS_LOWER) )
+    zlog_err ("bgp_md5_unset: could not lower privs");
+
+  return ret;
+}
+#endif /* defined(HAVE_TCP_MD5) && defined(GNU_LINUX) */
+
 /* Accept bgp connection. */
 static int
 bgp_accept (struct thread *thread)
@@ -151,55 +211,106 @@ bgp_bind (struct peer *peer)
   return 0;
 }
 
-int
-bgp_bind_address (int sock, struct in_addr *addr)
+static void
+bgp_bind_address (int sock, const struct prefix *addr)
 {
   int ret;
-  struct sockaddr_in local;
 
-  memset (&local, 0, sizeof (struct sockaddr_in));
-  local.sin_family = AF_INET;
+  switch (addr->family) {
+    case AF_INET: {
+      struct sockaddr_in local;
+      const struct prefix_ipv4 *addr_ipv4 = (const struct prefix_ipv4 *)addr;
+
+      memset (&local, 0, sizeof (struct sockaddr_in));
+      local.sin_family = addr_ipv4->family;
 #ifdef HAVE_SIN_LEN
-  local.sin_len = sizeof(struct sockaddr_in);
+      local.sin_len = sizeof(struct sockaddr_in);
 #endif /* HAVE_SIN_LEN */
-  memcpy (&local.sin_addr, addr, sizeof (struct in_addr));
+      memcpy (&local.sin_addr, &(addr_ipv4->prefix), sizeof (struct in_addr));
 
-  if ( bgpd_privs.change (ZPRIVS_RAISE) )
-    zlog_err ("bgp_bind_address: could not raise privs");
-    
-  ret = bind (sock, (struct sockaddr *)&local, sizeof (struct sockaddr_in));
-  if (ret < 0)
+     if ( bgpd_privs.change (ZPRIVS_RAISE) )
+       zlog_err ("bgp_bind_address: could not raise privs");
+      ret = bind (sock, (struct sockaddr *)&local, sizeof (struct sockaddr_in));
+      if (ret < 0)
+	;
+      if (bgpd_privs.change (ZPRIVS_LOWER) )
+        zlog_err ("bgp_bind_address: could not lower privs");
+      return ;
+    }
+#ifdef HAVE_IPV6
+    case AF_INET6: {
+      struct sockaddr_in6 local;
+      const struct prefix_ipv6 *addr_ipv6 = (const struct prefix_ipv6 *)addr;
+
+      memset (&local, 0, sizeof (struct sockaddr_in6));
+      local.sin6_family = addr_ipv6->family;
+#ifdef SIN6_LEN
+      local.sin6_len = sizeof(struct sockaddr_in6);
+#endif
+      memcpy (&local.sin6_addr, &(addr_ipv6->prefix), sizeof (struct in6_addr));
+
+     if ( bgpd_privs.change (ZPRIVS_RAISE) )
+       zlog_err ("bgp_bind_address: could not raise privs");
+      ret = bind (sock, (struct sockaddr *)&local, sizeof (struct sockaddr_in6));
+      if (ret < 0)
+	;
+      if (bgpd_privs.change (ZPRIVS_LOWER) )
+        zlog_err ("bgp_bind_address: could not lower privs");
+      return ;
+    }
+#endif
+    default:
+      zlog_err ("%d is an unknown address family\n", addr->family);
+      return ;
+  }
     ;
-    
-  if (bgpd_privs.change (ZPRIVS_LOWER) )
-    zlog_err ("bgp_bind_address: could not lower privs");
-    
-  return 0;
+  return ;
 }
 
-struct in_addr *
-bgp_update_address (struct interface *ifp)
+/*
+ * Returns an ifp source address which has the same Address Family as af
+ */
+static const struct prefix *
+bgp_update_address (struct interface *ifp, int af)
 {
-  struct prefix_ipv4 *p;
+  const struct prefix *p;
   struct connected *connected;
   struct listnode *node;
 
   for (ALL_LIST_ELEMENTS_RO (ifp->connected, node, connected))
     {
-      p = (struct prefix_ipv4 *) connected->address;
+      p = (struct prefix *) connected->address;
 
-      if (p->family == AF_INET)
-	return &p->prefix;
+
+      if ((af == AF_INET) && (p->family == af))
+	return p;
+
+#ifdef HAVE_IPV6
+      if ((af == AF_INET6) && (p->family == af)) {
+
+	/* do not allow IPv6 link-local address */
+      	if (IN6_IS_ADDR_LINKLOCAL(&(((const struct prefix_ipv6 *)p)->prefix)))
+	  continue;
+
+	return p;
+      }
+#endif /* HAVE_IPV6 */
+
     }
   return NULL;
 }
 
-/* Update source selection.  */
+/*
+ * Update source selection according to the
+ * 'neighbor WORD update-source (A.B.C.D|X:X::X:X|IFNAME)' argument.
+ * Because only one update-source command is allowed,
+ * update_if xor update_source is NULL.
+ */
 void
 bgp_update_source (struct peer *peer)
 {
   struct interface *ifp;
-  struct in_addr *addr;
+  const struct prefix *addr;
 
   /* Source is specified with interface name.  */
   if (peer->update_if)
@@ -208,7 +319,8 @@ bgp_update_source (struct peer *peer)
       if (! ifp)
 	return;
 
-      addr = bgp_update_address (ifp);
+      /* peer->su : sockunion address of the peer */
+      addr = bgp_update_address (ifp, sockunion_family(&(peer->su)));
       if (! addr)
 	return;
 
@@ -237,6 +349,11 @@ bgp_connect (struct peer *peer)
 
   sockopt_reuseaddr (peer->fd);
   sockopt_reuseport (peer->fd);
+
+#ifdef HAVE_TCP_MD5
+  if (CHECK_FLAG (peer->flags, PEER_FLAG_PASSWORD))
+      bgp_md5_set (peer->fd, peer, peer->password);
+#endif /* HAVE_TCP_MD5 */
 
   /* Bind socket. */
   bgp_bind (peer);
@@ -312,7 +429,7 @@ bgp_socket (struct bgp *bgp, unsigned short port)
     {
       if (ainfo->ai_family != AF_INET && ainfo->ai_family != AF_INET6)
 	continue;
-     
+
       sock = socket (ainfo->ai_family, ainfo->ai_socktype, ainfo->ai_protocol);
       if (sock < 0)
 	{
@@ -322,6 +439,17 @@ bgp_socket (struct bgp *bgp, unsigned short port)
 
       sockopt_reuseaddr (sock);
       sockopt_reuseport (sock);
+      if (ainfo->ai_family == AF_INET6) 
+        {
+          /* XXX Without, IPV6_ONLY, the IPv6 socket may also try to open IPv4 socket, 
+           * which may fail.
+           */
+          int on = 1;
+
+          if (setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&on, sizeof(on)) == -1)
+            zlog_err("setsockopt IPV6_V6ONLY %s", safe_strerror (errno) );
+        }
+
       
       if (bgpd_privs.change (ZPRIVS_RAISE) )
         zlog_err ("bgp_socket: could not raise privs");
@@ -345,6 +473,13 @@ bgp_socket (struct bgp *bgp, unsigned short port)
 	  close (sock);
 	  continue;
 	}
+
+#ifdef HAVE_TCP_MD5
+      if (ainfo->ai_family == AF_INET)
+	bm->sockv4 = sock;
+      else if (ainfo->ai_family == AF_INET6)
+	bm->sockv6 = sock;
+#endif /* HAVE_TCP_MD5 */
 
       thread_add_read (master, bgp_accept, bgp, sock);
     }
@@ -406,6 +541,9 @@ bgp_socket (struct bgp *bgp, unsigned short port)
       close (sock);
       return ret;
     }
+#ifdef HAVE_TCP_MD5
+  bm->sockv4 = sock;
+#endif /* HAVE_TCP_MD5 */
 
   thread_add_read (bm->master, bgp_accept, bgp, sock);
 

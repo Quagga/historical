@@ -19,6 +19,11 @@
  * with this program; if not, write to the Free Software Foundation, Inc., 
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
+
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
@@ -59,6 +64,10 @@
 
 extern struct thread_master *master;
 extern struct isis *isis;
+
+extern int
+isis_area_get (struct vty *vty, const char *area_tag);
+
 
 struct isis_circuit *
 isis_circuit_new ()
@@ -113,9 +122,17 @@ isis_circuit_configure (struct isis_circuit *circuit, struct isis_area *area)
     {
       circuit->u.bc.adjdb[0] = list_new ();
       circuit->u.bc.adjdb[1] = list_new ();
+      circuit->u.bc.adjdb[0]->del = isis_free_adj;
+      circuit->u.bc.adjdb[1]->del = isis_free_adj;
       circuit->u.bc.pad_hellos = 1;
+      circuit->u.bc.lsp_interval = LSP_INTERVAL;
     }
-  circuit->lsp_interval = LSP_INTERVAL;
+  else
+    {
+      circuit->u.p2p.dont_tx_lsp = list_new ();      
+      circuit->u.p2p.retransmit_throttle = LSP_INTERVAL;
+      circuit->u.p2p.retransmit = MIN_LSP_TRANS_INTERVAL;
+    }
 
   /*
    * Add the circuit into area
@@ -198,6 +215,11 @@ isis_circuit_del (struct isis_circuit *circuit)
 	list_delete (circuit->u.bc.lan_neighs[1]);
       /* destroy addresses */
     }
+  else
+    {
+      if (circuit->u.p2p.dont_tx_lsp)
+	list_delete (circuit->u.p2p.dont_tx_lsp);
+    }	
   if (circuit->ip_addrs)
     list_delete (circuit->ip_addrs);
 #ifdef HAVE_IPV6
@@ -582,6 +604,7 @@ isis_circuit_down (struct isis_circuit *circuit)
       THREAD_TIMER_OFF (circuit->u.bc.t_send_lan_hello[1]);
       THREAD_TIMER_OFF (circuit->u.bc.t_run_dr[0]);
       THREAD_TIMER_OFF (circuit->u.bc.t_run_dr[1]);
+      THREAD_TIMER_OFF (circuit->t_send_lsp);	
     }
   else if (circuit->circ_type == CIRCUIT_T_P2P)
     {
@@ -627,6 +650,53 @@ isis_interface_config_write (struct vty *vty)
 
   for (ALL_LIST_ELEMENTS (iflist, node, nnode, ifp))
   {
+    /* Default settings are not taken into account */
+    int count = 0;
+    for (ALL_LIST_ELEMENTS (isis->area_list, node2, nnode2, area))
+    {
+      c = circuit_lookup_by_ifp (ifp, area->circuit_list);
+      if (c)
+        {
+	  if (c->ip_router ||
+#ifdef HAVE_IPV6
+              c->ipv6_router ||
+#endif /* HAVE_IPV6 */
+	      c->circuit_is_type != IS_LEVEL_1_AND_2 ||
+	      (c->csnp_interval[0] != CSNP_INTERVAL || 
+	       c->csnp_interval[1] != CSNP_INTERVAL) ||
+	      (c->hello_interval[0] != HELLO_INTERVAL || 
+	       c->hello_interval[1] != HELLO_INTERVAL) ||
+	      (c->hello_multiplier[0] != HELLO_MULTIPLIER ||
+	       c->hello_multiplier[1] != HELLO_MULTIPLIER) ||
+	      (c->metrics[0].metric_default != DEFAULT_CIRCUIT_METRICS ||
+	       c->metrics[1].metric_default != DEFAULT_CIRCUIT_METRICS))
+	    {
+	      count ++;
+	      break;
+	    }
+
+	  if (c->circ_type == CIRCUIT_T_BROADCAST)
+	  {
+	    if (!c->u.bc.pad_hellos ||
+		c->u.bc.lsp_interval != LSP_INTERVAL ||
+		c->u.bc.priority[0] != DEFAULT_PRIORITY ||
+		c->u.bc.priority[1] != DEFAULT_PRIORITY)
+		{
+	          count ++;
+		  break;
+		}
+	  }
+	  else if (c->u.p2p.retransmit != MIN_LSP_TRANS_INTERVAL ||
+		   c->u.p2p.retransmit_throttle != LSP_INTERVAL)
+	  {
+	    count ++;
+	    break;
+	  }
+	}
+    }
+    if (!ifp->desc && count == 0)
+      continue;
+
     /* IF name */
     vty_out (vty, "interface %s%s", ifp->name, VTY_NEWLINE);
     write++;
@@ -687,10 +757,10 @@ isis_interface_config_write (struct vty *vty)
 	    {
 	      for (i = 0; i < 2; i++)
 		{
-		  if (c->csnp_interval[1] != CSNP_INTERVAL)
+		  if (c->csnp_interval[i] != CSNP_INTERVAL)
 		    {
 		      vty_out (vty, " isis csnp-interval %d level-%d%s",
-			       c->csnp_interval[1], i + 1, VTY_NEWLINE);
+			       c->csnp_interval[i], i + 1, VTY_NEWLINE);
 		      write++;
 		    }
 		}
@@ -760,6 +830,14 @@ isis_interface_config_write (struct vty *vty)
 	  /* ISIS - Priority */
 	  if (c->circ_type == CIRCUIT_T_BROADCAST)
 	    {
+	      /* ISIS - LSP interval */
+	      if (c->u.bc.lsp_interval != LSP_INTERVAL)
+	        {
+		  vty_out (vty, " isis lsp-interval %ld%s",
+			   c->u.bc.lsp_interval, VTY_NEWLINE);
+		  write++;		
+	        }
+	
 	      if (c->u.bc.priority[0] == c->u.bc.priority[1])
 		{
 		  if (c->u.bc.priority[0] != DEFAULT_PRIORITY)
@@ -782,6 +860,24 @@ isis_interface_config_write (struct vty *vty)
 		    }
 		}
 	    }
+	  else
+	    {
+	      /* ISIS - retransmit interval */
+	      if (c->u.p2p.retransmit != MIN_LSP_TRANS_INTERVAL)
+	        {
+		  vty_out (vty, " isis lsp-interval %ld%s",
+			   c->u.p2p.retransmit, VTY_NEWLINE);
+		  write++;		
+	        }		
+		
+	      /* ISIS - retransmit throttle interval */
+	      if (c->u.p2p.retransmit_throttle != LSP_INTERVAL)
+	        {
+		  vty_out (vty, " isis lsp-interval %ld%s",
+			   c->u.p2p.retransmit_throttle, VTY_NEWLINE);
+		  write++;		
+	        }
+	    }	
 	  /* ISIS - Metric */
 	  if (c->metrics[0].metric_default == c->metrics[1].metric_default)
 	    {
@@ -830,6 +926,16 @@ DEFUN (ip_router_isis,
   assert (ifp);
 
   area = isis_area_lookup (argv[0]);
+
+  if (! area)  
+  /* XXX Since this command when be issued before "router isis WORD", we need to create area */
+    {
+      isis_area_get (vty, argv[0]);
+      area = isis_area_lookup (argv[0]);
+      /* XXX restore vty->index, which has been changed by isis_area_get() */
+      vty->index = ifp;
+      vty->node = INTERFACE_NODE;
+    }
 
   /* Prevent more than one circuit per interface */
   if (area)
@@ -994,6 +1100,121 @@ DEFUN (no_isis_circuit_type,
 
   return CMD_SUCCESS;
 }
+
+/* Sets the time delay between successive IS-IS LSP transmissions */
+DEFUN (isis_lsp_interval,
+       isis_lsp_interval_cmd,
+       "isis lsp-interval WORD",
+       "IS-IS commands\n"
+       "Configure the minimumLSPTransmissionInterval\n")
+{
+  struct isis_circuit *circuit;
+  struct interface *ifp;
+  ifp = vty->index;
+  circuit = ifp->info;
+  if (circuit == NULL)
+    {
+      return CMD_WARNING;
+    }
+  circuit->u.bc.lsp_interval = atoi(argv[0]);
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_isis_lsp_interval,
+       no_isis_lsp_interval_cmd,
+       "no isis lsp-interval WORD",
+	NO_STR
+       "IS-IS commands\n"
+       "Configure the minimumLSPTransmissionInterval\n")
+{
+  struct isis_circuit *circuit;
+  struct interface *ifp;
+  ifp = vty->index;
+  circuit = ifp->info;
+  if (circuit == NULL)
+    {
+      return CMD_WARNING;
+    }
+  circuit->u.bc.lsp_interval = LSP_INTERVAL;
+  return CMD_SUCCESS;
+}
+
+/* Sets the time delay between successive IS-IS LSP transmissions on p2p circuit */
+DEFUN (isis_retransmit_throttle_interval,
+       isis_retransmit_throttle_interval_cmd,
+       "isis retransmit-throttle-interval WORD",
+       "IS-IS commands\n"
+       "Configure the IS-IS LSP retransmission throttle interval.\n")
+{
+  struct isis_circuit *circuit;
+  struct interface *ifp;
+  ifp = vty->index;
+  circuit = ifp->info;
+  if (circuit == NULL)
+    {
+      return CMD_WARNING;
+    }
+  circuit->u.p2p.retransmit_throttle = atoi(argv[0]);
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_isis_retransmit_throttle_interval,
+       no_isis_retransmit_throttle_interval_cmd,
+       "isis retransmit-throttle-interval WORD",
+	NO_STR
+       "IS-IS commands\n"
+       "Configure the IS-IS LSP retransmission throttle interval.\n")
+{
+  struct isis_circuit *circuit;
+  struct interface *ifp;
+  ifp = vty->index;
+  circuit = ifp->info;
+  if (circuit == NULL)
+    {
+      return CMD_WARNING;
+    }
+  circuit->u.p2p.retransmit_throttle = LSP_INTERVAL;
+  return CMD_SUCCESS;
+}
+
+/* Sets the time delay between successive IS-IS LSP transmissions on p2p circuit */
+DEFUN (isis_retransmit_interval,
+       isis_retransmit_interval_cmd,
+       "isis retransmit-interval WORD",
+       "IS-IS commands\n"
+       "Configure the IS-IS LSP retransmission interval.\n")
+{
+  struct isis_circuit *circuit;
+  struct interface *ifp;
+  ifp = vty->index;
+  circuit = ifp->info;
+  if (circuit == NULL)
+    {
+      return CMD_WARNING;
+    }
+  circuit->u.p2p.retransmit = atoi(argv[0]);
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_isis_retransmit_interval,
+       no_isis_retransmit_interval_cmd,
+       "isis retransmit-throttle-interval WORD",
+	NO_STR
+       "IS-IS commands\n"
+       "Configure the IS-IS LSP retransmission throttle interval.\n")
+{
+  struct isis_circuit *circuit;
+  struct interface *ifp;
+  ifp = vty->index;
+  circuit = ifp->info;
+  if (circuit == NULL)
+    {
+      return CMD_WARNING;
+    }
+  circuit->u.p2p.retransmit = MIN_LSP_TRANS_INTERVAL;
+  return CMD_SUCCESS;
+}
+
 
 DEFUN (isis_passwd,
        isis_passwd_cmd,
@@ -1238,6 +1459,7 @@ ALIAS (no_isis_priority_l2,
 {
   struct isis_circuit *circuit;
   struct interface *ifp;
+  struct isis_area *area;
   int met;
 
   ifp = vty->index;
@@ -1253,6 +1475,11 @@ ALIAS (no_isis_priority_l2,
   circuit->metrics[0].metric_default = met;
   circuit->metrics[1].metric_default = met;
 
+  area = circuit->area;
+  assert (area);
+
+  lsp_regenerate_schedule (area);
+
   return CMD_SUCCESS;
 }
 
@@ -1265,6 +1492,7 @@ DEFUN (no_isis_metric,
 {
   struct isis_circuit *circuit;
   struct interface *ifp;
+  struct isis_area *area;
 
   ifp = vty->index;
   circuit = ifp->info;
@@ -1276,6 +1504,11 @@ DEFUN (no_isis_metric,
 
   circuit->metrics[0].metric_default = DEFAULT_CIRCUIT_METRICS;
   circuit->metrics[1].metric_default = DEFAULT_CIRCUIT_METRICS;
+
+  area = circuit->area;
+  assert (area);
+
+  lsp_regenerate_schedule (area);
 
   return CMD_SUCCESS;
 }
@@ -1922,6 +2155,16 @@ DEFUN (ipv6_router_isis,
 
   area = isis_area_lookup (argv[0]);
 
+  if (! area)  
+  /* XXX Since this command when be issued before "router isis WORD", we need to create area */
+    {
+      isis_area_get (vty, argv[0]);
+      area = isis_area_lookup (argv[0]);
+      /* XXX restore vty->index, which has been changed by isis_area_get() */
+      vty->index = ifp;
+      vty->node = INTERFACE_NODE;
+    }
+
   /* Prevent more than one circuit per interface */
   if (area)
     c = circuit_lookup_by_ifp (ifp, area->circuit_list);
@@ -2048,6 +2291,9 @@ isis_circuit_init ()
   install_element (INTERFACE_NODE, &ip_router_isis_cmd);
   install_element (INTERFACE_NODE, &no_ip_router_isis_cmd);
 
+  install_element (INTERFACE_NODE, &isis_lsp_interval_cmd);
+  install_element (INTERFACE_NODE, &no_isis_lsp_interval_cmd);
+  
   install_element (INTERFACE_NODE, &isis_circuit_type_cmd);
   install_element (INTERFACE_NODE, &no_isis_circuit_type_cmd);
 

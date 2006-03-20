@@ -21,6 +21,10 @@
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
 #include <stdio.h>
 #include <string.h>
 #include <zebra.h>
@@ -343,7 +347,7 @@ process_p2p_hello (struct isis_circuit *circuit)
       if (adj == NULL)
 	return ISIS_ERROR;
       circuit->u.p2p.neighbor = adj;
-      isis_adj_state_change (adj, ISIS_ADJ_INITIALIZING, NULL);
+      isis_event_adjacency_state_change (adj, ISIS_ADJ_INITIALIZING, NULL);
       adj->sys_type = ISIS_SYSTYPE_UNKNOWN;
     }
 
@@ -411,7 +415,7 @@ process_p2p_hello (struct isis_circuit *circuit)
 	      if (adj->adj_state != ISIS_ADJ_UP)
 		{
 		  /* (4) adj state up */
-		  isis_adj_state_change (adj, ISIS_ADJ_UP, NULL);
+		  isis_event_adjacency_state_change (adj, ISIS_ADJ_UP, NULL);
 		  /* (5) adj usage level 1 */
 		  adj->adj_usage = ISIS_ADJ_LEVEL1;
 		}
@@ -430,7 +434,7 @@ process_p2p_hello (struct isis_circuit *circuit)
 	      else if (adj->adj_usage == ISIS_ADJ_LEVEL1)
 		{
 		  /* (6) down - wrong system */
-		  isis_adj_state_change (adj, ISIS_ADJ_DOWN, "Wrong System");
+		  isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN, "Wrong System");
 		}
 	      break;
 	    }
@@ -445,7 +449,7 @@ process_p2p_hello (struct isis_circuit *circuit)
 	      if (adj->adj_state != ISIS_ADJ_UP)
 		{
 		  /* (6) adj state up */
-		  isis_adj_state_change (adj, ISIS_ADJ_UP, NULL);
+		  isis_event_adjacency_state_change (adj, ISIS_ADJ_UP, NULL);
 		  /* (7) adj usage level 1 */
 		  adj->adj_usage = ISIS_ADJ_LEVEL1;
 		}
@@ -457,14 +461,14 @@ process_p2p_hello (struct isis_circuit *circuit)
 		       (adj->adj_usage == ISIS_ADJ_LEVEL2))
 		{
 		  /* (8) down - wrong system */
-		  isis_adj_state_change (adj, ISIS_ADJ_DOWN, "Wrong System");
+		  isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN, "Wrong System");
 		}
 	      break;
 	    case IS_LEVEL_2:
 	      if (adj->adj_state != ISIS_ADJ_UP)
 		{
 		  /* (6) adj state up */
-		  isis_adj_state_change (adj, ISIS_ADJ_UP, NULL);
+		  isis_event_adjacency_state_change (adj, ISIS_ADJ_UP, NULL);
 		  /* (9) adj usage level 2 */
 		  adj->adj_usage = ISIS_ADJ_LEVEL2;
 		}
@@ -472,7 +476,7 @@ process_p2p_hello (struct isis_circuit *circuit)
 		       (adj->adj_usage == ISIS_ADJ_LEVEL1AND2))
 		{
 		  /* (8) down - wrong system */
-		  isis_adj_state_change (adj, ISIS_ADJ_DOWN, "Wrong System");
+		  isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN, "Wrong System");
 		}
 	      else if (adj->adj_usage == ISIS_ADJ_LEVEL2)
 		{
@@ -483,7 +487,7 @@ process_p2p_hello (struct isis_circuit *circuit)
 	      if (adj->adj_state != ISIS_ADJ_UP)
 		{
 		  /* (6) adj state up */
-		  isis_adj_state_change (adj, ISIS_ADJ_UP, NULL);
+		  isis_event_adjacency_state_change (adj, ISIS_ADJ_UP, NULL);
 		  /* (10) adj usage level 1 */
 		  adj->adj_usage = ISIS_ADJ_LEVEL1AND2;
 		}
@@ -491,7 +495,7 @@ process_p2p_hello (struct isis_circuit *circuit)
 		       (adj->adj_usage == ISIS_ADJ_LEVEL2))
 		{
 		  /* (8) down - wrong system */
-		  isis_adj_state_change (adj, ISIS_ADJ_DOWN, "Wrong System");
+		  isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN, "Wrong System");
 		}
 	      else if (adj->adj_usage == ISIS_ADJ_LEVEL1AND2)
 		{
@@ -517,7 +521,7 @@ process_p2p_hello (struct isis_circuit *circuit)
 		       (adj->adj_usage == ISIS_ADJ_LEVEL2))
 		{
 		  /* (6) down - wrong system */
-		  isis_adj_state_change (adj, ISIS_ADJ_DOWN, "Wrong System");
+		  isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN, "Wrong System");
 		}
 	      break;
 	    case IS_LEVEL_1_AND_2:
@@ -525,14 +529,14 @@ process_p2p_hello (struct isis_circuit *circuit)
 	      if (adj->adj_state != ISIS_ADJ_UP)
 		{
 		  /* (7) adj state up */
-		  isis_adj_state_change (adj, ISIS_ADJ_UP, NULL);
+		  isis_event_adjacency_state_change (adj, ISIS_ADJ_UP, NULL);
 		  /* (8) adj usage level 2 */
 		  adj->adj_usage = ISIS_ADJ_LEVEL2;
 		}
 	      else if (adj->adj_usage == ISIS_ADJ_LEVEL1AND2)
 		{
 		  /* (6) down - wrong system */
-		  isis_adj_state_change (adj, ISIS_ADJ_DOWN, "Wrong System");
+		  isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN, "Wrong System");
 		}
 	      else if (adj->adj_usage == ISIS_ADJ_LEVEL2)
 		{
@@ -550,12 +554,12 @@ process_p2p_hello (struct isis_circuit *circuit)
 	  /* 8.2.5.2 b) 1) is_type L1 and adj is not up */
 	  if (adj->adj_state != ISIS_ADJ_UP)
 	    {
-	      isis_adj_state_change (adj, ISIS_ADJ_DOWN, "Area Mismatch");
+	      isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN, "Area Mismatch");
 	      /* 8.2.5.2 b) 2)is_type L1 and adj is up */
 	    }
 	  else
 	    {
-	      isis_adj_state_change (adj, ISIS_ADJ_DOWN,
+	      isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN,
 				     "Down - Area Mismatch");
 	    }
 	}
@@ -574,14 +578,14 @@ process_p2p_hello (struct isis_circuit *circuit)
 	      else if (adj->adj_usage == ISIS_ADJ_LEVEL1)
 		{
 		  /* (7) down - area mismatch */
-		  isis_adj_state_change (adj, ISIS_ADJ_DOWN, "Area Mismatch");
+		  isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN, "Area Mismatch");
 
 		}
 	      else if ((adj->adj_usage == ISIS_ADJ_LEVEL1AND2) ||
 		       (adj->adj_usage == ISIS_ADJ_LEVEL2))
 		{
 		  /* (7) down - wrong system */
-		  isis_adj_state_change (adj, ISIS_ADJ_DOWN, "Wrong System");
+		  isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN, "Wrong System");
 		}
 	      break;
 	    case IS_LEVEL_1_AND_2:
@@ -589,27 +593,27 @@ process_p2p_hello (struct isis_circuit *circuit)
 	      if (adj->adj_state != ISIS_ADJ_UP)
 		{
 		  /* (8) adj state up */
-		  isis_adj_state_change (adj, ISIS_ADJ_UP, NULL);
+		  isis_event_adjacency_state_change (adj, ISIS_ADJ_UP, NULL);
 		  /* (9) adj usage level 2 */
 		  adj->adj_usage = ISIS_ADJ_LEVEL2;
 		}
 	      else if (adj->adj_usage == ISIS_ADJ_LEVEL1)
 		{
 		  /* (7) down - wrong system */
-		  isis_adj_state_change (adj, ISIS_ADJ_DOWN, "Wrong System");
+		  isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN, "Wrong System");
 		}
 	      else if (adj->adj_usage == ISIS_ADJ_LEVEL1AND2)
 		{
 		  if (hdr->circuit_t == IS_LEVEL_2)
 		    {
 		      /* (7) down - wrong system */
-		      isis_adj_state_change (adj, ISIS_ADJ_DOWN,
+		      isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN,
 					     "Wrong System");
 		    }
 		  else
 		    {
 		      /* (7) down - area mismatch */
-		      isis_adj_state_change (adj, ISIS_ADJ_DOWN,
+		      isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN,
 					     "Area Mismatch");
 		    }
 		}
@@ -815,7 +819,7 @@ process_lan_hello (int level, struct isis_circuit *circuit, u_char * ssnpa)
 	}
 
       adj->level = level;
-      isis_adj_state_change (adj, ISIS_ADJ_INITIALIZING, NULL);
+      isis_event_adjacency_state_change (adj, ISIS_ADJ_INITIALIZING, NULL);
 
       if (level == 1)
 	{
@@ -889,7 +893,7 @@ process_lan_hello (int level, struct isis_circuit *circuit, u_char * ssnpa)
 	  for (ALL_LIST_ELEMENTS (tlvs.lan_neighs, node, nnode, snpa))
 	    if (!memcmp (snpa, circuit->u.bc.snpa, ETH_ALEN))
 	    {
-	      isis_adj_state_change (adj, ISIS_ADJ_UP,
+	      isis_event_adjacency_state_change (adj, ISIS_ADJ_UP,
 				     "own SNPA found in LAN Neighbours TLV");
 	    }
 	}
@@ -901,7 +905,7 @@ out:
     {
       /* FIXME: is this place right? fix missing info */
       zlog_debug ("ISIS-Adj (%s): Rcvd L%d LAN IIH from %s on %s, cirType %s, "
-		  "cirID %u, length %ld",
+		  "cirID %u, length %d",
 		  circuit->area->area_tag,
 		  level, snpa_print (ssnpa), circuit->interface->name,
 		  circuit_t2string (circuit->circuit_is_type),
@@ -942,7 +946,7 @@ process_lsp (int level, struct isis_circuit *circuit, u_char * ssnpa)
   if (isis->debugs & DEBUG_UPDATE_PACKETS)
     {
       zlog_debug ("ISIS-Upd (%s): Rcvd L%d LSP %s, seq 0x%08x, cksum 0x%04x, "
-		  "lifetime %us, len %lu, on %s",
+		  "lifetime %us, len %d, on %s",
 		  circuit->area->area_tag,
 		  level,
 		  rawlspid_print (hdr->lsp_id),
@@ -991,7 +995,7 @@ process_lsp (int level, struct isis_circuit *circuit, u_char * ssnpa)
 
   /* 7.3.15.1 a) 4 - need to make sure IDLength matches */
 
-  /* 7.3.15.1 a) 5 - maximum area match, can be ommited since we only use 3 */
+  /* 7.3.15.1 a) 5 - maximum area match - already checked*/
 
   /* 7.3.15.1 a) 7 - password check */
   (level == ISIS_LEVEL1) ? (passwd = &circuit->area->area_passwd) :
@@ -1091,7 +1095,7 @@ dontcheckadj:
 		  /* iv */
 		  if (circuit->circ_type != CIRCUIT_T_BROADCAST)
 		    ISIS_SET_FLAG (lsp->SSNflags, circuit);
-
+		  lsp->purged = 1;
 		}		/* 7.3.16.4 b) 2) */
 	      else if (comp == LSP_EQUAL)
 		{
@@ -1349,8 +1353,7 @@ process_snp (int snp_type, int level, struct isis_circuit *circuit,
 
   /* 7.3.15.2 a) 5 - need to make sure IDLength matches - already checked */
 
-  /* 7.3.15.2 a) 6 - maximum area match, can be ommited since we only use 3
-   * - already checked */
+  /* 7.3.15.2 a) 6 - maximum area match - already checked */
 
   /* 7.3.15.2 a) 7 - Must check that we have an adjacency of the same level  */
   /* for broadcast circuits, snpa should be compared */
@@ -1489,7 +1492,8 @@ process_snp (int snp_type, int level, struct isis_circuit *circuit,
 		memcmp (entry->lsp_id, isis->sysid, ISIS_SYS_ID_LEN))
 	      {
 		lsp = lsp_new (entry->lsp_id, ntohs (entry->rem_lifetime),
-			       0, 0, entry->checksum, level);
+			       0, 0, entry->checksum, level, 
+			       circuit->area->lsp_mtu);
 		lsp_insert (lsp, circuit->area->lspdb[level - 1]);
 		ISIS_SET_FLAG (lsp->SSNflags, circuit);
 	      }
@@ -1595,7 +1599,7 @@ process_is_hello (struct isis_circuit *circuit)
       if (adj == NULL)
 	return ISIS_ERROR;
 
-      isis_adj_state_change (adj, ISIS_ADJ_INITIALIZING, NULL);
+      isis_event_adjacency_state_change (adj, ISIS_ADJ_INITIALIZING, NULL);
       adj->sys_type = ISIS_SYSTYPE_UNKNOWN;
       circuit->u.p2p.neighbor = adj;
     }
@@ -1612,7 +1616,7 @@ process_is_hello (struct isis_circuit *circuit)
 	return ISIS_ERROR;
 
       /* 8.2.2 a) 3) i */
-      isis_adj_state_change (adj, ISIS_ADJ_INITIALIZING, NULL);
+      isis_event_adjacency_state_change (adj, ISIS_ADJ_INITIALIZING, NULL);
       /* 8.2.2 a) 3) ii */
       adj->sys_type = ISIS_SYSTYPE_UNKNOWN;
       /* 8.2.2 a) 4) quite meaningless */
@@ -1715,9 +1719,10 @@ isis_handle_pdu (struct isis_circuit *circuit, u_char * ssnpa)
       zlog_warn ("Unsupported ISIS version %u", hdr->version2);
       return ISIS_WARNING;
     }
-  /* either 3 or 0 */
-  if ((hdr->max_area_addrs != 0)
-      && (hdr->max_area_addrs != isis->max_area_addrs))
+  /* maximumAreaAdresses = 0 is taken as maximumAreaAdresses = 3 */
+  if (hdr->max_area_addrs == 0) hdr->max_area_addrs = 3;
+  /*Sec. 8.2.2.2(b): maximumAreaAddresses check */
+  if (hdr->max_area_addrs != isis->max_area_addrs)
     {
       zlog_err ("maximumAreaAddressesMismatch: maximumAreaAdresses in a "
 		"received PDU %u while the parameter for this IS is %u",
@@ -1872,7 +1877,7 @@ fill_fixed_hdr (struct isis_fixed_hdr *hdr, u_char pdu_type)
   hdr->version1 = 1;
   hdr->id_len = 0;		/* ISIS_SYS_ID_LEN -  0==6 */
   hdr->version2 = 1;
-  hdr->max_area_addrs = 0;	/* isis->max_area_addrs -  0==3 */
+  hdr->max_area_addrs = isis->max_area_addrs;	
 }
 
 /*
@@ -2028,13 +2033,13 @@ send_hello (struct isis_circuit *circuit, int level)
     {
       if (circuit->circ_type == CIRCUIT_T_BROADCAST)
 	{
-	  zlog_debug ("ISIS-Adj (%s): Sent L%d LAN IIH on %s, length %ld",
+	  zlog_debug ("ISIS-Adj (%s): Sent L%d LAN IIH on %s, length %d",
 		      circuit->area->area_tag, level, circuit->interface->name,
 		      STREAM_SIZE (circuit->snd_stream));
 	}
       else
 	{
-	  zlog_debug ("ISIS-Adj (%s): Sent P2P IIH on %s, length %ld",
+	  zlog_debug ("ISIS-Adj (%s): Sent P2P IIH on %s, length %d",
 		      circuit->area->area_tag, circuit->interface->name,
 		      STREAM_SIZE (circuit->snd_stream));
 	}
@@ -2202,7 +2207,7 @@ send_csnp (struct isis_circuit *circuit, int level)
 
       if (isis->debugs & DEBUG_SNP_PACKETS)
 	{
-	  zlog_debug ("ISIS-Snp (%s): Sent L%d CSNP on %s, length %ld",
+	  zlog_debug ("ISIS-Snp (%s): Sent L%d CSNP on %s, length %d",
 		     circuit->area->area_tag, level, circuit->interface->name,
 		     STREAM_SIZE (circuit->snd_stream));
 	  for (ALL_LIST_ELEMENTS (list, node, nnode, lsp))
@@ -2368,7 +2373,7 @@ send_psnp (int level, struct isis_circuit *circuit)
 
 
 	      if (isis->debugs & DEBUG_SNP_PACKETS)
-		zlog_debug ("ISIS-Snp (%s): Sent L%d PSNP on %s, length %ld",
+		zlog_debug ("ISIS-Snp (%s): Sent L%d PSNP on %s, length %d",
 			    circuit->area->area_tag, level,
 			    circuit->interface->name,
 			    STREAM_SIZE (circuit->snd_stream));
@@ -2460,49 +2465,46 @@ send_lsp (struct thread *thread)
   struct isis_circuit *circuit;
   struct isis_lsp *lsp;
   struct listnode *node;
+  struct lsp_timestamp *temp;
   int retval = 0;
 
   circuit = THREAD_ARG (thread);
+  circuit->t_send_lsp = NULL;	
   assert (circuit);
-
   if (circuit->state == C_STATE_UP)
     {
-      lsp = listgetdata ((node = listhead (circuit->lsp_queue)));
+      node = listhead (circuit->lsp_queue);
+      if (node)
+	{				
+          lsp = listgetdata (node);
+	}
+      else return retval;
+
+      zlog_debug("sl: %d %d %d", lsp->level, circuit->circuit_is_type, circuit->upadjcount[lsp->level - 1]);
 
       /*
-       * Do not send if levels do not match
+       * Do not send if levels do not match or 
+       * if we do not have adjacencies in state up on the circuit
        */
-      if (!(lsp->level & circuit->circuit_is_type))
-	goto dontsend;
-
-      /*
-       * Do not send if we do not have adjacencies in state up on the circuit
-       */
-      if (circuit->upadjcount[lsp->level - 1] == 0)
-	goto dontsend;
-      /* only send if it needs sending */
-      if ((time (NULL) - lsp->last_sent) >=
-	  circuit->area->lsp_gen_interval[lsp->level - 1])
-	{
-
+      if ((lsp->level & circuit->circuit_is_type) && 
+      		(circuit->upadjcount[lsp->level - 1] > 0))
+      	{
 	  if (isis->debugs & DEBUG_UPDATE_PACKETS)
 	    {
 	      zlog_debug
-		("ISIS-Upd (%s): Sent L%d LSP %s, seq 0x%08x, cksum 0x%04x,"
-		 " lifetime %us on %s", circuit->area->area_tag, lsp->level,
-		 rawlspid_print (lsp->lsp_header->lsp_id),
-		 ntohl (lsp->lsp_header->seq_num),
-		 ntohs (lsp->lsp_header->checksum),
-		 ntohs (lsp->lsp_header->rem_lifetime),
-		 circuit->interface->name);
+	      ("ISIS-Upd (%s): Sent L%d LSP %s, seq 0x%08x, cksum 0x%04x,"
+	      " lifetime %us on %s", circuit->area->area_tag, lsp->level,
+	      rawlspid_print (lsp->lsp_header->lsp_id),
+	      ntohl (lsp->lsp_header->seq_num),
+	      ntohs (lsp->lsp_header->checksum),
+	      ntohs (lsp->lsp_header->rem_lifetime),
+	      circuit->interface->name);
 	    }
 	  /* copy our lsp to the send buffer */
 	  circuit->snd_stream->getp = lsp->pdu->getp;
 	  circuit->snd_stream->endp = lsp->pdu->endp;
 	  memcpy (circuit->snd_stream->data, lsp->pdu->data, lsp->pdu->endp);
-
 	  retval = circuit->tx (circuit, lsp->level);
-
 	  /*
 	   * If the sending succeeded, we can del the lsp from circuits
 	   * lsp_queue
@@ -2510,41 +2512,56 @@ send_lsp (struct thread *thread)
 	  if (retval == ISIS_OK)
 	    {
 	      list_delete_node (circuit->lsp_queue, node);
-
 	      /*
 	       * On broadcast circuits also the SRMflag can be cleared
 	       */
 	      if (circuit->circ_type == CIRCUIT_T_BROADCAST)
-		ISIS_CLEAR_FLAG (lsp->SRMflags, circuit);
-
-	      if (flags_any_set (lsp->SRMflags) == 0)
-		{
-		  /*
-		   * need to remember when we were last sent
-		   */
-		  lsp->last_sent = time (NULL);
+	        {
+		  ISIS_CLEAR_FLAG (lsp->SRMflags, circuit);
+		  ISIS_CLEAR_FLAG (lsp->in_queue, circuit);
 		}
+	      else
+	        {
+		  temp = XMALLOC (MTYPE_ISIS_TMP, sizeof (struct lsp_timestamp));	
+		  temp->timestamp = time(NULL);
+		  temp->lsp = lsp;
+		  listnode_add (circuit->u.p2p.dont_tx_lsp, temp);
+		}	 
+	      if (flags_any_set (lsp->SRMflags) == 0)
+	        {
+	          /*
+	           * need to remember when we were last sent
+	           */
+	          lsp->last_sent = time (NULL);
+	        }
 	    }
 	  else
 	    {
 	      zlog_debug ("sending of level %d link state failed", lsp->level);
 	    }
+	  /*
+	   * If there are still LSPs send next one after lsp-interval (33 msecs)
+	   */
+	  if (listcount (circuit->lsp_queue) > 0)
+	    {
+	      if (circuit->circ_type == CIRCUIT_T_BROADCAST)
+	        {
+		  circuit->t_send_lsp =  thread_add_timer_msec ( master, 
+				send_lsp, circuit, circuit->u.bc.lsp_interval);
+	        }
+	      else
+	        {
+	          circuit->t_send_lsp =  thread_add_timer_msec ( master, 
+				send_lsp, circuit, circuit->u.p2p.retransmit_throttle);
+	    	}
+	    }
 	}
       else
-	{
-	  /* my belief is that if it wasn't his time, the lsp can be removed
-	   * from the queue
-	   */
-	dontsend:
+      	{
 	  list_delete_node (circuit->lsp_queue, node);
+	  ISIS_CLEAR_FLAG (lsp->SRMflags, circuit);
+	  ISIS_CLEAR_FLAG (lsp->in_queue, circuit);
 	}
-#if 0
-      /*
-       * If there are still LSPs send next one after lsp-interval (33 msecs)
-       */
-      if (listcount (circuit->lsp_queue) > 0)
-	thread_add_timer (master, send_lsp, circuit, 1);
-#endif
     }
 
   return retval;
@@ -2619,27 +2636,27 @@ if (area_match (tlvs.area_addrs, isis->man_area_addrs) == 0)
 	      }
 	    else if (adj->adj_usage == ISIS_ADJ_LEVEL1)
 	      {
-		isis_adj_state_change (adj, ISIS_ADJ_DOWN, "Area Mismatch",
+		isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN, "Area Mismatch",
 				       circuit->adjdb);
 	      }
 	    else if (adj->adj_usage == ISIS_ADJ_LEVEL1AND2 ||
 		     adj->adj_usage == ISIS_ADJ_LEVEL2)
 	      {
-		isis_adj_state_change (adj, ISIS_ADJ_DOWN, "Wrong System",
+		isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN, "Wrong System",
 				       circuit->adjdb);
 	      }
 	    break;
 	  case IS_LEVEL_2:
 	    if (adj->adj_state != ISIS_ADJ_UP)
 	      {
-		isis_adj_state_change (adj, ISIS_ADJ_UP, NULL,
+		isis_event_adjacency_state_change (adj, ISIS_ADJ_UP, NULL,
 				       circuit->adjdb);
 		adj->adj_usage = ISIS_ADJ_LEVEL2;
 	      }
 	    else if (adj->adj_usage == ISIS_ADJ_LEVEL1 ||
 		     adj->adj_usage == ISIS_ADJ_LEVEL1AND2)
 	      {
-		isis_adj_state_change (adj, ISIS_ADJ_DOWN, "Wrong System",
+		isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN, "Wrong System",
 				       circuit->adjdb);
 	      }
 	    else if (adj->adj_usage == ISIS_ADJ_LEVEL2)
@@ -2650,18 +2667,18 @@ if (area_match (tlvs.area_addrs, isis->man_area_addrs) == 0)
 	  case IS_LEVEL_1_AND_2:
 	    if (adj->adj_state != ISIS_ADJ_UP)
 	      {
-		isis_adj_state_change (adj, ISIS_ADJ_UP, NULL,
+		isis_event_adjacency_state_change (adj, ISIS_ADJ_UP, NULL,
 				       circuit->adjdb);
 		adj->adj_usage = ISIS_ADJ_LEVEL2;
 	      }
 	    else if (adj->adj_usage == ISIS_ADJ_LEVEL1)
 	      {
-		isis_adj_state_change (adj, ISIS_ADJ_DOWN, "Wrong System",
+		isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN, "Wrong System",
 				       circuit->adjdb);
 	      }
 	    else if (adj->adj_usage == ISIS_ADJ_LEVEL1AND2)
 	      {
-		isis_adj_state_change (adj, ISIS_ADJ_DOWN, "Area Mismatch",
+		isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN, "Area Mismatch",
 				       circuit->adjdb);
 	      }
 	    else if (adj->adj_usage == ISIS_ADJ_LEVEL2)

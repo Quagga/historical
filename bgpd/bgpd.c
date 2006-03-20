@@ -18,6 +18,10 @@ along with GNU Zebra; see the file COPYING.  If not, write to the Free
 Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 02111-1307, USA.  */
 
+/*
+ * Copyright (C) 2005 6WIND  
+ */
+
 #include <zebra.h>
 
 #include "prefix.h"
@@ -706,6 +710,7 @@ peer_new ()
   peer->status = Idle;
   peer->ostatus = Idle;
   peer->weight = 0;
+  peer->password = NULL;
 
   /* Set default flags.  */
   for (afi = AFI_IP; afi < AFI_MAX; afi++)
@@ -1098,6 +1103,20 @@ peer_delete (struct peer *peer)
   bgp_stop (peer);
   bgp_fsm_change_status (peer, Idle);
 
+#ifdef HAVE_TCP_MD5
+  /* Password configuration */
+  if (peer->password)
+    {
+      if (! CHECK_FLAG (peer->sflags, PEER_STATUS_GROUP)) {
+	 if (sockunion_family (&peer->su) == AF_INET)
+	   bgp_md5_unset (bm->sockv4, peer, peer->password);
+	 else
+	   bgp_md5_unset (bm->sockv6, peer, peer->password);
+      }
+      free (peer->password);
+    }
+#endif /* HAVE_TCP_MD5 */
+
   /* Stop all timers. */
   BGP_TIMER_OFF (peer->t_start);
   BGP_TIMER_OFF (peer->t_connect);
@@ -1325,6 +1344,30 @@ peer_group2peer_config_copy (struct peer_group *group, struct peer *peer,
     peer->v_routeadv = BGP_DEFAULT_IBGP_ROUTEADV;
   else
     peer->v_routeadv = BGP_DEFAULT_EBGP_ROUTEADV;
+
+#ifdef HAVE_TCP_MD5
+  /* password apply */
+  if (CHECK_FLAG (conf->flags, PEER_FLAG_PASSWORD))
+    {
+      if (peer->password)
+	free (peer->password);
+      peer->password = strdup (conf->password);
+
+      if (sockunion_family (&peer->su) == AF_INET)
+	bgp_md5_set (bm->sockv4, peer, peer->password);
+      else
+	bgp_md5_set (bm->sockv6, peer, peer->password);
+    }
+  else if (peer->password)
+    {
+      if (sockunion_family (&peer->su) == AF_INET)
+	bgp_md5_unset (bm->sockv4, peer, peer->password);
+      else
+	bgp_md5_unset (bm->sockv6, peer, peer->password);
+      free (peer->password);
+      peer->password = NULL;
+    }
+#endif /* HAVE_TCP_MD5 */
 
   /* maximum-prefix */
   peer->pmax[afi][safi] = conf->pmax[afi][safi];
@@ -1923,9 +1966,10 @@ bgp_delete (struct bgp *bgp)
 
   /* Unset redistribution. */
   for (afi = AFI_IP; afi < AFI_MAX; afi++)
-    for (i = 0; i < ZEBRA_ROUTE_MAX; i++) 
-      if (i != ZEBRA_ROUTE_BGP)
-	bgp_redistribute_unset (bgp, afi, i);
+    for (safi = SAFI_UNICAST; safi < SAFI_MAX; safi++)
+      for (i = 0; i < ZEBRA_ROUTE_MAX; i++) 
+        if (i != ZEBRA_ROUTE_BGP)
+	  bgp_redistribute_unset (bgp, afi, i, 0, safi);
 
   bgp->group->del = (void (*)(void *)) peer_group_delete;
   list_delete (bgp->group);
@@ -3269,6 +3313,128 @@ peer_local_as_unset (struct peer *peer)
   return 0;
 }
 
+#ifdef HAVE_TCP_MD5
+/* Set password for authenticating with the peer. */
+int
+peer_password_set (struct peer *peer, const char *password)
+{
+  struct peer_group *group;
+  struct listnode *nn, *nnode;
+
+  if (peer->password && strcmp (peer->password, password) == 0
+      && ! CHECK_FLAG (peer->sflags, PEER_STATUS_GROUP))
+	return 0;
+
+  SET_FLAG (peer->flags, PEER_FLAG_PASSWORD);
+  if (peer->password)
+    free (peer->password);
+  peer->password = strdup (password);
+
+  if (! CHECK_FLAG (peer->sflags, PEER_STATUS_GROUP))
+    {
+      if (peer->status == Established)
+          bgp_notify_send (peer, BGP_NOTIFY_CEASE, BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+      else
+        BGP_EVENT_ADD (peer, BGP_Stop);
+
+      if (sockunion_family (&peer->su) == AF_INET)
+	bgp_md5_set (bm->sockv4, peer, peer->password);
+      else
+	bgp_md5_set (bm->sockv6, peer, peer->password);
+
+      return 0;
+    }
+
+  group = peer->group;
+  for (ALL_LIST_ELEMENTS (group->peer, nnode, nn, peer))
+    {
+      if (peer->password && strcmp (peer->password, password) == 0)
+	continue;
+
+      SET_FLAG (peer->flags, PEER_FLAG_PASSWORD);
+      if (peer->password)
+        free (peer->password);
+      peer->password = strdup (password);
+
+      if (peer->status == Established)
+        bgp_notify_send (peer, BGP_NOTIFY_CEASE, BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+      else
+        BGP_EVENT_ADD (peer, BGP_Stop);
+
+      if (sockunion_family (&peer->su) == AF_INET)
+	bgp_md5_set (bm->sockv4, peer, peer->password);
+      else
+	bgp_md5_set (bm->sockv6, peer, peer->password);
+    }
+
+  return 0;
+}
+
+int
+peer_password_unset (struct peer *peer)
+{
+  struct peer_group *group;
+  struct listnode *nn, *nnode;
+
+  if (! CHECK_FLAG (peer->flags, PEER_FLAG_PASSWORD)
+      && ! CHECK_FLAG (peer->sflags, PEER_STATUS_GROUP))
+    return 0;
+
+  if (! CHECK_FLAG (peer->sflags, PEER_STATUS_GROUP))
+    {
+      if (peer_group_active (peer)
+	  && CHECK_FLAG (peer->group->conf->flags, PEER_FLAG_PASSWORD))
+	return BGP_ERR_PEER_GROUP_HAS_THE_FLAG;
+
+      if (peer->status == Established)
+        bgp_notify_send (peer, BGP_NOTIFY_CEASE, BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+      else
+        BGP_EVENT_ADD (peer, BGP_Stop);
+
+      if (sockunion_family (&peer->su) == AF_INET)
+	bgp_md5_unset (bm->sockv4, peer, peer->password);
+      else
+	bgp_md5_unset (bm->sockv6, peer, peer->password);
+
+      UNSET_FLAG (peer->flags, PEER_FLAG_PASSWORD);
+      if (peer->password)
+	free (peer->password);
+      peer->password = NULL;
+
+      return 0;
+    }
+
+  UNSET_FLAG (peer->flags, PEER_FLAG_PASSWORD);
+  if (peer->password)
+    free (peer->password);
+  peer->password = NULL;
+
+  group = peer->group;
+  for (ALL_LIST_ELEMENTS (group->peer, nnode, nn, peer))
+    {
+      if (! CHECK_FLAG (peer->flags, PEER_FLAG_PASSWORD))
+	continue;
+
+      if (peer->status == Established)
+        bgp_notify_send (peer, BGP_NOTIFY_CEASE, BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+      else
+        BGP_EVENT_ADD (peer, BGP_Stop);
+
+      if (sockunion_family (&peer->su) == AF_INET)
+	bgp_md5_unset (bm->sockv4, peer, peer->password);
+      else
+	bgp_md5_unset (bm->sockv6, peer, peer->password);
+
+      UNSET_FLAG (peer->flags, PEER_FLAG_PASSWORD);
+      if (peer->password)
+        free (peer->password);
+      peer->password = NULL;
+    }
+
+  return 0;
+}
+#endif /* HAVE_TCP_MD5 */
+
 /* Set distribute list to the peer. */
 int
 peer_distribute_set (struct peer *peer, afi_t afi, safi_t safi, int direct, 
@@ -4144,7 +4310,7 @@ peer_uptime (time_t uptime2, char *buf, size_t len)
   if (len < BGP_UPTIME_LEN)
     {
       /* XXX: warning: long int format, size_t arg (arg 2) */
-      zlog_warn ("peer_uptime (): buffer shortage %ld", len);
+      zlog_warn ("peer_uptime (): buffer shortage %d", len);
       /* XXX: should return status instead of buf... */
       snprintf (buf, len, "<error> "); 
       return buf;
@@ -4268,25 +4434,38 @@ bgp_config_write_peer (struct vty *vty, struct bgp *bgp,
    ************************************/
   if (afi == AFI_IP && safi == SAFI_UNICAST)
     {
+      char *via_ifname;
+
       /* remote-as. */
+        /* Local interface name */
+      if (peer->ifname) {
+        int via_ifname_len = strlen(" via ") + strlen(peer->ifname) + 2;
+
+        via_ifname = (char *)XCALLOC(MTYPE_TMP, via_ifname_len);
+        snprintf(via_ifname, via_ifname_len, " via %s", peer->ifname);
+      } else {
+        via_ifname = (char *)XCALLOC(MTYPE_TMP, strlen("") + 2);
+        strcat(via_ifname, "");
+      }
       if (! peer_group_active (peer))
 	{
 	  if (CHECK_FLAG (peer->sflags, PEER_STATUS_GROUP))
 	    vty_out (vty, " neighbor %s peer-group%s", addr,
 		     VTY_NEWLINE);
 	  if (peer->as)
-	    vty_out (vty, " neighbor %s remote-as %d%s", addr, peer->as,
+	    vty_out (vty, " neighbor %s%s remote-as %d%s", addr, via_ifname, peer->as,
 		     VTY_NEWLINE);
 	}
       else
 	{
 	  if (! g_peer->as)
-	    vty_out (vty, " neighbor %s remote-as %d%s", addr, peer->as,
+	    vty_out (vty, " neighbor %s%s remote-as %d%s", addr, via_ifname, peer->as,
 		     VTY_NEWLINE);
 	  if (peer->af_group[AFI_IP][SAFI_UNICAST])
 	    vty_out (vty, " neighbor %s peer-group %s%s", addr,
 		     peer->group->name, VTY_NEWLINE);
 	}
+      XFREE(MTYPE_TMP, via_ifname);
 
       /* local-as. */
       if (peer->change_local_as)
@@ -4307,16 +4486,21 @@ bgp_config_write_peer (struct vty *vty, struct bgp *bgp,
 	    ! CHECK_FLAG (g_peer->flags, PEER_FLAG_SHUTDOWN))
 	  vty_out (vty, " neighbor %s shutdown%s", addr, VTY_NEWLINE);
 
+#ifdef HAVE_TCP_MD5
+      /* Password. */
+      if (CHECK_FLAG (peer->flags, PEER_FLAG_PASSWORD))
+	if (! peer_group_active (peer)
+	    || ! CHECK_FLAG (g_peer->flags, PEER_FLAG_PASSWORD)
+	    || strcmp (peer->password, g_peer->password) != 0)
+	  vty_out (vty, " neighbor %s password %s%s", addr, peer->password,
+		   VTY_NEWLINE);
+#endif /* HAVE_TCP_MD5 */
+
       /* BGP port. */
       if (peer->port != BGP_PORT_DEFAULT)
 	vty_out (vty, " neighbor %s port %d%s", addr, peer->port, 
 		 VTY_NEWLINE);
 
-      /* Local interface name. */
-      if (peer->ifname)
-	vty_out (vty, " neighbor %s interface %s%s", addr, peer->ifname,
-		 VTY_NEWLINE);
-  
       /* Passive. */
       if (CHECK_FLAG (peer->flags, PEER_FLAG_PASSIVE))
         if (! peer_group_active (peer) ||
@@ -4590,7 +4774,12 @@ bgp_config_write_family_header (struct vty *vty, afi_t afi, safi_t safi,
 	vty_out (vty, "vpnv4 unicast");
     }
   else if (afi == AFI_IP6)
-    vty_out (vty, "ipv6");
+    {
+      if (safi == SAFI_MULTICAST)
+        vty_out (vty, "ipv6 multicast");
+      else
+        vty_out (vty, "ipv6 unicast");
+    }
 
   vty_out (vty, "%s", VTY_NEWLINE);
 
@@ -4745,6 +4934,9 @@ bgp_config_write (struct vty *vty)
       if (bgp->stalepath_time != BGP_DEFAULT_STALEPATH_TIME)
 	vty_out (vty, " bgp graceful-restart stalepath-time %d%s",
 		 bgp->stalepath_time, VTY_NEWLINE);
+      if (bgp->restart_time != BGP_DEFAULT_RESTART_TIME)
+	vty_out (vty, " bgp graceful-restart restart-time %d%s",
+		 bgp->restart_time, VTY_NEWLINE);
       if (bgp_flag_check (bgp, BGP_FLAG_GRACEFUL_RESTART))
        vty_out (vty, " bgp graceful-restart%s", VTY_NEWLINE);
 
@@ -4786,7 +4978,7 @@ bgp_config_write (struct vty *vty)
 
       /* BGP timers configuration. */
       if (bgp->default_keepalive != BGP_DEFAULT_KEEPALIVE
-	  && bgp->default_holdtime != BGP_DEFAULT_HOLDTIME)
+	  || bgp->default_holdtime != BGP_DEFAULT_HOLDTIME)
 	vty_out (vty, " timers bgp %d %d%s", bgp->default_keepalive, 
 		 bgp->default_holdtime, VTY_NEWLINE);
 
@@ -4819,6 +5011,9 @@ bgp_config_write (struct vty *vty)
       /* IPv6 unicast configuration.  */
       write += bgp_config_write_family (vty, bgp, AFI_IP6, SAFI_UNICAST);
 
+      /*IPv6 multicast configuration*/
+      write += bgp_config_write_family (vty, bgp, AFI_IP6, SAFI_MULTICAST);
+
       write++;
     }
   return write;
@@ -4834,6 +5029,10 @@ bgp_master_init ()
   bm->port = BGP_PORT_DEFAULT;
   bm->master = thread_master_create ();
   bm->start_time = time (NULL);
+#ifdef HAVE_TCP_MD5
+  bm->sockv4 = -1;
+  bm->sockv6 = -1;
+#endif /* HAVE_TCP_MD5 */
 }
 
 void

@@ -1,5 +1,5 @@
 /*
- * $Id: log.h,v 1.17 2005/01/18 22:18:59 ajs Exp $
+ * $Id: log.h,v 1.6 2005/08/30 12:22:07 vize Exp $
  *
  * Zebra logging funcions.
  * Copyright (C) 1997, 1998, 1999 Kunihiro Ishiguro
@@ -26,6 +26,20 @@
 #define _ZEBRA_LOG_H
 
 #include <syslog.h>
+
+
+#define ZLOG_NOLOG              0x00
+#define ZLOG_FILE               0x01
+#define ZLOG_SYSLOG             0x02
+#define ZLOG_STDOUT             0x04
+#define ZLOG_STDERR             0x08
+
+#define ZLOG_NOLOG_INDEX        0
+#define ZLOG_FILE_INDEX         1
+#define ZLOG_SYSLOG_INDEX       2
+#define ZLOG_STDOUT_INDEX       3
+#define ZLOG_STDERR_INDEX       4
+#define ZLOG_MAX_INDEX          5
 
 /* Here is some guidance on logging levels to use:
  *
@@ -74,11 +88,13 @@ struct zlog
 {
   const char *ident;	/* daemon name (first arg to openlog) */
   zlog_proto_t protocol;
+  int flags;
   int maxlvl[ZLOG_NUM_DESTS];	/* maximum priority to send to associated
   				   logging destination */
   int default_lvl;	/* maxlvl to use if none is specified */
   FILE *fp;
   char *filename;
+  int maskpri;   
   int facility;		/* as per syslog facility */
   int record_priority;	/* should messages logged through stdio include the
   			   priority of the message? */

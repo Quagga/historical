@@ -61,6 +61,7 @@ extern struct host host;
 /* Vector which store each vty structure. */
 static vector vtyvec;
 
+
 /* Vty timeout value. */
 static unsigned long vty_timeout_val = VTY_TIMEOUT_DEFAULT;
 
@@ -80,10 +81,15 @@ char *vty_cwd = NULL;
 static int vty_config;
 
 /* Login password check. */
+#ifdef DEBUG_NO_PASSWORD
+static int no_password_check = 1;
+#else
 static int no_password_check = 0;
+#endif
 
 /* Integrated configuration file path */
 char integrate_default[] = SYSCONFDIR INTEGRATE_DEFAULT_CONFIG;
+char integrate_mdefault_tmp[] = SYSCONFDIR INTEGRATE_DEFAULT_MCONFIG;
 
 
 /* VTY standard output function. */
@@ -182,7 +188,7 @@ vty_log_out (struct vty *vty, const char *level, const char *proto_str,
       vty_close(vty);
       return -1;
     }
-  return 0;
+  return len;
 }
 
 /* Output current time to the vty. */
@@ -356,6 +362,11 @@ vty_auth (struct vty *vty, char *buf)
   else
     fail = 1;
 
+#ifdef DEBUG_NO_PASSWORD
+  /* XXX: accept any password */
+  fail = 0;
+#endif
+
   if (! fail)
     {
       vty->fail = 0;
@@ -388,6 +399,7 @@ vty_command (struct vty *vty, char *buf)
 {
   int ret;
   vector vline;
+  const char *protocolname;
 
   /* Split readline string up into the vector */
   vline = cmd_make_strvec (buf);
@@ -404,7 +416,13 @@ vty_command (struct vty *vty, char *buf)
     GETRUSAGE(&before);
 #endif /* CONSUMED_TIME_CHECK */
 
-  ret = cmd_execute_command (vline, vty, NULL, 0);
+  ret = cmd_execute_command (vline, vty, NULL,0);
+
+  /* Get the name of the protocol if any */
+  if (zlog_default)
+      protocolname = zlog_proto_names[zlog_default->protocol];
+  else
+      protocolname = zlog_proto_names[ZLOG_NONE];
 
 #ifdef CONSUMED_TIME_CHECK
     GETRUSAGE(&after);
@@ -427,7 +445,7 @@ vty_command (struct vty *vty, char *buf)
 	vty_out (vty, "%% Ambiguous command.%s", VTY_NEWLINE);
 	break;
       case CMD_ERR_NO_MATCH:
-	vty_out (vty, "%% Unknown command.%s", VTY_NEWLINE);
+	vty_out (vty, "%% [%s] Unknown command: %s%s", protocolname, buf, VTY_NEWLINE);
 	break;
       case CMD_ERR_INCOMPLETE:
 	vty_out (vty, "%% Command incomplete.%s", VTY_NEWLINE);
@@ -685,6 +703,7 @@ vty_end_config (struct vty *vty)
     case BGP_IPV4_NODE:
     case BGP_IPV4M_NODE:
     case BGP_IPV6_NODE:
+    case BGP_IPV6M_NODE:
     case RMAP_NODE:
     case OSPF_NODE:
     case OSPF6_NODE:
@@ -873,14 +892,14 @@ vty_complete_command (struct vty *vty)
       vty_backward_pure_word (vty);
       vty_insert_word_overwrite (vty, matched[0]);
       vty_self_insert (vty, ' ');
-      XFREE (MTYPE_TMP, matched[0]);
+      free (matched[0]); /* allocated by cmd_complete_command() */
       break;
     case CMD_COMPLETE_MATCH:
       vty_prompt (vty);
       vty_redraw_line (vty);
       vty_backward_pure_word (vty);
       vty_insert_word_overwrite (vty, matched[0]);
-      XFREE (MTYPE_TMP, matched[0]);
+      free (matched[0]); /* allocated by cmd_complete_command() */
       vector_only_index_free (matched);
       return;
       break;
@@ -890,7 +909,7 @@ vty_complete_command (struct vty *vty)
 	  if (i != 0 && ((i % 6) == 0))
 	    vty_out (vty, "%s", VTY_NEWLINE);
 	  vty_out (vty, "%-10s ", matched[i]);
-	  XFREE (MTYPE_TMP, matched[i]);
+	  free (matched[i]); /* allocated by cmd_complete_command() */
 	}
       vty_out (vty, "%s", VTY_NEWLINE);
 
@@ -1705,7 +1724,7 @@ vty_accept (struct thread *thread)
 	  /* continue accepting connections */
 	  vty_event (VTY_SERV, accept_sock, NULL);
 	  
-	  prefix_free (p);
+	  prefix_ipv4_free (p);
 
 	  return 0;
 	}
@@ -1727,14 +1746,25 @@ vty_accept (struct thread *thread)
 	  /* continue accepting connections */
 	  vty_event (VTY_SERV, accept_sock, NULL);
 	  
-	  prefix_free (p);
+	  prefix_ipv6_free (p);
 
 	  return 0;
 	}
     }
 #endif /* HAVE_IPV6 */
   
-  prefix_free (p);
+  switch (p->family) {
+    case AF_INET:
+      prefix_ipv4_free(p);
+      break;
+#ifdef HAVE_IPV6
+    case AF_INET6:
+      prefix_ipv6_free(p);
+      break;
+#endif /* HAVE_IPV6 */
+    default:
+      assert(0);
+  }
 
   on = 1;
   ret = setsockopt (vty_sock, IPPROTO_TCP, TCP_NODELAY, 
@@ -1814,6 +1844,7 @@ vty_serv_sock_addrinfo (const char *hostname, unsigned short port)
 }
 #endif /* HAVE_IPV6 && ! NRL */
 
+#if (defined(HAVE_IPV6) && defined(NRL)) || !defined(HAVE_IPV6)
 /* Make vty server socket. */
 static void
 vty_serv_sock_family (const char* addr, unsigned short port, int family)
@@ -1878,6 +1909,7 @@ vty_serv_sock_family (const char* addr, unsigned short port, int family)
   /* Add vty server event. */
   vty_event (VTY_SERV, accept_sock, NULL);
 }
+#endif /* (HAVE_IPV6 && NRL) || !HAVE_IPV6 */
 
 #ifdef VTYSH
 /* For sockaddr_un. */
@@ -2100,11 +2132,25 @@ vtysh_write (struct thread *thread)
 }
 
 #endif /* VTYSH */
+/* Vpn offset port */
+static int vpn_id_port =0 ;
+
+void vpn_id_set (int vpn)
+{
+  vpn_id_port = 10*vpn;
+  strncpy (integrate_default, integrate_mdefault_tmp, sizeof(integrate_mdefault_tmp));
+}
+
 
 /* Determine address family to bind. */
 void
 vty_serv_sock (const char *addr, unsigned short port, const char *path)
 {
+/* Set vty port */
+  if (vpn_id_port)
+    port+=vpn_id_port;
+  vpn_id_port = 0;
+#ifndef HAVE_NO_TCP_VTY
   /* If port is set to 0, do not listen on TCP/IP at all! */
   if (port)
     {
@@ -2120,6 +2166,7 @@ vty_serv_sock (const char *addr, unsigned short port, const char *path)
       vty_serv_sock_family (addr,port, AF_INET);
 #endif /* HAVE_IPV6 */
     }
+#endif /* HAVE_NO_TCP_VTY */
 
 #ifdef VTYSH
   vty_serv_un (path);
@@ -2159,7 +2206,7 @@ vty_close (struct vty *vty)
     close (vty->fd);
 
   if (vty->address)
-    XFREE (0, vty->address);
+    free(vty->address); /* allocated by sockunion_su2str's strdup */
   if (vty->buf)
     XFREE (MTYPE_VTY, vty->buf);
 
@@ -2346,7 +2393,7 @@ vty_read_config (char *config_file,
        * configure the daemons at boot - MAG
        */
 
-      /* Stat for vtysh Zebra.conf, if found startup and wait for
+      /* Stat for vtysh Quagga.conf, if found startup and wait for
        * boot configuration
        */
 
@@ -2408,8 +2455,9 @@ vty_log (const char *level, const char *proto_str,
 }
 
 /* Async-signal-safe version of vty_log for fixed strings. */
+/* iov_base is not a const on Linux's glibc */
 void
-vty_log_fixed (const char *buf, size_t len)
+vty_log_fixed (char *buf, size_t len)
 {
   unsigned int i;
   struct iovec iov[2];
@@ -2756,7 +2804,9 @@ DEFUN (show_history,
 static int
 vty_config_write (struct vty *vty)
 {
+#ifndef SIXOS
   vty_out (vty, "line vty%s", VTY_NEWLINE);
+#endif
 
   if (vty_accesslist_name)
     vty_out (vty, " access-class %s%s",

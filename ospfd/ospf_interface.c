@@ -263,7 +263,7 @@ ospf_if_cleanup (struct ospf_interface *oi)
   struct ospf_nbr_nbma *nbr_nbma;
   struct ospf_lsa *lsa;
 
-  /* oi->nbrs and oi->nbr_nbma should be deletete on InterafceDown event */
+  /* oi->nbrs and oi->nbr_nbma should be deletete on InterfaceDown event */
   /* delete all static neighbors attached to this interface */
   for (ALL_LIST_ELEMENTS (oi->nbr_nbma, node, nnode, nbr_nbma))
     {
@@ -349,6 +349,11 @@ ospf_if_free (struct ospf_interface *oi)
   listnode_delete (oi->ospf->oiflist, oi);
   listnode_delete (oi->area->oiflist, oi);
 
+  /* on numbered interfaces, oi->address is a pointer into oi->connected */
+  /* on unnumbered interfaces, oi->address was separately allocated */
+  if (oi->connected == NULL)
+    prefix_free(oi->address);
+
   memset (oi, 0, sizeof (*oi));
   XFREE (MTYPE_OSPF_IF, oi);
 }
@@ -374,6 +379,9 @@ ospf_if_is_configured (struct ospf *ospf, struct in_addr *address)
       {
 	if (oi->type == OSPF_IFTYPE_POINTOPOINT)
 	  {
+	    if (oi->connected == NULL)
+	        /* unnumbered ospf interface */
+	        continue;
 	    if (CONNECTED_DEST_HOST(oi->connected))
 	      {
 		/* match only destination addr, since local addr is most likely
@@ -395,6 +403,20 @@ ospf_if_is_configured (struct ospf *ospf, struct in_addr *address)
 	      return oi;
 	  }
       }
+  return NULL;
+}
+
+struct ospf_interface *
+ospf_get_unnumbered_if (struct ospf *ospf, unsigned int ifindex)
+{
+  struct listnode *node, *nnode;
+  struct ospf_interface *oi;
+
+  for (ALL_LIST_ELEMENTS (ospf->oiflist, node, nnode, oi))
+    {
+      if (oi && oi->connected == NULL && oi->ifp->ifindex == ifindex)
+        return oi;
+    }
   return NULL;
 }
 
@@ -450,7 +472,7 @@ ospf_if_lookup_by_prefix (struct ospf *ospf, struct prefix_ipv4 *p)
   /* Check each Interface. */
   for (ALL_LIST_ELEMENTS_RO (ospf->oiflist, node, oi))
     {
-      if (oi->type != OSPF_IFTYPE_VIRTUALLINK)
+      if (oi->type != OSPF_IFTYPE_VIRTUALLINK && oi->connected)
 	{
 	  if ((oi->type == OSPF_IFTYPE_POINTOPOINT) &&
 	      CONNECTED_DEST_HOST(oi->connected))
@@ -487,7 +509,11 @@ ospf_if_lookup_recv_if (struct ospf *ospf, struct in_addr src)
     {
       if (oi->type == OSPF_IFTYPE_VIRTUALLINK)
 	continue;
-      
+
+      /* unnumbered ospf interface */
+      if (oi->connected == NULL)
+	continue;
+
       if ((oi->type == OSPF_IFTYPE_POINTOPOINT) &&
 	  CONNECTED_DEST_HOST(oi->connected))
 	{
@@ -688,6 +714,11 @@ ospf_if_new_hook (struct interface *ifp)
   SET_IF_PARAM (IF_DEF_PARAMS (ifp), priority);
   IF_DEF_PARAMS (ifp)->priority = OSPF_ROUTER_PRIORITY_DEFAULT;
 
+  SET_IF_PARAM (IF_DEF_PARAMS (ifp), static_mtu);
+  IF_DEF_PARAMS (ifp)->static_mtu = OSPF_STATIC_MTU_DEFAULT;
+
+  IF_DEF_PARAMS (ifp)->mtu_ignore = OSPF_MTU_IGNORE_DEFAULT;
+
   SET_IF_PARAM (IF_DEF_PARAMS (ifp), passive_interface);
   IF_DEF_PARAMS (ifp)->passive_interface = OSPF_IF_ACTIVE;
 
@@ -853,7 +884,7 @@ ospf_vl_data_free (struct ospf_vl_data *vl_data)
 u_int vlink_count = 0;
 
 struct ospf_interface * 
-ospf_vl_new (struct ospf *ospf, struct ospf_vl_data *vl_data)
+ospf_vl_new (struct ospf *ospf, struct ospf_vl_data *vl_data, int format)
 {
   struct ospf_interface * voi;
   struct interface * vi;
@@ -908,7 +939,7 @@ ospf_vl_new (struct ospf *ospf, struct ospf_vl_data *vl_data)
     zlog_debug ("ospf_vl_new(): set if->name to %s", vi->name);
 
   area_id.s_addr = 0;
-  area = ospf_area_get (ospf, area_id, OSPF_AREA_ID_FORMAT_ADDRESS);
+  area = ospf_area_get (ospf, area_id, format);
   voi->area = area;
 
   if (IS_DEBUG_OSPF_EVENT)
@@ -1093,9 +1124,10 @@ ospf_vl_up_check (struct ospf_area *area, struct in_addr rid,
 	{
 	  zlog_debug ("ospf_vl_up_check(): considering VL, name: %s", 
 		     vl_data->vl_oi->ifp->name);
-	  zlog_debug ("ospf_vl_up_check(): VL area: %s, peer ID: %s", 
-		     inet_ntoa (vl_data->vl_area_id),
-		     inet_ntoa (vl_data->vl_peer));
+          zlog_debug ("ospf_vl_up_check(): VL area: %s",
+                     inet_ntoa (vl_data->vl_area_id));
+          zlog_debug ("ospf_vl_up_check(): VL peer ID: %s",
+                     inet_ntoa (vl_data->vl_peer));
 	}
 
       if (IPV4_ADDR_SAME (&vl_data->vl_peer, &rid) &&

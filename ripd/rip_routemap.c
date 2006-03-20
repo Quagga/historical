@@ -106,8 +106,15 @@ rip_route_set_add (struct vty *vty, struct route_map_index *index,
 	  vty_out (vty, "%% Can't find rule.%s", VTY_NEWLINE);
 	  return CMD_WARNING;
 	case RMAP_COMPILE_ERROR:
-	  vty_out (vty, "%% Argument is malformed.%s", VTY_NEWLINE);
-	  return CMD_WARNING;
+	  // rip, ripng and other protocols share the set metric command
+	  // but only values from 0 to 16 are valid for rip and ripng
+	  // if metric is out of range for rip and ripng, it is not for
+	  // other protocols. Do not return an error
+	  if (strcmp(command, "metric")) {
+	     vty_out (vty, "%% Argument is malformed.%s", VTY_NEWLINE);
+	     return CMD_WARNING;
+	  }
+	  break;
 	}
     }
   return CMD_SUCCESS;
@@ -691,7 +698,7 @@ route_set_tag_compile (const char *arg)
   return tag;
 }
 
-/* Free route map's compiled `ip nexthop' value. */
+/* Free route map's compiled `set tag' value. */
 void
 route_set_tag_free (void *rule)
 {
@@ -971,7 +978,7 @@ ALIAS (set_metric,
        "set metric <+/-metric>",
        SET_STR
        "Metric value for destination routing protocol\n"
-       "Add or subtract BGP metric\n")
+       "Add or subtract metric\n")
 
 DEFUN (no_set_metric,
        no_set_metric_cmd,
@@ -988,11 +995,18 @@ DEFUN (no_set_metric,
 
 ALIAS (no_set_metric,
        no_set_metric_val_cmd,
-       "no set metric (<0-4294967295>|<+/-metric>)",
+       "no set metric <0-4294967295>",
        NO_STR
        SET_STR
        "Metric value for destination routing protocol\n"
-       "Metric value\n"
+       "Metric value\n")
+
+ALIAS (no_set_metric,
+       no_set_metric_addsub_cmd,
+       "no set metric <+/-metric>",
+       NO_STR
+       SET_STR
+       "Metric value for destination routing protocol\n"
        "Add or subtract metric\n")
 
 DEFUN (set_ip_nexthop,
@@ -1123,6 +1137,7 @@ rip_route_map_init ()
   install_element (RMAP_NODE, &set_metric_addsub_cmd);
   install_element (RMAP_NODE, &no_set_metric_cmd);
   install_element (RMAP_NODE, &no_set_metric_val_cmd);
+  install_element (RMAP_NODE, &no_set_metric_addsub_cmd);
   install_element (RMAP_NODE, &set_ip_nexthop_cmd);
   install_element (RMAP_NODE, &no_set_ip_nexthop_cmd);
   install_element (RMAP_NODE, &no_set_ip_nexthop_val_cmd);

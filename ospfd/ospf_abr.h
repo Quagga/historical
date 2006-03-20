@@ -28,6 +28,9 @@
 #define OSPF_AREA_RANGE_ADVERTISE	(1 << 0)
 #define OSPF_AREA_RANGE_SUBSTITUTE	(1 << 1)
 
+#define NSSA_CHECK_TRANSLATORS    0
+#define NSSA_CANDIDATE_ELECTION	  1
+
 /* Area range. */
 struct ospf_area_range
 {
@@ -43,6 +46,9 @@ struct ospf_area_range
   /* Number of more specific prefixes. */
   int specifics;
 
+  /* Number of more specific prefixes. */
+  int nssa_specifics;
+
   /* Addr and masklen to substitute. */
   struct in_addr subst_addr;
   u_char subst_masklen;
@@ -50,9 +56,17 @@ struct ospf_area_range
   /* Range cost. */
   u_int32_t cost;
 
+   /* Range type */
+  u_int8_t metric_type;
+ 
   /* Configured range cost. */
   u_int32_t cost_config;
-#define OSPF_AREA_RANGE_COST_UNSPEC	-1U
+
+  /* Configured range cost. */
+  u_int8_t metric_type_config;
+
+#define OSPF_AREA_RANGE_COST_UNSPEC 		-1U
+#define OSPF_AREA_RANGE_METRIC_TYPE_UNSPEC       0xFF	
 };
 
 /* Prototypes. */
@@ -62,14 +76,16 @@ struct ospf_area_range *ospf_some_area_range_match (struct prefix_ipv4 *);
 struct ospf_area_range *ospf_area_range_lookup_next (struct ospf_area *,
 						     struct in_addr *, int);
 int ospf_area_range_set (struct ospf *, struct in_addr, struct prefix_ipv4 *,
-			 int);
+			 int, int);
 int ospf_area_range_cost_set (struct ospf *, struct in_addr,
-			      struct prefix_ipv4 *, u_int32_t);
+			      struct prefix_ipv4 *, u_int32_t, int);
+int ospf_area_range_metric_type_set (struct ospf *, struct in_addr,
+			             struct prefix_ipv4 *, u_int8_t);
 int ospf_area_range_unset (struct ospf *, struct in_addr,
 			   struct prefix_ipv4 *);
 int ospf_area_range_substitute_set (struct ospf *, struct in_addr,
 				    struct prefix_ipv4 *,
-				    struct prefix_ipv4 *);
+				    struct prefix_ipv4 *, int);
 int ospf_area_range_substitute_unset (struct ospf *, struct in_addr,
 				      struct prefix_ipv4 *);
 struct ospf_area_range *ospf_area_range_match_any (struct ospf *,
@@ -80,5 +96,13 @@ int ospf_act_bb_connection (struct ospf *);
 void ospf_check_abr_status (struct ospf *);
 void ospf_abr_task (struct ospf *);
 void ospf_schedule_abr_task (struct ospf *);
+int  ospf_abr_existing_local_type5_more_preferred (struct ospf_lsa *,
+                                                   struct ospf_lsa *);
+int  ospf_abr_plist_out_check (struct ospf_area *, struct ospf_route *,
+                               struct prefix_ipv4 *);
+int  ospf_abr_plist_in_check (struct ospf_area *, struct prefix_ipv4 *);
+
+void ospf_abr_announce_network_to_area (struct prefix_ipv4 *, u_int32_t cost,
+                                        struct ospf_area *);
 
 #endif /* _ZEBRA_OSPF_ABR_H */

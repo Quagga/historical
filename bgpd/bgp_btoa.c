@@ -45,6 +45,8 @@ enum MRT_MSG_TYPES {
    MSG_PROTOCOL_BGP4PLUS_01,    /* msg is a BGP4+ (draft 01) packet */
    MSG_PROTOCOL_OSPF,           /* msg is an OSPF packet */
    MSG_TABLE_DUMP               /* routing table dump */
+   MSG_PROTOCOL_DEP,            /* msg is a DEP packet */
+   MSG_PROTOCOL_NATPT,          /* msg is a NATPT packet */
 };
 
 int

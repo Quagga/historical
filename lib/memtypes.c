@@ -6,7 +6,7 @@
  * The script is sensitive to the format (though not whitespace), see
  * the top of memtypes.awk for more details.
  *
- * $Id: memtypes.c,v 1.4 2005/04/25 16:26:43 paul Exp $
+ * $Id: memtypes.c,v 1.3 2006/01/10 14:17:56 gouault Exp $
  */
 
 #include "zebra.h"
@@ -63,6 +63,7 @@ struct memory_list memory_list_lib[] =
   { MTYPE_SOCKUNION,		"Socket union"			},
   { MTYPE_PRIVS,		"Privilege information"		},
   { MTYPE_ZLOG,			"Logging"			},
+  { MTYPE_ZSERV,                "Routing server"                },
   { MTYPE_ZCLIENT,		"Zclient"			},
   { MTYPE_WORK_QUEUE,		"Work queue"			},
   { MTYPE_WORK_QUEUE_ITEM,	"Work queue item"		},
@@ -96,6 +97,7 @@ struct memory_list memory_list_bgp[] =
   { 0, NULL },
   { MTYPE_BGP_TABLE,		"BGP table"			},
   { MTYPE_BGP_NODE,		"BGP node"			},
+  { MTYPE_BGP_CONNECTED,        "BGP connected"                 }, 
   { MTYPE_BGP_ROUTE,		"BGP route"			},
   { MTYPE_BGP_STATIC,		"BGP static"			},
   { MTYPE_BGP_ADVERTISE_ATTR,	"BGP adv attr"			},
@@ -185,6 +187,7 @@ struct memory_list memory_list_ospf[] =
   { MTYPE_OSPF_DISTANCE,      "OSPF distance"			},
   { MTYPE_OSPF_IF_INFO,       "OSPF if info"			},
   { MTYPE_OSPF_IF_PARAMS,     "OSPF if params"			},
+  { MTYPE_OSPF_SNMP_IF,       "OSPF if snmp"                    }, 
   { MTYPE_OSPF_MESSAGE,		"OSPF message"			},
   { -1, NULL },
 };
@@ -195,6 +198,7 @@ struct memory_list memory_list_ospf6[] =
   { MTYPE_OSPF6_AREA,         "OSPF6 area"			},
   { MTYPE_OSPF6_IF,           "OSPF6 interface"			},
   { MTYPE_OSPF6_NEIGHBOR,     "OSPF6 neighbor"			},
+  { MTYPE_OSPF6_ROUTE_TABLE,  "OSPF6 route table"		},
   { MTYPE_OSPF6_ROUTE,        "OSPF6 route"			},
   { MTYPE_OSPF6_PREFIX,       "OSPF6 prefix"			},
   { MTYPE_OSPF6_MESSAGE,      "OSPF6 message"			},
@@ -232,6 +236,8 @@ struct memory_list memory_list_vtysh[] =
 {
   { MTYPE_VTYSH_CONFIG,		"Vtysh configuration",		},
   { MTYPE_VTYSH_CONFIG_LINE,	"Vtysh configuration line"	},
+  { MTYPE_VTYSH_USER,           "VTYSH user"                    }, /* XXX: todo */
+
   { -1, NULL },
 };
 

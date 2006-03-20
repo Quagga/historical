@@ -199,16 +199,16 @@ prefix_ipv4_new ()
 {
   struct prefix_ipv4 *p;
 
-  p = XCALLOC (MTYPE_PREFIX_IPV4, sizeof *p);
+  p = XCALLOC (MTYPE_PREFIX, sizeof *p);
   p->family = AF_INET;
   return p;
 }
 
 /* Free prefix_ipv4 structure. */
 void
-prefix_ipv4_free (struct prefix_ipv4 *p)
+prefix_ipv4_free (struct prefix *p)
 {
-  XFREE (MTYPE_PREFIX_IPV4, p);
+  XFREE (MTYPE_PREFIX, p);
 }
 
 /* When string format is invalid return 0. */
@@ -348,16 +348,16 @@ prefix_ipv6_new ()
 {
   struct prefix_ipv6 *p;
 
-  p = XCALLOC (MTYPE_PREFIX_IPV6, sizeof (struct prefix_ipv6));
+  p = XCALLOC (MTYPE_PREFIX, sizeof (struct prefix_ipv6));
   p->family = AF_INET6;
   return p;
 }
 
 /* Free prefix for IPv6. */
 void
-prefix_ipv6_free (struct prefix_ipv6 *p)
+prefix_ipv6_free (struct prefix *p)
 {
-  XFREE (MTYPE_PREFIX_IPV6, p);
+  XFREE (MTYPE_PREFIX, p);
 }
 
 /* If given string is valid return pin6 else return NULL */
@@ -382,11 +382,11 @@ str2prefix_ipv6 (const char *str, struct prefix_ipv6 *p)
     {
       int plen;
 
-      cp = XMALLOC (0, (pnt - str) + 1);
+      cp = XMALLOC (MTYPE_TMP, (pnt - str) + 1);
       strncpy (cp, str, pnt - str);
       *(cp + (pnt - str)) = '\0';
       ret = inet_pton (AF_INET6, cp, &p->prefix);
-      free (cp);
+      XFREE (MTYPE_TMP, cp);
       if (ret != 1)
 	return 0;
       plen = (u_char) atoi (++pnt);

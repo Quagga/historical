@@ -19,6 +19,10 @@
  * Boston, MA 02111-1307, USA.  
  */
 
+/*
+ * Copyright (C) 2005 6WIND  
+ */
+
 #include <zebra.h>
 
 #include "memory.h"
@@ -278,6 +282,7 @@ ospf6_hello_recv (struct in6_addr *src, struct in6_addr *dst,
 {
   struct ospf6_hello *hello;
   struct ospf6_neighbor *on;
+  struct in6_addr *nbr_addr = NULL;
   char *p;
   int twoway = 0;
   int neighborchange = 0;
@@ -323,8 +328,30 @@ ospf6_hello_recv (struct in6_addr *src, struct in6_addr *dst,
       on->prev_bdrouter = on->bdrouter = hello->bdrouter;
       on->priority = hello->priority;
       on->ifindex = ntohl (hello->interface_id);
-      memcpy (&on->linklocal_addr, src, sizeof (struct in6_addr));
+      
+      /* For VLINK the neighbor should use the site local or global address */
+      ADDR_INIT (on, nbr_addr, oi->nw_type);
+      memcpy (nbr_addr, src, sizeof (struct in6_addr));
     }
+  else
+    {
+      /* OSPF6 protocol does not support neighbor address change, 
+       * if address change is detected, delete the neighbor */
+
+      ADDR_INIT (on, nbr_addr, oi->nw_type);
+
+      if (memcmp(nbr_addr, src, sizeof (struct in6_addr)))
+        {
+          if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
+            zlog_info ("Neighbor Event %s: *HelloReceived* with new address. Removing neighbor entry", on->name);
+
+          THREAD_OFF(on->inactivity_timer);
+
+          thread_execute (master, inactivity_timer, on, 0);
+          return;
+        }
+    }
+
 
   /* TwoWay check */
   for (p = (char *) ((caddr_t) hello + sizeof (struct ospf6_hello));
@@ -814,6 +841,7 @@ ospf6_dbdesc_recv (struct in6_addr *src, struct in6_addr *dst,
 {
   struct ospf6_neighbor *on;
   struct ospf6_dbdesc *dbdesc;
+  struct in6_addr *nbr_addr = NULL;
 
   if (ospf6_header_examin (src, dst, oi, oh) != MSG_OK)
     return;
@@ -826,7 +854,9 @@ ospf6_dbdesc_recv (struct in6_addr *src, struct in6_addr *dst,
       return;
     }
 
-  if (memcmp (src, &on->linklocal_addr, sizeof (struct in6_addr)))
+  ADDR_INIT (on, nbr_addr, oi->nw_type);
+
+  if (memcmp (nbr_addr, src, sizeof (struct in6_addr)))
     {
       if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
         zlog_debug ("Seems to be from Secondary I/F of the neighbor, ignore");
@@ -837,7 +867,10 @@ ospf6_dbdesc_recv (struct in6_addr *src, struct in6_addr *dst,
     ((caddr_t) oh + sizeof (struct ospf6_header));
 
   /* Interface MTU check */
-  if (ntohs (dbdesc->ifmtu) != oi->ifmtu)
+  /* RFC 2740 Sec A.3.3 - VLINK the I/F MTU of the dbdesc packet should be zero */
+  if (oi->nw_type != OSPF6_NWTYPE_VIRTUALLINK &&
+      oi->mtu_ignore == 0 && 
+      ntohs (dbdesc->ifmtu) != OSPF6_MTU (oi))
     {
       if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
         zlog_debug ("I/F MTU mismatch");
@@ -873,6 +906,7 @@ ospf6_lsreq_recv (struct in6_addr *src, struct in6_addr *dst,
   struct ospf6_lsreq_entry *e;
   struct ospf6_lsdb *lsdb = NULL;
   struct ospf6_lsa *lsa;
+  struct in6_addr *nbr_addr = NULL;
 
   if (ospf6_header_examin (src, dst, oi, oh) != MSG_OK)
     return;
@@ -885,11 +919,13 @@ ospf6_lsreq_recv (struct in6_addr *src, struct in6_addr *dst,
       return;
     }
 
-  if (memcmp (src, &on->linklocal_addr, sizeof (struct in6_addr)))
+  ADDR_INIT (on, nbr_addr, oi->nw_type);
+
+  if (memcmp (nbr_addr, src, sizeof (struct in6_addr)))
     {
-      if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
-        zlog_debug ("Seems to be from Secondary I/F of the neighbor, ignore");
-      return;
+       if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
+         zlog_debug ("Seems to be from Secondary I/F of the neighbor, ignore");
+       return;
     }
 
   if (on->state != OSPF6_NEIGHBOR_EXCHANGE &&
@@ -964,6 +1000,7 @@ ospf6_lsupdate_recv (struct in6_addr *src, struct in6_addr *dst,
 {
   struct ospf6_neighbor *on;
   struct ospf6_lsupdate *lsupdate;
+  struct in6_addr *nbr_addr = NULL;
   unsigned long num;
   char *p;
 
@@ -978,7 +1015,9 @@ ospf6_lsupdate_recv (struct in6_addr *src, struct in6_addr *dst,
       return;
     }
 
-  if (memcmp (src, &on->linklocal_addr, sizeof (struct in6_addr)))
+  ADDR_INIT (on, nbr_addr, oi->nw_type);
+
+  if (memcmp (nbr_addr, src, sizeof (struct in6_addr)))
     {
       if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
         zlog_debug ("Seems to be from Secondary I/F of the neighbor, ignore");
@@ -1052,6 +1091,7 @@ ospf6_lsack_recv (struct in6_addr *src, struct in6_addr *dst,
   char *p;
   struct ospf6_lsa *his, *mine;
   struct ospf6_lsdb *lsdb = NULL;
+  struct in6_addr *nbr_addr = NULL;
 
   assert (oh->type == OSPF6_MESSAGE_TYPE_LSACK);
   if (ospf6_header_examin (src, dst, oi, oh) != MSG_OK)
@@ -1065,12 +1105,14 @@ ospf6_lsack_recv (struct in6_addr *src, struct in6_addr *dst,
       return;
     }
 
-  if (memcmp (src, &on->linklocal_addr, sizeof (struct in6_addr)))
-    {
-      if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
-        zlog_debug ("Seems to be from Secondary I/F of the neighbor, ignore");
-      return;
-    }
+  ADDR_INIT (on, nbr_addr, oi->nw_type);
+
+  if (memcmp (nbr_addr, src, sizeof (struct in6_addr)))
+     {
+       if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
+         zlog_debug ("Seems to be from Secondary I/F of the neighbor, ignore");
+       return;
+     }
 
   if (on->state != OSPF6_NEIGHBOR_EXCHANGE &&
       on->state != OSPF6_NEIGHBOR_LOADING &&
@@ -1195,6 +1237,67 @@ ospf6_iobuf_size (unsigned int size)
   return iobuflen;
 }
 
+struct ospf6_interface *
+ospf6_if_lookup_by_global_addr(struct ospf6 *ospf6, struct in6_addr *dst)
+{
+  struct listnode *area_node,*if_node;
+  struct ospf6_interface *oi = NULL;
+  struct ospf6_area *area;
+
+  for (ALL_LIST_ELEMENTS_RO (ospf6->area_list,area_node,area))
+    {
+      for (ALL_LIST_ELEMENTS_RO (area->if_list,if_node,oi))
+        {
+          if(oi->nw_type == OSPF6_NWTYPE_VIRTUALLINK || oi->global_addr == NULL)
+            continue;
+
+          if (IPV6_ADDR_SAME(oi->global_addr, dst))
+            return oi;
+        }
+    }
+  
+  return NULL;
+}
+
+/* Associate the packet with virtual link */
+struct ospf6_interface *
+ospf6_associate_packet_vl (struct ospf6 *ospf6, struct in6_addr *dst, 
+                           struct ospf6_header *oh)
+{
+  struct ospf6_interface *rcv_oi;
+  struct ospf6_vl_data *vl_data;
+  struct ospf6_area *area;
+  struct listnode *node_area,*node_vld;
+
+  /* Get the ospf6 interface having the global_addr same as the dst addr */
+  if ((rcv_oi = ospf6_if_lookup_by_global_addr(ospf6,dst)) == NULL)
+    return NULL;
+
+  for (ALL_LIST_ELEMENTS_RO (ospf6->area_list, node_area, area))
+    {
+      for (ALL_LIST_ELEMENTS_RO (area->vlink_list, node_vld, vl_data))
+        {
+          if(OSPF6_AREA_SAME (&area, &rcv_oi->area) &&
+             IPV4_ADDR_SAME (&vl_data->vl_peer, &oh->router_id))
+            {
+              if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
+                zlog_debug ("associating packet with %s",vl_data->vl_oi->interface->name);
+              if (! CHECK_FLAG (vl_data->vl_oi->interface->flags, IFF_UP))
+                {
+                  if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
+                    zlog_debug ("VL is not up yet");
+                  return NULL;
+                }
+              return vl_data->vl_oi;
+            }
+        }
+    }
+  if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
+    zlog_debug ("couldn't find any VL");
+
+  return NULL;
+}
+
 int
 ospf6_receive (struct thread *thread)
 {
@@ -1206,10 +1309,11 @@ ospf6_receive (struct thread *thread)
   struct iovec iovector[2];
   struct ospf6_interface *oi;
   struct ospf6_header *oh;
+  char buf[128];
 
   /* add next read thread */
   sockfd = THREAD_FD (thread);
-  thread_add_read (master, ospf6_receive, NULL, sockfd);
+  thread_add_read (master, ospf6_receive, ospf6, sockfd);
 
   /* initialize */
   memset (recvbuf, 0, iobuflen);
@@ -1239,6 +1343,22 @@ ospf6_receive (struct thread *thread)
     }
 
   oh = (struct ospf6_header *) recvbuf;
+  
+  /* check if the packet is for virtual link */
+  if ( (BACKBONE_AREA_ID == oh->area_id) && 
+        ! (BACKBONE_AREA_ID == oi->area->area_id) && 
+        IN6_IS_ADDR_GLOBAL (&src))
+    {
+      if ((oi = ospf6_associate_packet_vl (ospf6, &dst, oh)) == NULL)
+        {
+          inet_ntop (AF_INET6, &src, buf, sizeof(buf));
+          
+          if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
+            zlog_debug ("Packet from [%s] received on link but no ospf_interface", buf);
+
+          return 0;
+        }
+    }
 
   /* Log */
   if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
@@ -1323,6 +1443,7 @@ ospf6_send (struct in6_addr *src, struct in6_addr *dst,
   struct iovec iovector[2];
 
   /* initialize */
+  memset(iovector, 0, sizeof(iovector));
   iovector[0].iov_base = (caddr_t) oh;
   iovector[0].iov_len = ntohs (oh->length);
   iovector[1].iov_base = NULL;
@@ -1427,7 +1548,7 @@ ospf6_hello_send (struct thread *thread)
       if (on->state < OSPF6_NEIGHBOR_INIT)
         continue;
 
-      if (p - sendbuf + sizeof (u_int32_t) > oi->ifmtu)
+      if (p - sendbuf + sizeof (u_int32_t) > OSPF6_MTU(oi))
         {
           if (IS_OSPF6_DEBUG_MESSAGE (OSPF6_MESSAGE_TYPE_HELLO, SEND))
             zlog_debug ("sending Hello message: exceeds I/F MTU");
@@ -1440,8 +1561,12 @@ ospf6_hello_send (struct thread *thread)
 
   oh->type = OSPF6_MESSAGE_TYPE_HELLO;
   oh->length = htons (p - sendbuf);
-
-  ospf6_send (oi->linklocal_addr, &allspfrouters6, oi, oh);
+  
+  if ((oi->nw_type == OSPF6_NWTYPE_VIRTUALLINK))
+    ospf6_send (oi->global_addr, oi->vl_data->peer_addr, oi, oh);
+  else
+    ospf6_send (oi->linklocal_addr, &allspfrouters6, oi, oh);
+  
   return 0;
 }
 
@@ -1488,7 +1613,14 @@ ospf6_dbdesc_send (struct thread *thread)
   dbdesc->options[0] = on->ospf6_if->area->options[0];
   dbdesc->options[1] = on->ospf6_if->area->options[1];
   dbdesc->options[2] = on->ospf6_if->area->options[2];
-  dbdesc->ifmtu = htons (on->ospf6_if->ifmtu);
+
+  /* RFC 2740 Section A.3.3-Interface MTU should be set to 0 in Database Description
+     packets sent over virtual links. */
+  if (on->ospf6_if->nw_type == OSPF6_NWTYPE_VIRTUALLINK)
+    dbdesc->ifmtu = htons (0);
+  else
+    dbdesc->ifmtu = htons (OSPF6_MTU(on->ospf6_if));
+
   dbdesc->bits = on->dbdesc_bits;
   dbdesc->seqnum = htonl (on->dbdesc_seqnum);
 
@@ -1503,7 +1635,7 @@ ospf6_dbdesc_send (struct thread *thread)
 
           /* MTU check */
           if (p - sendbuf + sizeof (struct ospf6_lsa_header) >
-              on->ospf6_if->ifmtu)
+              OSPF6_MTU(on->ospf6_if))
             {
               ospf6_lsa_unlock (lsa);
               break;
@@ -1516,8 +1648,12 @@ ospf6_dbdesc_send (struct thread *thread)
   oh->type = OSPF6_MESSAGE_TYPE_DBDESC;
   oh->length = htons (p - sendbuf);
 
-  ospf6_send (on->ospf6_if->linklocal_addr, &on->linklocal_addr,
-              on->ospf6_if, oh);
+  if ((on->ospf6_if->nw_type == OSPF6_NWTYPE_VIRTUALLINK))
+    ospf6_send (on->ospf6_if->global_addr, &on->global_addr,
+                on->ospf6_if, oh);
+  else
+    ospf6_send (on->ospf6_if->linklocal_addr, &on->linklocal_addr,
+                on->ospf6_if, oh);
   return 0;
 }
 
@@ -1537,7 +1673,7 @@ ospf6_dbdesc_send_newone (struct thread *thread)
   for (lsa = ospf6_lsdb_head (on->summary_list); lsa;
        lsa = ospf6_lsdb_next (lsa))
     {
-      if (size + sizeof (struct ospf6_lsa_header) > on->ospf6_if->ifmtu)
+      if (size + sizeof (struct ospf6_lsa_header) > OSPF6_MTU(on->ospf6_if))
         {
           ospf6_lsa_unlock (lsa);
           break;
@@ -1604,7 +1740,7 @@ ospf6_lsreq_send (struct thread *thread)
        lsa = ospf6_lsdb_next (lsa))
     {
       /* MTU check */
-      if (p - sendbuf + sizeof (struct ospf6_lsreq_entry) > on->ospf6_if->ifmtu)
+      if (p - sendbuf + sizeof (struct ospf6_lsreq_entry) > OSPF6_MTU(on->ospf6_if))
         {
           ospf6_lsa_unlock (lsa);
           break;
@@ -1620,8 +1756,12 @@ ospf6_lsreq_send (struct thread *thread)
   oh->type = OSPF6_MESSAGE_TYPE_LSREQ;
   oh->length = htons (p - sendbuf);
 
-  ospf6_send (on->ospf6_if->linklocal_addr, &on->linklocal_addr,
-              on->ospf6_if, oh);
+  if (on->ospf6_if->nw_type == OSPF6_NWTYPE_VIRTUALLINK)
+    ospf6_send (on->ospf6_if->global_addr, &on->global_addr,
+                on->ospf6_if, oh);
+  else
+    ospf6_send (on->ospf6_if->linklocal_addr, &on->linklocal_addr,
+                on->ospf6_if, oh);
   return 0;
 }
 
@@ -1673,7 +1813,7 @@ ospf6_lsupdate_send_neighbor (struct thread *thread)
     {
       /* MTU check */
       if ( (p - sendbuf + (unsigned int)OSPF6_LSA_SIZE (lsa->header))
-          > on->ospf6_if->ifmtu)
+          > OSPF6_MTU(on->ospf6_if))
         {
           ospf6_lsa_unlock (lsa);
           break;
@@ -1693,7 +1833,7 @@ ospf6_lsupdate_send_neighbor (struct thread *thread)
     {
       /* MTU check */
       if ( (p - sendbuf + (unsigned int)OSPF6_LSA_SIZE (lsa->header))
-          > on->ospf6_if->ifmtu)
+          > OSPF6_MTU(on->ospf6_if))
         {
           ospf6_lsa_unlock (lsa);
           break;
@@ -1710,12 +1850,17 @@ ospf6_lsupdate_send_neighbor (struct thread *thread)
   oh->type = OSPF6_MESSAGE_TYPE_LSUPDATE;
   oh->length = htons (p - sendbuf);
 
-  ospf6_send (on->ospf6_if->linklocal_addr, &on->linklocal_addr,
-              on->ospf6_if, oh);
+  if (on->ospf6_if->nw_type == OSPF6_NWTYPE_VIRTUALLINK)
+    ospf6_send (on->ospf6_if->global_addr, &on->global_addr,
+                on->ospf6_if, oh);
+  else
+    ospf6_send (on->ospf6_if->linklocal_addr, &on->linklocal_addr,
+                on->ospf6_if, oh);
 
   if (on->lsupdate_list->count != 0 ||
       on->retrans_list->count != 0)
     {
+      THREAD_OFF(on->thread_send_lsupdate);
       if (on->lsupdate_list->count != 0)
         on->thread_send_lsupdate =
           thread_add_event (master, ospf6_lsupdate_send_neighbor, on, 0);
@@ -1766,7 +1911,7 @@ ospf6_lsupdate_send_interface (struct thread *thread)
     {
       /* MTU check */
       if ( (p - sendbuf + ((unsigned int)OSPF6_LSA_SIZE (lsa->header)))
-          > oi->ifmtu)
+          > OSPF6_MTU(oi))
         {
           ospf6_lsa_unlock (lsa);
           break;
@@ -1833,7 +1978,7 @@ ospf6_lsack_send_neighbor (struct thread *thread)
        lsa = ospf6_lsdb_next (lsa))
     {
       /* MTU check */
-      if (p - sendbuf + sizeof (struct ospf6_lsa_header) > on->ospf6_if->ifmtu)
+      if (p - sendbuf + sizeof (struct ospf6_lsa_header) > OSPF6_MTU(on->ospf6_if))
         {
           /* if we run out of packet size/space here,
              better to try again soon. */
@@ -1856,8 +2001,12 @@ ospf6_lsack_send_neighbor (struct thread *thread)
   oh->type = OSPF6_MESSAGE_TYPE_LSACK;
   oh->length = htons (p - sendbuf);
 
-  ospf6_send (on->ospf6_if->linklocal_addr, &on->linklocal_addr,
-              on->ospf6_if, oh);
+  if (on->ospf6_if->nw_type == OSPF6_NWTYPE_VIRTUALLINK)
+    ospf6_send (on->ospf6_if->global_addr, &on->global_addr,
+                on->ospf6_if, oh);
+  else
+    ospf6_send (on->ospf6_if->linklocal_addr, &on->linklocal_addr,
+                on->ospf6_if, oh);
   return 0;
 }
 
@@ -1893,7 +2042,7 @@ ospf6_lsack_send_interface (struct thread *thread)
        lsa = ospf6_lsdb_next (lsa))
     {
       /* MTU check */
-      if (p - sendbuf + sizeof (struct ospf6_lsa_header) > oi->ifmtu)
+      if (p - sendbuf + sizeof (struct ospf6_lsa_header) > OSPF6_MTU(oi))
         {
           /* if we run out of packet size/space here,
              better to try again soon. */
@@ -2003,7 +2152,7 @@ ALIAS (debug_ospf6_message,
        "Debug All message\n"
        "Debug only sending message\n"
        "Debug only receiving message\n"
-       );
+       )
 
 
 DEFUN (no_debug_ospf6_message,
@@ -2079,7 +2228,7 @@ ALIAS (no_debug_ospf6_message,
        "Debug All message\n"
        "Debug only sending message\n"
        "Debug only receiving message\n"
-       );
+       )
 
 int
 config_write_ospf6_debug_message (struct vty *vty)

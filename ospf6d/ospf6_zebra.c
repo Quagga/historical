@@ -28,6 +28,8 @@
 #include "stream.h"
 #include "zclient.h"
 #include "memory.h"
+#include "plist.h"
+
 
 #include "ospf6_proto.h"
 #include "ospf6_top.h"
@@ -36,6 +38,8 @@
 #include "ospf6_lsa.h"
 #include "ospf6_lsdb.h"
 #include "ospf6_asbr.h"
+#include "ospf6_area.h"
+#include "ospf6_abr.h"
 #include "ospf6_zebra.h"
 #include "ospf6d.h"
 
@@ -87,7 +91,7 @@ ospf6_zebra_no_redistribute (int type)
     zebra_redistribute_send (ZEBRA_REDISTRIBUTE_DELETE, zclient, type);
 }
 
-/* Inteface addition message from zebra. */
+/* Interface addition message from zebra. */
 int
 ospf6_zebra_if_add (int command, struct zclient *zclient, zebra_size_t length)
 {
@@ -97,7 +101,7 @@ ospf6_zebra_if_add (int command, struct zclient *zclient, zebra_size_t length)
   if (IS_OSPF6_DEBUG_ZEBRA (RECV))
     zlog_debug ("Zebra Interface add: %s index %d mtu %d",
 		ifp->name, ifp->ifindex, ifp->mtu6);
-  ospf6_interface_if_add (ifp);
+  ospf6_interface_if_add (ospf6, ifp);
   return 0;
 }
 
@@ -116,10 +120,7 @@ ospf6_zebra_if_del (int command, struct zclient *zclient, zebra_size_t length)
     zlog_debug ("Zebra Interface delete: %s index %d mtu %d",
 		ifp->name, ifp->ifindex, ifp->mtu6);
 
-#if 0
-  /* Why is this commented out? */
-  ospf6_interface_if_del (ifp);
-#endif /*0*/
+  ospf6_interface_if_del (ospf6, ifp);
 
   ifp->ifindex = IFINDEX_INTERNAL;
   return 0;
@@ -348,6 +349,7 @@ struct cmd_node zebra_node =
 {
   ZEBRA_NODE,
   "%s(config-zebra)# ",
+  vtysh: 0
 };
 
 #define ADD    0
@@ -506,6 +508,72 @@ ospf6_zebra_route_update_remove (struct ospf6_route *request)
   ospf6_zebra_route_update (REM, request);
 }
 
+void
+ospf6_prefix_list_update (struct prefix_list *plist)
+{
+  int abr_inv = 0, abr_outv = 0;
+  struct ospf6_area *area ,*oa;
+  struct listnode *node ,*nnode;
+  struct listnode *lnode, *lnnode;
+  struct prefix_list *lplist;
+
+  /* If OSPF instatnce does not exist, return right now. */
+
+  if (ospf6 == NULL)
+    return;
+
+  if (plist == NULL)
+    return;
+
+  /* Update area filter-lists. */
+  for (ALL_LIST_ELEMENTS (ospf6->area_list, node, nnode, area))
+    {
+      /* Update filter-list in.*/
+      if (PREFIX_NAME_IN (area))
+        {
+          if (strcmp (PREFIX_NAME_IN (area), plist->name) == 0)
+            {
+              lplist=
+              prefix_list_lookup (AFI_IP, PREFIX_NAME_IN (area));
+              abr_inv++;
+            }
+        }
+
+      /* Update filter-list out.*/
+      if (PREFIX_NAME_OUT (area))
+        {
+          if (strcmp (PREFIX_NAME_OUT (area), plist->name) == 0)
+            {
+              lplist=
+              prefix_list_lookup (AFI_IP6, PREFIX_NAME_OUT (area));
+              abr_outv++;
+            }
+        }
+      if (abr_outv)
+      {
+        for (ALL_LIST_ELEMENTS (ospf6->area_list, lnode, lnnode, oa))
+          {
+            if (area->area_id != oa->area_id)
+              ospf6_abr_disable_area (oa);
+          }
+        for (ALL_LIST_ELEMENTS (ospf6->area_list, lnode, lnnode, oa))
+          {
+            if (area->area_id != oa->area_id)
+               ospf6_abr_enable_area (oa);
+          }
+
+       }
+      if (abr_inv)
+        {
+          ospf6_abr_disable_area (area);
+          ospf6_abr_enable_area (area);
+
+        }
+
+    }
+}
+
+
 DEFUN (redistribute_ospf6,
        redistribute_ospf6_cmd,
        "redistribute ospf6",
@@ -583,6 +651,10 @@ ospf6_zebra_init ()
   /* ospf6_zebra_redistribute (ZEBRA_ROUTE_CONNECT); */
 
   /* Install zebra node. */
+
+  /* prefix list updation */
+  prefix_list_add_hook (ospf6_prefix_list_update);
+  prefix_list_delete_hook (ospf6_prefix_list_update);
   install_node (&zebra_node, config_write_ospf6_zebra);
 
   /* Install command element for zebra node. */
@@ -632,7 +704,7 @@ ALIAS (debug_ospf6_zebra_sendrecv,
        DEBUG_STR
        OSPF6_STR
        "Debug connection between zebra\n"
-      );
+      )
 
 
 DEFUN (no_debug_ospf6_zebra_sendrecv,
@@ -669,7 +741,7 @@ ALIAS (no_debug_ospf6_zebra_sendrecv,
        DEBUG_STR
        OSPF6_STR
        "Debug connection between zebra\n"
-      );
+      )
 
 int
 config_write_ospf6_debug_zebra (struct vty *vty)

@@ -20,6 +20,10 @@
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
 #ifndef ISIS_CIRCUIT_H
 #define ISIS_CIRCUIT_H
 
@@ -54,12 +58,22 @@ struct isis_bcast_info
   struct thread *t_refresh_pseudo_lsp[2];	/* refresh pseudo-node LSPs */
   int pad_hellos;		/* add padding to Hello PDUs ? */
   u_char priority[2];		/* l1/2 IS Priority */
+  long lsp_interval;
 };
 
 struct isis_p2p_info
 {
   struct isis_adjacency *neighbor;
   struct thread *t_send_p2p_hello;	/* send P2P IIHs in this thread  */
+  long retransmit;
+  long retransmit_throttle;  	
+  struct list *dont_tx_lsp;
+};
+
+struct lsp_timestamp
+{
+  struct isis_lsp *lsp;
+  int timestamp;
 };
 
 struct isis_circuit
@@ -76,6 +90,7 @@ struct isis_circuit
   struct thread *t_read;
   struct thread *t_send_csnp[2];
   struct thread *t_send_psnp[2];
+  struct thread *t_send_lsp;
   struct list *lsp_queue;	/* LSPs to be txed (both levels) */
   /* there is no real point in two streams, just for programming kicker */
   int (*rx) (struct isis_circuit * circuit, u_char * ssnpa);
@@ -99,7 +114,6 @@ struct isis_circuit
    * Configurables 
    */
   struct isis_passwd passwd;	/* Circuit rx/tx password */
-  long lsp_interval;
   int manual_l2_only;		/* manualL2OnlyMode (boolean) */
   int circuit_is_type;		/* circuit is type == level of circuit
 				 * diffrenciated from circuit type (media) */

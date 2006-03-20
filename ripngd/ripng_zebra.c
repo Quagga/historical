@@ -44,9 +44,13 @@ int ripng_interface_address_delete (int, struct zclient *, zebra_size_t);
 
 void
 ripng_zebra_ipv6_add (struct prefix_ipv6 *p, struct in6_addr *nexthop,
-		      unsigned int ifindex)
+		      unsigned int ifindex, u_int32_t metric, u_char distance, void *list)
 {
   struct zapi_ipv6 api;
+  struct in6_addr *nexthops[RIPNG_MULTI_PATH_LIMIT];
+  unsigned int ifindexes[RIPNG_MULTI_PATH_LIMIT];
+  struct list *rinfo_list = list;
+
 
   if (zclient->redist[ZEBRA_ROUTE_RIPNG])
     {
@@ -54,23 +58,61 @@ ripng_zebra_ipv6_add (struct prefix_ipv6 *p, struct in6_addr *nexthop,
       api.flags = 0;
       api.message = 0;
       SET_FLAG (api.message, ZAPI_MESSAGE_NEXTHOP);
-      api.nexthop_num = 1;
-      api.nexthop = &nexthop;
-      SET_FLAG (api.message, ZAPI_MESSAGE_IFINDEX);
-      api.ifindex_num = 1;
-      api.ifindex = &ifindex;
+      if ( !rinfo_list || rinfo_list->count == 1)
+        {
+          api.nexthop_num = 1;
+          api.nexthop = &nexthop;
+          SET_FLAG (api.message, ZAPI_MESSAGE_IFINDEX);
+          api.ifindex_num = 1;
+          api.ifindex = &ifindex;
+        }
+      else
+        {/* multiple nexthop route entries */
+          struct listnode *listnode=NULL;
+          struct ripng_info *rinfo=NULL;
+          int count=0;
+          api.nexthop_num = rinfo_list->count;
+          for (ALL_LIST_ELEMENTS_RO(rinfo_list, listnode, rinfo))
+          {
+            if ( rinfo->metric == RIPNG_METRIC_INFINITY) 
+              api.nexthop_num--;
+            else
+            {
+              nexthops[count] = &rinfo->nexthop;		
+              ifindexes[count] = rinfo->ifindex;
+              count++;
+            }
+            rinfo = NULL;
+          }
+          api.nexthop = nexthops;
+          SET_FLAG (api.message, ZAPI_MESSAGE_IFINDEX);
+          api.ifindex_num = api.nexthop_num;
+          api.ifindex = ifindexes;
+        }
 
-      zapi_ipv6_route (ZEBRA_IPV6_ROUTE_ADD, zclient, p, &api);
+      SET_FLAG (api.message, ZAPI_MESSAGE_METRIC);
+      api.metric = metric;
+
+      if (distance && distance != ZEBRA_RIPNG_DISTANCE_DEFAULT)
+        {
+          SET_FLAG (api.message, ZAPI_MESSAGE_DISTANCE);
+          api.distance = distance;
+        }
+
+       zapi_ipv6_route (ZEBRA_IPV6_ROUTE_ADD, zclient, p, &api);
+
     }
+  return;
 }
 
 void
 ripng_zebra_ipv6_delete (struct prefix_ipv6 *p, struct in6_addr *nexthop,
-			 unsigned int ifindex)
+			 unsigned int ifindex, u_int32_t metric, void *list)
 {
   struct zapi_ipv6 api;
+  struct list *rinfo_list = list;
 
-  if (zclient->redist[ZEBRA_ROUTE_RIPNG])
+  if (zclient->redist[ZEBRA_ROUTE_RIPNG] && ( !rinfo_list || rinfo_list->count == 1))
     {
       api.type = ZEBRA_ROUTE_RIPNG;
       api.flags = 0;
@@ -81,9 +123,49 @@ ripng_zebra_ipv6_delete (struct prefix_ipv6 *p, struct in6_addr *nexthop,
       SET_FLAG (api.message, ZAPI_MESSAGE_IFINDEX);
       api.ifindex_num = 1;
       api.ifindex = &ifindex;
+      SET_FLAG (api.message, ZAPI_MESSAGE_METRIC);
+      api.metric = metric;
 
       zapi_ipv6_route (ZEBRA_IPV6_ROUTE_DELETE, zclient, p, &api);
     }
+  else if(zclient->redist[ZEBRA_ROUTE_RIPNG] && rinfo_list->count > 1)
+    {/* For ECMP, remove all from zebra and add the remaining */
+      struct listnode *listnode = NULL;
+      struct ripng_info *rinfo = NULL, *rinfo_tmp = NULL;
+      struct in6_addr *nexthops[RIPNG_MULTI_PATH_LIMIT];
+      int count = 0;
+      struct list *list_temp = NULL;
+
+      api.type = ZEBRA_ROUTE_RIP;
+      api.flags = 0;
+      api.message = 0;
+      SET_FLAG (api.message, ZAPI_MESSAGE_NEXTHOP);
+      api.nexthop_num = rinfo_list->count;
+      for (ALL_LIST_ELEMENTS_RO(rinfo_list, listnode, rinfo))
+        {
+          nexthops[count++] = &rinfo->nexthop;
+          rinfo = NULL;
+        }
+      api.nexthop = nexthops;
+      api.ifindex_num = 0;
+      SET_FLAG (api.message, ZAPI_MESSAGE_METRIC);
+      api.metric = metric;
+      zapi_ipv6_route (ZEBRA_IPV6_ROUTE_DELETE, zclient, p, &api);
+
+      /* Form a list except the route which is to be deleted */
+      list_temp = list_new();
+      for (ALL_LIST_ELEMENTS_RO(rinfo_list, listnode, rinfo))
+        {
+          if (!IPV6_ADDR_SAME (&rinfo->nexthop, nexthop))
+            { 
+              rinfo_tmp = rinfo;
+              listnode_add(list_temp, rinfo);
+            }
+        }
+      ripng_zebra_ipv6_add(p, &rinfo_tmp->nexthop, ifindex, rinfo_tmp->metric, rinfo_tmp->distance, list_temp); 
+      list_delete(list_temp);
+    }
+  return;
 }
 
 /* Zebra route add and delete treatment. */
@@ -214,6 +296,8 @@ static struct {
   {ZEBRA_ROUTE_STATIC,  1, "static"},
   {ZEBRA_ROUTE_OSPF6,   1, "ospf6"},
   {ZEBRA_ROUTE_BGP,     1, "bgp"},
+  {ZEBRA_ROUTE_DEP,     1, "dep"},
+  {ZEBRA_ROUTE_NATPT,   1, "natpt"},
   {0, 0, NULL}
 };
 
@@ -285,13 +369,15 @@ DEFUN (no_ripng_redistribute_ripng,
 
 DEFUN (ripng_redistribute_type,
        ripng_redistribute_type_cmd,
-       "redistribute (kernel|connected|static|ospf6|bgp)",
+       "redistribute (kernel|connected|static|ospf6|bgp|dep|natpt)",
        "Redistribute information from another routing protocol\n"
        "Kernel routes\n"
        "Connected\n"
        "Static routes\n"
        "Open Shortest Path First (OSPFv3)\n"
-       "Border Gateway Protocol (BGP)\n")
+       "Border Gateway Protocol (BGP)\n"
+       "DElegated Prefixes (DEP)\n"
+       "Network Address Translation Protocol Translation (NAT-PT)\n")
 {
   int i;
 
@@ -313,14 +399,16 @@ DEFUN (ripng_redistribute_type,
 
 DEFUN (no_ripng_redistribute_type,
        no_ripng_redistribute_type_cmd,
-       "no redistribute (kernel|connected|static|ospf6|bgp)",
+       "no redistribute (kernel|connected|static|ospf6|bgp|dep|natpt)",
        NO_STR
        "Redistribute information from another routing protocol\n"
        "Kernel routes\n"
        "Connected\n"
        "Static routes\n"
        "Open Shortest Path First (OSPFv3)\n"
-       "Border Gateway Protocol (BGP)\n")
+       "Border Gateway Protocol (BGP)\n"
+       "DElegated Prefixes (DEP)\n"
+       "Network Address Translation Protocol Translation (NAT-PT)\n")
 {
   int i;
 
@@ -344,13 +432,15 @@ DEFUN (no_ripng_redistribute_type,
 
 DEFUN (ripng_redistribute_type_metric,
        ripng_redistribute_type_metric_cmd,
-       "redistribute (kernel|connected|static|ospf6|bgp) metric <0-16>",
+       "redistribute (kernel|connected|static|ospf6|bgp|dep|natpt) metric <0-16>",
        "Redistribute information from another routing protocol\n"
        "Kernel routes\n"
        "Connected\n"
        "Static routes\n"
        "Open Shortest Path First (OSPFv3)\n"
        "Border Gateway Protocol (BGP)\n"
+       "DElegated Prefixes (DEP)\n"
+       "Network Address Translation Protocol Translation (NAT-PT)\n"
        "Metric\n"
        "Metric value\n")
 {
@@ -377,7 +467,7 @@ DEFUN (ripng_redistribute_type_metric,
 
 ALIAS (no_ripng_redistribute_type,
        no_ripng_redistribute_type_metric_cmd,
-       "no redistribute (kernel|connected|static|ospf6|bgp) metric <0-16>",
+       "no redistribute (kernel|connected|static|ospf6|bgp|dep|natpt) metric <0-16>",
        NO_STR
        "Redistribute information from another routing protocol\n"
        "Kernel routes\n"
@@ -385,18 +475,22 @@ ALIAS (no_ripng_redistribute_type,
        "Static routes\n"
        "Open Shortest Path First (OSPFv3)\n"
        "Border Gateway Protocol (BGP)\n"
+       "DElegated Prefixes (DEP)\n"
+       "Network Address Translation Protocol Translation (NAT-PT)\n"
        "Metric\n"
        "Metric value\n")
 
 DEFUN (ripng_redistribute_type_routemap,
        ripng_redistribute_type_routemap_cmd,
-       "redistribute (kernel|connected|static|ospf6|bgp) route-map WORD",
+       "redistribute (kernel|connected|static|ospf6|bgp|dep|natpt) route-map WORD",
        "Redistribute information from another routing protocol\n"
        "Kernel routes\n"
        "Connected\n"
        "Static routes\n"
        "Open Shortest Path First (OSPFv3)\n"
        "Border Gateway Protocol (BGP)\n"
+       "DElegated Prefixes (DEP)\n"
+       "Network Address Translation Protocol Translation (NAT-PT)\n"
        "Route map reference\n"
        "Pointer to route-map entries\n")
 {
@@ -420,7 +514,7 @@ DEFUN (ripng_redistribute_type_routemap,
 
 ALIAS (no_ripng_redistribute_type,
        no_ripng_redistribute_type_routemap_cmd,
-       "no redistribute (kernel|connected|static|ospf6|bgp) route-map WORD",
+       "no redistribute (kernel|connected|static|ospf6|bgp|dep|natpt) route-map WORD",
        NO_STR
        "Redistribute information from another routing protocol\n"
        "Kernel routes\n"
@@ -428,18 +522,22 @@ ALIAS (no_ripng_redistribute_type,
        "Static routes\n"
        "Open Shortest Path First (OSPFv3)\n"
        "Border Gateway Protocol (BGP)\n"
+       "DElegated Prefixes (DEP)\n"
+       "Network Address Translation Protocol Translation (NAT-PT)\n"
        "Route map reference\n"
        "Pointer to route-map entries\n")
 
 DEFUN (ripng_redistribute_type_metric_routemap,
        ripng_redistribute_type_metric_routemap_cmd,
-       "redistribute (kernel|connected|static|ospf6|bgp) metric <0-16> route-map WORD",
+       "redistribute (kernel|connected|static|ospf6|bgp|dep|natpt) metric <0-16> route-map WORD",
        "Redistribute information from another routing protocol\n"
        "Kernel routes\n"
        "Connected\n"
        "Static routes\n"
        "Open Shortest Path First (OSPFv3)\n"
        "Border Gateway Protocol (BGP)\n"
+       "DElegated Prefixes (DEP)\n"
+       "Network Address Translation Protocol Translation (NAT-PT)\n"
        "Metric\n"
        "Metric value\n"
        "Route map reference\n"
@@ -469,7 +567,7 @@ DEFUN (ripng_redistribute_type_metric_routemap,
 
 ALIAS (no_ripng_redistribute_type,
        no_ripng_redistribute_type_metric_routemap_cmd,
-       "no redistribute (kernel|connected|static|ospf6|bgp) metric <0-16> route-map WORD",
+       "no redistribute (kernel|connected|static|ospf6|bgp|dep|natpt) metric <0-16> route-map WORD",
        NO_STR
        "Redistribute information from another routing protocol\n"
        "Kernel routes\n"
@@ -477,6 +575,8 @@ ALIAS (no_ripng_redistribute_type,
        "Static routes\n"
        "Open Shortest Path First (OSPFv3)\n"
        "Border Gateway Protocol (BGP)\n"
+       "DElegated Prefixes (DEP)\n"
+       "Network Address Translation Protocol Translation (NAT-PT)\n"
        "Route map reference\n"
        "Pointer to route-map entries\n")
 
@@ -485,7 +585,8 @@ ripng_redistribute_write (struct vty *vty, int config_mode)
 {
   int i;
   const char *str[] = { "system", "kernel", "connected", "static", "rip",
-			"ripng", "ospf", "ospf6", "isis", "bgp"};
+			"ripng", "ospf", "ospf6", "isis", "bgp", "hsls",
+			"dep", "natpt"};
 
   for (i = 0; i < ZEBRA_ROUTE_MAX; i++)
     if (i != zclient->redist_default && zclient->redist[i])

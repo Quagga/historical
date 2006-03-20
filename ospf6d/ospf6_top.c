@@ -19,6 +19,10 @@
  * Boston, MA 02111-1307, USA.  
  */
 
+/*
+ * Copyright (C) 2005 6WIND  
+ */
+
 #include <zebra.h>
 
 #include "log.h"
@@ -50,6 +54,28 @@
 
 /* global ospf6d variable */
 struct ospf6 *ospf6;
+
+extern struct in_addr router_id_zebra;
+
+void
+ospf6_router_id_update (struct ospf6 *ospf6)
+{
+  u_int32_t router_id;
+  char buf_debug1[BUFSIZ], buf_debug2[BUFSIZ];
+
+  if (IS_OSPF6_DEBUG_ZEBRA (RECV))
+    zlog_debug ("Router-ID[OLD:%s]: Update", inet_ntop (AF_INET, &ospf6->router_id, buf_debug1, BUFSIZ));
+
+  if (ospf6->router_id_static != 0)
+    router_id = ospf6->router_id_static;
+  else
+    router_id = router_id_zebra.s_addr;
+
+  ospf6->router_id = router_id;
+
+  if (IS_OSPF6_DEBUG_ZEBRA (RECV))
+    zlog_debug ("Router-ID[NEW:%s]: Update", inet_ntop (AF_INET, &ospf6->router_id, buf_debug2, BUFSIZ));
+}
 
 void
 ospf6_top_lsdb_hook_add (struct ospf6_lsa *lsa)
@@ -96,17 +122,27 @@ ospf6_top_route_hook_remove (struct ospf6_route *route)
 void
 ospf6_top_brouter_hook_add (struct ospf6_route *route)
 {
+  struct ospf6_area *oa;
+  struct listnode *node;
+
   ospf6_abr_examin_brouter (ADV_ROUTER_IN_PREFIX (&route->prefix));
   ospf6_asbr_lsentry_add (route);
   ospf6_abr_originate_summary (route);
+  for (ALL_LIST_ELEMENTS_RO (ospf6->area_list, node, oa))
+    ospf6_abr_nssa_translator_state_update (oa);
 }
 
 void
 ospf6_top_brouter_hook_remove (struct ospf6_route *route)
 {
+  struct ospf6_area *oa;
+  struct listnode *node;
+
   ospf6_abr_examin_brouter (ADV_ROUTER_IN_PREFIX (&route->prefix));
   ospf6_asbr_lsentry_remove (route);
   ospf6_abr_originate_summary (route);
+  for (ALL_LIST_ELEMENTS_RO (ospf6->area_list, node, oa))
+    ospf6_abr_nssa_translator_state_update (oa);
 }
 
 struct ospf6 *
@@ -120,6 +156,7 @@ ospf6_create ()
   /* initialize */
   gettimeofday (&o->starttime, (struct timezone *) NULL);
   o->area_list = list_new ();
+  o->interfaces = list_new ();
   o->area_list->cmp = ospf6_area_cmp;
   o->lsdb = ospf6_lsdb_create (o);
   o->lsdb_self = ospf6_lsdb_create (o);
@@ -137,6 +174,14 @@ ospf6_create ()
   o->external_table = ospf6_route_table_create ();
   o->external_id_table = route_table_init ();
 
+  o->stale_table = ospf6_route_table_create ();
+
+  o->ref_bandwidth = OSPF6_DEFAULT_REF_BANDWIDTH;
+
+  o->maximum_prefix = 0;
+  o->max_prefix_threshold = OSPF6_MAXIMUM_PREFIX_THRESHOLD_DEFAULT;
+  o->max_prefix_warning_only = 0;
+ 
   return o;
 }
 
@@ -145,9 +190,22 @@ ospf6_delete (struct ospf6 *o)
 {
   struct listnode *node, *nnode;
   struct ospf6_area *oa;
+  struct ospf6_ifgroup *ifgroup;
+
+  if (!o)
+    return;
+
+  for (ALL_LIST_ELEMENTS (o->interfaces, node, nnode, ifgroup))
+    {
+      list_delete_node(o->interfaces, node);
+      ospf6_ifgroup_free(o, ifgroup);
+    }
 
   for (ALL_LIST_ELEMENTS (o->area_list, node, nnode, oa))
     ospf6_area_delete (oa);
+
+  list_delete(o->area_list);
+  list_delete(o->interfaces);
 
   ospf6_lsdb_delete (o->lsdb);
   ospf6_lsdb_delete (o->lsdb_self);
@@ -157,6 +215,11 @@ ospf6_delete (struct ospf6 *o)
 
   ospf6_route_table_delete (o->external_table);
   route_table_finish (o->external_id_table);
+
+  ospf6_route_table_delete (o->stale_table);
+
+  THREAD_OFF(o->dio.dio_timer);
+  THREAD_OFF(o->maxage_remover);
 
   XFREE (MTYPE_OSPF6_TOP, o);
 }
@@ -191,6 +254,7 @@ ospf6_disable (struct ospf6 *o)
       ospf6_lsdb_remove_all (o->lsdb);
       ospf6_route_remove_all (o->route_table);
       ospf6_route_remove_all (o->brouter_table);
+      ospf6_route_remove_all (o->stale_table);
     }
 }
 
@@ -255,6 +319,64 @@ DEFUN (router_ospf6,
   vty->node = OSPF6_NODE;
   vty->index = ospf6;
 
+  ospf6_router_id_update (ospf6);
+
+  return CMD_SUCCESS;
+}
+
+DEFUN (ospf6_interface_passive,
+       ospf6_interface_passive_cmd,
+       "interface passive",
+       "Enable routing on an IPv6 interface\n"
+       "Make all the interface as passive\n")
+{
+  struct ospf6_interface *oi;
+  struct ospf6_area *oa;
+  struct listnode *node_a;
+  struct listnode *node_i;
+  struct listnode *node, *nnode;
+  struct ospf6_neighbor *on;
+
+  for (ALL_LIST_ELEMENTS_RO (ospf6->area_list, node_a, oa))
+    {
+      for (ALL_LIST_ELEMENTS_RO (oa->if_list, node_i, oi))
+        {
+          SET_FLAG (oi->flag, OSPF6_INTERFACE_PASSIVE);
+          THREAD_OFF (oi->thread_send_hello);
+
+          for (ALL_LIST_ELEMENTS (oi->neighbor_list, node, nnode, on))
+            {
+              THREAD_OFF (on->inactivity_timer);
+              thread_execute (master, inactivity_timer, on, 0);
+            }
+        }
+   }
+
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_ospf6_interface_passive,
+       no_ospf6_interface_passive_cmd,
+       "no interface passive",
+       "Enable routing on an IPv6 interface\n"
+       "Make all the interface as active\n")
+{
+  struct ospf6_interface *oi;
+  struct ospf6_area *oa;
+  struct listnode *node_a;
+  struct listnode *node_i;
+
+  for (ALL_LIST_ELEMENTS_RO (ospf6->area_list, node_a, oa))
+    {
+      for (ALL_LIST_ELEMENTS_RO (oa->if_list, node_i, oi))
+        {
+          UNSET_FLAG (oi->flag, OSPF6_INTERFACE_PASSIVE);
+          THREAD_OFF (oi->thread_send_hello);
+          oi->thread_send_hello =
+            thread_add_event (master, ospf6_hello_send, oi, 0);
+        }
+   }
+
   return CMD_SUCCESS;
 }
 
@@ -263,12 +385,17 @@ DEFUN (no_router_ospf6,
        no_router_ospf6_cmd,
        "no router ospf6",
        NO_STR
-       OSPF6_ROUTER_STR)
+       OSPF6_ROUTER_STR
+       OSPF6_STR)
 {
   if (ospf6 == NULL || CHECK_FLAG (ospf6->flag, OSPF6_DISABLED))
-    vty_out (vty, "OSPFv3 is not running%s", VNL);
+    vty_out (vty, " OSPFv3 is not running%s", VNL);
   else
+  {
     ospf6_disable (ospf6);
+    ospf6_delete(ospf6); /* XFREE ospf6, table, like ospf6_create() */
+    ospf6 = NULL;
+  }
 
   /* return to config node . */
   vty->node = CONFIG_NODE;
@@ -280,8 +407,9 @@ DEFUN (no_router_ospf6,
 /* change Router_ID commands. */
 DEFUN (ospf6_router_id,
        ospf6_router_id_cmd,
-       "router-id A.B.C.D",
-       "Configure OSPF Router-ID\n"
+       "ospf6 router-id A.B.C.D",
+       OSPF6_STR
+       "Configure OSPF6 Router-ID\n"
        V4NOTATION_STR)
 {
   int ret;
@@ -293,132 +421,258 @@ DEFUN (ospf6_router_id,
   ret = inet_pton (AF_INET, argv[0], &router_id);
   if (ret == 0)
     {
-      vty_out (vty, "malformed OSPF Router-ID: %s%s", argv[0], VNL);
+      vty_out (vty, "malformed OSPF6 Router-ID: %s%s", argv[0], VNL);
       return CMD_SUCCESS;
     }
 
   o->router_id_static = router_id;
-  if (o->router_id  == 0)
-    o->router_id  = router_id;
+  o->router_id  = router_id;
 
   return CMD_SUCCESS;
 }
 
+DEFUN (no_ospf6_router_id,
+       no_ospf6_router_id_cmd,
+       "no ospf6 router-id",
+       NO_STR
+       "OSPF6 specific commands\n"
+       "Configure OSPF6 Router-ID\n")
+{
+  struct ospf6 *o = (struct ospf6 *) vty->index;
+  u_int32_t router_id;
+
+ if (argc == 1)
+   {
+     if (inet_pton (AF_INET, argv[0], &router_id) == 0)
+       {
+         vty_out (vty, "malformed OSPF6 Router-ID: %s%s", argv[0], VNL);
+	 return CMD_WARNING;
+       }
+     if (o->router_id_static != router_id)
+       {
+         vty_out (vty, "%s is not the configured router-id%s", argv[0], VNL);
+         return CMD_WARNING;
+       }
+   }
+
+  o->router_id_static = 0; /* XXX */
+  ospf6_router_id_update (o);
+
+  if (IS_OSPF6_DEBUG_ZEBRA (RECV))
+    zlog_info ("CONFIG: remove router-id");
+
+  return CMD_SUCCESS;
+}
+
+ALIAS (no_ospf6_router_id,
+       no_ospf6_router_id_val_cmd,
+       "no ospf6 router-id A.B.C.D",
+       NO_STR
+       "OSPF6 specific commands\n"
+       "Configure OSPF6 Router-ID\n"
+       V4NOTATION_STR)
+
+int
+ospf6_str2area_id (const char *name,  u_int32_t *area_id, int *ai_format)
+{
+  char *endptr = NULL;
+
+  /*match "A.B.C.D"*/
+  if (strchr (name, '.') != NULL)
+     {
+        if (inet_pton (AF_INET, name, area_id) <= 0)
+                return -1;
+      
+        if (ai_format)
+                *ai_format = OSPF6_AREA_ID_FORMAT_ADDRESS;
+     }
+  /*match "<0-4294967295>"*/
+  else
+     {
+        *area_id = htonl (strtoul (name, &endptr, 10));
+
+        if (ai_format)
+                *ai_format = OSPF6_AREA_ID_FORMAT_DECIMAL;
+
+        if (*endptr != '\0' || (*area_id == ULONG_MAX && errno == ERANGE))
+                return -1;
+     }
+   return 0;
+}
+
+DEFUN (ospf6_auto_cost_reference_bandwidth,
+       ospf6_auto_cost_reference_bandwidth_cmd,
+       "auto-cost reference-bandwidth <1-4294967>",
+       "Calculate OSPF6 interface cost according to bandwidth\n"
+       "Use reference bandwidth method to assign OSPF6 interface cost\n"
+       "The reference bandwidth in terms of Mbits per second\n")
+{
+  struct ospf6 *o = vty->index;
+  u_int32_t refbw;
+
+  refbw = strtol (argv[0], NULL, 10);
+  if (refbw < 1 || refbw > 4294967)
+    {
+      vty_out (vty, "reference-bandwidth value is invalid%s", VNL);
+      return CMD_WARNING;
+    }
+
+  if ((refbw * 1000) == o->ref_bandwidth)
+    return CMD_SUCCESS;
+
+  /* If reference bandwidth is changed. */
+  o->ref_bandwidth = refbw * 1000;
+  vty_out (vty, " OSPF6: Reference bandwidth is changed.%s", VNL);
+  vty_out (vty, "        Please ensure reference bandwidth is consistent across all routers%s", VNL);
+
+  ospf6_interface_recalculate_cost ();
+
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_ospf6_auto_cost_reference_bandwidth,
+       no_ospf6_auto_cost_reference_bandwidth_val_cmd,
+       "no auto-cost reference-bandwidth <1-4294967>",
+       NO_STR
+       "Calculate OSPF6 interface cost according to bandwidth\n"
+       "Use reference bandwidth method to assign OSPF6 interface cost\n"
+       "Configured reference bandwidth in terms of Mbits per second\n")
+{
+  struct ospf6 *o = vty->index;
+
+  if (argc && (o->ref_bandwidth != strtol (argv[0], NULL, 10) * 1000))
+    {
+      vty_out (vty, "%s is not the configured reference-bandwidth value%s", argv[0], VNL);
+      return CMD_WARNING;
+    }
+
+  if (o->ref_bandwidth == OSPF6_DEFAULT_REF_BANDWIDTH)
+    return CMD_SUCCESS;
+
+  o->ref_bandwidth = OSPF6_DEFAULT_REF_BANDWIDTH;
+  vty_out (vty, " OSPF6: Reference bandwidth is changed.%s", VNL);
+  vty_out (vty, "        Please ensure reference bandwidth is consistent across all routers%s", VNL);
+
+  ospf6_interface_recalculate_cost ();
+
+  return CMD_SUCCESS;
+}
+
+ALIAS (no_ospf6_auto_cost_reference_bandwidth,
+       no_ospf6_auto_cost_reference_bandwidth_cmd,
+       "no auto-cost reference-bandwidth",
+       NO_STR
+       "Calculate OSPF6 interface cost according to bandwidth\n"
+       "Use reference bandwidth method to assign OSPF6 interface cost\n"
+      )
+
+#define AREA2STR(a) inet_ntoa(*(struct in_addr*)&(a))
+
+/*
+ * WARNING:
+ *    if several interface statements overlap (e.g. ctu0 and ctu*)
+ *    then the area ID must be the same, otherwise the result
+ *    is unpredictable
+ */
 DEFUN (ospf6_interface_area,
        ospf6_interface_area_cmd,
-       "interface IFNAME area A.B.C.D",
+       "interface IFNAME area (A.B.C.D|<0-4294967295>)",
        "Enable routing on an IPv6 interface\n"
        IFNAME_STR
        "Specify the OSPF6 area ID\n"
-       "OSPF6 area ID in IPv4 address notation\n"
-      )
+       OSPF6_AREA_ID_STR)
 {
   struct ospf6 *o;
   struct ospf6_area *oa;
-  struct ospf6_interface *oi;
-  struct interface *ifp;
   u_int32_t area_id;
+  int ai_format;
+  struct listnode *node;
+  struct ospf6_ifgroup *ifgroup;
 
   o = (struct ospf6 *) vty->index;
 
-  /* find/create ospf6 interface */
-  ifp = if_get_by_name (argv[0]);
-  oi = (struct ospf6_interface *) ifp->info;
-  if (oi == NULL)
-    oi = ospf6_interface_create (ifp);
-  if (oi->area)
+  /* add interface name pattern into ospf6 interface list */
+  for (ALL_LIST_ELEMENTS_RO(o->interfaces, node, ifgroup))
     {
-      vty_out (vty, "%s already attached to Area %s%s",
-               oi->interface->name, oi->area->name, VNL);
-      return CMD_SUCCESS;
+      /* OSPF already enabled on this interface name pattern */
+      if (strcmp(ifgroup->ifname, argv[0]) == 0)
+        {
+          vty_out (vty, "%s already attached to Area %s%s",
+                 ifgroup->ifname, AREA2STR(ifgroup->area_id), VNL);
+
+          return CMD_WARNING;
+        }
     }
 
   /* parse Area-ID */
-  if (inet_pton (AF_INET, argv[1], &area_id) != 1)
+  if (ospf6_str2area_id (argv[1], &area_id, &ai_format) < 0)
     {
       vty_out (vty, "Invalid Area-ID: %s%s", argv[1], VNL);
-      return CMD_SUCCESS;
+      return CMD_WARNING;
     }
+
+  ifgroup = ospf6_ifgroup_new(argv[0], area_id, ai_format);
+  listnode_add(o->interfaces, ifgroup);
 
   /* find/create ospf6 area */
   oa = ospf6_area_lookup (area_id, o);
   if (oa == NULL)
-    oa = ospf6_area_create (area_id, o);
+    oa = ospf6_area_create (area_id, ai_format, o);
 
-  /* attach interface to area */
-  listnode_add (oa->if_list, oi); /* sort ?? */
-  oi->area = oa;
-
-  SET_FLAG (oa->flag, OSPF6_AREA_ENABLE);
-
-  /* start up */
-  thread_add_event (master, interface_up, oi, 0);
-
-  /* If the router is ABR, originate summary routes */
-  if (ospf6_is_router_abr (o))
-    ospf6_abr_enable_area (oa);
+  /* Now enable ospf6 on all interfaces matching this ifname pattern */
+  ospf6_interface_run(o, argv[0], oa);
 
   return CMD_SUCCESS;
 }
 
 DEFUN (no_ospf6_interface_area,
        no_ospf6_interface_area_cmd,
-       "no interface IFNAME area A.B.C.D",
+       "no interface IFNAME area (A.B.C.D|<0-4294967295>)",
        NO_STR
        "Disable routing on an IPv6 interface\n"
        IFNAME_STR
        "Specify the OSPF6 area ID\n"
-       "OSPF6 area ID in IPv4 address notation\n"
-       )
+       OSPF6_AREA_ID_STR)
 {
   struct ospf6 *o;
-  struct ospf6_interface *oi;
-  struct ospf6_area *oa;
-  struct interface *ifp;
   u_int32_t area_id;
+  int ai_format;
+  struct listnode * node;
+  struct ospf6_ifgroup *ifgroup;
 
   o = (struct ospf6 *) vty->index;
 
-  ifp = if_lookup_by_name (argv[0]);
-  if (ifp == NULL)
+  for (ALL_LIST_ELEMENTS_RO(o->interfaces, node, ifgroup))
     {
-      vty_out (vty, "No such interface %s%s", argv[0], VNL);
-      return CMD_SUCCESS;
+      if (strcmp(ifgroup->ifname, argv[0]) == 0)
+        break;
     }
 
-  oi = (struct ospf6_interface *) ifp->info;
-  if (oi == NULL)
+  if (node == NULL)
     {
-      vty_out (vty, "Interface %s not enabled%s", ifp->name, VNL);
-      return CMD_SUCCESS;
+      vty_out (vty, "No such interface %s%s", argv[0], VNL);
+      return CMD_WARNING;
     }
 
   /* parse Area-ID */
-  if (inet_pton (AF_INET, argv[1], &area_id) != 1)
+  if (ospf6_str2area_id (argv[1], &area_id, &ai_format) < 0)
     {
       vty_out (vty, "Invalid Area-ID: %s%s", argv[1], VNL);
-      return CMD_SUCCESS;
+      return CMD_WARNING;
     }
 
-  if (oi->area->area_id != area_id)
+  if (ifgroup->area_id != area_id)
     {
       vty_out (vty, "Wrong Area-ID: %s is attached to area %s%s",
-               oi->interface->name, oi->area->name, VNL);
-      return CMD_SUCCESS;
+               ifgroup->ifname, AREA2STR(ifgroup->area_id), VNL);
+      return CMD_WARNING;
     }
 
-  thread_execute (master, interface_down, oi, 0);
+  list_delete_node(o->interfaces, node);
 
-  oa = oi->area;
-  listnode_delete (oi->area->if_list, oi);
-  oi->area = (struct ospf6_area *) NULL;
+  ospf6_ifgroup_free(o, ifgroup);
 
-  /* Withdraw inter-area routes from this area, if necessary */
-  if (oa->if_list->count == 0)
-    {
-      UNSET_FLAG (oa->flag, OSPF6_AREA_ENABLE);
-      ospf6_abr_disable_area (oa);
-    }
+  ospf6_if_update (o);
 
   return CMD_SUCCESS;
 }
@@ -443,7 +697,22 @@ ospf6_show (struct vty *vty, struct ospf6 *o)
   vty_out (vty, " Running %s%s", duration, VNL);
 
   /* Redistribute configuration */
-  /* XXX */
+  vty_out (vty, " Redistribute Configuration%s", VNL);
+  if (o->maximum_prefix)
+  {
+    vty_out (vty, "     Maximum Prefixes: %u%s", o->maximum_prefix, VNL);
+    vty_out (vty, "     Threshold: %d%%%s", o->max_prefix_threshold, VNL);
+    if (o->max_prefix_warning_only)
+      vty_out (vty, "     Warning-Only: Enable%s", VNL);
+    else
+      vty_out (vty, "     Warning-Only: Disable%s", VNL);
+  }
+  else
+  vty_out (vty, "     Maximum-Prefix is not configured%s", VNL);
+
+  /* LSAs */
+  vty_out (vty, " Number of AS scoped LSAs is %u%s",
+           o->lsdb->count, VNL);
 
   /* LSAs */
   vty_out (vty, " Number of AS scoped LSAs is %u%s",
@@ -495,7 +764,7 @@ ALIAS (show_ipv6_ospf6_route,
        "Specify IPv6 prefix\n"
        "Detailed information\n"
        "Summary of route table\n"
-       );
+       )
 
 DEFUN (show_ipv6_ospf6_route_match,
        show_ipv6_ospf6_route_match_cmd,
@@ -556,11 +825,11 @@ ALIAS (show_ipv6_ospf6_route,
        IP6_STR
        OSPF6_STR
        ROUTE_STR
-       "Dispaly Intra-Area routes\n"
-       "Dispaly Inter-Area routes\n"
-       "Dispaly Type-1 External routes\n"
-       "Dispaly Type-2 External routes\n"
-       );
+       "Display Intra-Area routes\n"
+       "Display Inter-Area routes\n"
+       "Display Type-1 External routes\n"
+       "Display Type-2 External routes\n"
+       )
 
 DEFUN (show_ipv6_ospf6_route_type_detail,
        show_ipv6_ospf6_route_type_detail_cmd,
@@ -569,10 +838,10 @@ DEFUN (show_ipv6_ospf6_route_type_detail,
        IP6_STR
        OSPF6_STR
        ROUTE_STR
-       "Dispaly Intra-Area routes\n"
-       "Dispaly Inter-Area routes\n"
-       "Dispaly Type-1 External routes\n"
-       "Dispaly Type-2 External routes\n"
+       "Display Intra-Area routes\n"
+       "Display Inter-Area routes\n"
+       "Display Type-1 External routes\n"
+       "Display Type-2 External routes\n"
        "Detailed information\n"
        )
 {
@@ -595,9 +864,8 @@ int
 config_write_ospf6 (struct vty *vty)
 {
   char router_id[16];
-  struct listnode *j, *k;
-  struct ospf6_area *oa;
-  struct ospf6_interface *oi;
+  struct listnode *j;
+  struct ospf6_ifgroup *ifgroup;
 
   /* OSPFv6 configuration. */
   if (ospf6 == NULL)
@@ -608,17 +876,27 @@ config_write_ospf6 (struct vty *vty)
   inet_ntop (AF_INET, &ospf6->router_id_static, router_id, sizeof (router_id));
   vty_out (vty, "router ospf6%s", VNL);
   if (ospf6->router_id_static != 0)
-    vty_out (vty, " router-id %s%s", router_id, VNL);
+    vty_out (vty, " ospf6 router-id %s%s", router_id, VNL);
 
   ospf6_redistribute_config_write (vty);
   ospf6_area_config_write (vty);
+  ospf6_config_write_dio (vty);
 
-  for (ALL_LIST_ELEMENTS_RO (ospf6->area_list, j, oa))
+  /* auto-cost reference-bandwidth configuration.  */
+  if (ospf6->ref_bandwidth != OSPF6_DEFAULT_REF_BANDWIDTH)
+    vty_out (vty, " auto-cost reference-bandwidth %d%s",
+             ospf6->ref_bandwidth / 1000, VNL);
+
+  for (ALL_LIST_ELEMENTS_RO (ospf6->interfaces, j, ifgroup))
     {
-      for (ALL_LIST_ELEMENTS_RO (oa->if_list, k, oi))
-        vty_out (vty, " interface %s area %s%s",
-                 oi->interface->name, oa->name, VNL);
+      if (ifgroup->format == OSPF6_AREA_ID_FORMAT_DECIMAL)
+            vty_out (vty, " interface %s area %u%s",
+                   ifgroup->ifname, (u_int32_t)ntohl(ifgroup->area_id), VNL);
+      else
+            vty_out (vty, " interface %s area %s%s",
+                   ifgroup->ifname, AREA2STR(ifgroup->area_id), VNL);
     }
+
   vty_out (vty, "!%s", VNL);
   return 0;
 }
@@ -641,6 +919,7 @@ ospf6_top_init ()
   install_element (VIEW_NODE, &show_ipv6_ospf6_cmd);
   install_element (ENABLE_NODE, &show_ipv6_ospf6_cmd);
   install_element (CONFIG_NODE, &router_ospf6_cmd);
+  install_element (CONFIG_NODE, &no_router_ospf6_cmd);
 
   install_element (VIEW_NODE, &show_ipv6_ospf6_route_cmd);
   install_element (VIEW_NODE, &show_ipv6_ospf6_route_detail_cmd);
@@ -657,9 +936,15 @@ ospf6_top_init ()
 
   install_default (OSPF6_NODE);
   install_element (OSPF6_NODE, &ospf6_router_id_cmd);
+  install_element (OSPF6_NODE, &no_ospf6_router_id_cmd);
+  install_element (OSPF6_NODE, &no_ospf6_router_id_val_cmd);
   install_element (OSPF6_NODE, &ospf6_interface_area_cmd);
+  install_element (OSPF6_NODE, &ospf6_interface_passive_cmd);
+  install_element (OSPF6_NODE, &no_ospf6_interface_passive_cmd);
   install_element (OSPF6_NODE, &no_ospf6_interface_area_cmd);
-  install_element (OSPF6_NODE, &no_router_ospf6_cmd);
+  install_element (OSPF6_NODE, &ospf6_auto_cost_reference_bandwidth_cmd);
+  install_element (OSPF6_NODE, &no_ospf6_auto_cost_reference_bandwidth_cmd);
+  install_element (OSPF6_NODE, &no_ospf6_auto_cost_reference_bandwidth_val_cmd);
 }
 
 

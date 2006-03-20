@@ -159,7 +159,7 @@ void ospf6_intra_prefix_lsa_remove (struct ospf6_lsa *lsa);
 void ospf6_intra_route_calculation (struct ospf6_area *oa);
 void ospf6_intra_brouter_calculation (struct ospf6_area *oa);
 
-void ospf6_intra_init ();
+void ospf6_intra_init (void);
 
 #endif /* OSPF6_LSA_H */
 

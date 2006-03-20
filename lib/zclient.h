@@ -24,6 +24,7 @@
 
 /* For struct interface and struct connected. */
 #include "if.h"
+#include "prefix.h"
 
 /* For input/output buffer to zebra. */
 #define ZEBRA_MAX_PACKET_SIZ          4096
@@ -86,6 +87,7 @@ struct zclient
 #define ZAPI_MESSAGE_IFINDEX  0x02
 #define ZAPI_MESSAGE_DISTANCE 0x04
 #define ZAPI_MESSAGE_METRIC   0x08
+#define ZAPI_MESSAGE_MULTICAST   0x10
 
 /* Zebra IPv4 route message API. */
 struct zapi_ipv4
@@ -105,6 +107,10 @@ struct zapi_ipv4
   u_char distance;
 
   u_int32_t metric;
+
+  int vrf_id;
+
+  safi_t safi;
 };
 
 /* Prototypes of zebra client service functions. */
@@ -119,6 +125,9 @@ int zclient_socket (void);
 
 /* Get unix stream socket connection to zebra daemon at given path. */
 int zclient_socket_un (const char *);
+
+void vpn_path_zset (char *);
+void vpn_id_zset (int);
 
 /* Send redistribute command to zebra daemon. Do not update zclient state. */
 int zebra_redistribute_send (int command, struct zclient *, int type);
@@ -161,6 +170,10 @@ struct zapi_ipv6
   u_char distance;
 
   u_int32_t metric;
+
+  int vrf_id;
+
+  safi_t safi;
 };
 
 int zapi_ipv6_route (u_char cmd, struct zclient *zclient, 

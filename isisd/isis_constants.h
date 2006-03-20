@@ -20,6 +20,10 @@
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
 #ifndef ISIS_CONSTANTS_H
 #define ISIS_CONSTANTS_H
 
@@ -29,6 +33,7 @@
 
 #define MAX_LINK_METRIC               63
 #define MAX_PATH_METRIC               1023
+#define MAX_EXTERNAL_METRIC           255
 #define ISO_SAP                       0xFE
 #define INTRADOMAIN_ROUTEING_SELECTOR 0
 #define SEQUENCE_MODULUS              4294967296
@@ -56,6 +61,7 @@
 #define MAX_LSP_GEN_INTERVAL          900
 #define MIN_LSP_GEN_INTERVAL          30
 #define MIN_LSP_TRANS_INTERVAL        5
+#define MTU_DEFAULT                   1480
 #define ISIS_MIN_LSP_LIFETIME         380
 #define CSNP_INTERVAL                 10
 #define PSNP_INTERVAL                 2

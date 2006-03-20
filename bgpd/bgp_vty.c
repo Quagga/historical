@@ -18,6 +18,10 @@ along with GNU Zebra; see the file COPYING.  If not, write to the Free
 Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 02111-1307, USA.  */
 
+/*
+ * Copyright (C) 2005 6WIND  
+ */
+
 #include <zebra.h>
 
 #include "command.h"
@@ -48,7 +52,7 @@ extern struct in_addr router_id_zebra;
 afi_t
 bgp_node_afi (struct vty *vty)
 {
-  if (vty->node == BGP_IPV6_NODE)
+  if (vty->node == BGP_IPV6_NODE || vty->node == BGP_IPV6M_NODE)
     return AFI_IP6;
   return AFI_IP;
 }
@@ -62,6 +66,9 @@ bgp_node_safi (struct vty *vty)
     return SAFI_MPLS_VPN;
   if (vty->node == BGP_IPV4M_NODE)
     return SAFI_MULTICAST;
+  if (vty->node == BGP_IPV6M_NODE)
+    return SAFI_MULTICAST;
+
   return SAFI_UNICAST;
 }
 
@@ -811,7 +818,7 @@ DEFUN (bgp_graceful_restart_stalepath_time,
        "bgp graceful-restart stalepath-time <1-3600>",
        "BGP specific commands\n"
        "Graceful restart capability parameters\n"
-       "Set the max time to hold onto restarting peer's stale paths\n"
+       "Set the max time to hold onto restarting peer's stale paths before receiving EOR\n"
        "Delay value (seconds)\n")
 {
   struct bgp *bgp;
@@ -832,7 +839,7 @@ DEFUN (no_bgp_graceful_restart_stalepath_time,
        NO_STR
        "BGP specific commands\n"
        "Graceful restart capability parameters\n"
-       "Set the max time to hold onto restarting peer's stale paths\n")
+       "Set the max time to hold onto restarting peer's stale paths before receiving EOR\n")
 {
   struct bgp *bgp;
 
@@ -850,7 +857,54 @@ ALIAS (no_bgp_graceful_restart_stalepath_time,
        NO_STR
        "BGP specific commands\n"
        "Graceful restart capability parameters\n"
-       "Set the max time to hold onto restarting peer's stale paths\n"
+       "Set the max time to hold onto restarting peer's stale paths before receiving EOR\n"
+       "Delay value (seconds)\n")
+
+DEFUN (bgp_graceful_restart_restart_time,
+       bgp_graceful_restart_restart_time_cmd,
+       "bgp graceful-restart restart-time <1-3600>",
+       "BGP specific commands\n"
+       "Graceful restart capability parameters\n"
+       "Set the max time to hold onto restarting peer's stale paths before receiving OPEN message\n"
+       "Delay value (seconds)\n")
+{
+  struct bgp *bgp;
+  u_int32_t restart;
+
+  bgp = vty->index;
+  if (! bgp)
+    return CMD_WARNING;
+
+  VTY_GET_INTEGER_RANGE ("restart-time", restart, argv[0], 1, 3600);
+  bgp->restart_time = restart;
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_bgp_graceful_restart_restart_time,
+       no_bgp_graceful_restart_restart_time_cmd,
+       "no bgp graceful-restart restart-time",
+       NO_STR
+       "BGP specific commands\n"
+       "Graceful restart capability parameters\n"
+       "Set the max time to hold onto restarting peer's stale paths before receiving OPEN message\n")
+{
+  struct bgp *bgp;
+
+  bgp = vty->index;
+  if (! bgp)
+    return CMD_WARNING;
+
+  bgp->restart_time = BGP_DEFAULT_RESTART_TIME;
+  return CMD_SUCCESS;
+}
+
+ALIAS (no_bgp_graceful_restart_restart_time,
+       no_bgp_graceful_restart_restart_time_val_cmd,
+       "no bgp graceful-restart restart-time <1-3600>",
+       NO_STR
+       "BGP specific commands\n"
+       "Graceful restart capability parameters\n"
+       "Set the max time to hold onto restarting peer's stale paths before receiving OPEN message\n"
        "Delay value (seconds)\n")
 
 /* "bgp fast-external-failover" configuration. */
@@ -1476,6 +1530,46 @@ ALIAS (no_neighbor_local_as,
        "Specify a local-as number\n"
        "AS number used as local AS\n"
        "Do not prepend local-as to updates from ebgp peers\n")
+
+#ifdef HAVE_TCP_MD5
+DEFUN (neighbor_password,
+       neighbor_password_cmd,
+       NEIGHBOR_CMD2 "password LINE",
+       NEIGHBOR_STR
+       NEIGHBOR_ADDR_STR2
+       "Set a password\n"
+       "The password\n")
+{
+  struct peer *peer;
+  int ret;
+
+  peer = peer_and_group_lookup_vty (vty, argv[0]);
+  if (! peer)
+    return CMD_WARNING;
+
+  ret = peer_password_set (peer, argv[1]);
+  return bgp_vty_return (vty, ret);
+}
+
+DEFUN (no_neighbor_password,
+       no_neighbor_password_cmd,
+       NO_NEIGHBOR_CMD2 "password",
+       NO_STR
+       NEIGHBOR_STR
+       NEIGHBOR_ADDR_STR2
+       "Set a password\n")
+{
+  struct peer *peer;
+  int ret;
+
+  peer = peer_and_group_lookup_vty (vty, argv[0]);
+  if (! peer)
+    return CMD_WARNING;
+
+  ret = peer_password_unset (peer);
+  return bgp_vty_return (vty, ret);
+}
+#endif /* HAVE_TCP_MD5 */
 
 DEFUN (neighbor_activate,
        neighbor_activate_cmd,
@@ -2664,7 +2758,7 @@ ALIAS (neighbor_disable_connected_check,
        NEIGHBOR_CMD2 "enforce-multihop",
        NEIGHBOR_STR
        NEIGHBOR_ADDR_STR2
-       "Enforce EBGP neighbors perform multihop\n");
+       "Enforce EBGP neighbors perform multihop\n")
 
 /* Enforce multihop.  */
 ALIAS (no_neighbor_disable_connected_check,
@@ -2673,7 +2767,7 @@ ALIAS (no_neighbor_disable_connected_check,
        NO_STR
        NEIGHBOR_STR
        NEIGHBOR_ADDR_STR2
-       "Enforce EBGP neighbors perform multihop\n");
+       "Enforce EBGP neighbors perform multihop\n")
 
 DEFUN (neighbor_description,
        neighbor_description_cmd,
@@ -2761,23 +2855,30 @@ peer_update_source_vty (struct vty *vty, const char *peer_str,
 
 DEFUN (neighbor_update_source,
        neighbor_update_source_cmd,
-       NEIGHBOR_CMD2 "update-source WORD",
+       NEIGHBOR_CMD2 "update-source (A.B.C.D|X:X::X:X|IFNAME)",
        NEIGHBOR_STR
        NEIGHBOR_ADDR_STR2
        "Source of routing updates\n"
-       "Interface name\n")
+       "IPv4 source address\n"
+       "IPv6 source address\n"
+       IFNAME_STR)
 {
   return peer_update_source_vty (vty, argv[0], argv[1]);
 }
 
+/*
+ * argv[1] is ignored
+ */
 DEFUN (no_neighbor_update_source,
        no_neighbor_update_source_cmd,
-       NO_NEIGHBOR_CMD2 "update-source",
+       NO_NEIGHBOR_CMD2 "update-source (A.B.C.D|X:X::X:X|IFNAME)",
        NO_STR
        NEIGHBOR_STR
        NEIGHBOR_ADDR_STR2
        "Source of routing updates\n"
-       "Interface name\n")
+       "IPv4 source address\n"
+       "IPv6 source address\n"
+       IFNAME_STR)
 {
   return peer_update_source_vty (vty, argv[0], NULL);
 }
@@ -3239,6 +3340,40 @@ DEFUN (no_neighbor_interface,
 {
   return peer_interface_vty (vty, argv[0], NULL);
 }
+
+DEFUN (neighbor_ipv6_interface_remote_as, 
+       neighbor_ipv6_interface_remote_as_cmd, 
+       "neighbor X:X::X:X via IFNAME remote-as <1-65535>",
+       NEIGHBOR_STR
+       "Neighbor IPv6 address\n"
+       "via an interface\n"
+       "Interface name\n"
+       "Specify a BGP neighbor\n"
+       AS_STR)
+{
+  int r;
+   
+  /* XXX use bgp_node_afi (vty) instead of AFI_IP6 or use assert() */
+  r = peer_remote_as_vty (vty, argv[0], argv[2], AFI_IP6, bgp_node_safi (vty));
+  if (r != CMD_SUCCESS)
+    return r;
+
+  r = peer_interface_vty (vty, argv[0], argv[1]);
+
+  return r;
+}
+
+ALIAS (no_neighbor, 
+       no_neighbor_ipv6_interface_remote_as_cmd, 
+       "no neighbor X:X::X:X via IFNAME remote-as <1-65535>",
+       NO_STR
+       NEIGHBOR_STR
+       "Neighbor IPv6 address\n"
+       "via an interface\n"
+       "Interface name\n"
+       "Specify a BGP neighbor\n"
+       AS_STR)
+
 
 /* Set distribute list to the peer. */
 int
@@ -3797,7 +3932,7 @@ ALIAS (no_neighbor_maximum_prefix,
        NEIGHBOR_ADDR_STR2
        "Maximum number of prefix accept from this peer\n"
        "maximum no. of prefix limit\n"
-       "Only give warning message when limit is exceeded\n");
+       "Only give warning message when limit is exceeded\n")
 
 ALIAS (no_neighbor_maximum_prefix,
        no_neighbor_maximum_prefix_threshold_warning_cmd,
@@ -3808,7 +3943,7 @@ ALIAS (no_neighbor_maximum_prefix,
        "Maximum number of prefix accept from this peer\n"
        "maximum no. of prefix limit\n"
        "Threshold value (%) at which to generate a warning msg\n"
-       "Only give warning message when limit is exceeded\n");
+       "Only give warning message when limit is exceeded\n")
 
 ALIAS (no_neighbor_maximum_prefix,
        no_neighbor_maximum_prefix_restart_cmd,
@@ -3915,9 +4050,9 @@ DEFUN (address_family_ipv4_safi,
   return CMD_SUCCESS;
 }
 
-DEFUN (address_family_ipv6_unicast,
-       address_family_ipv6_unicast_cmd,
-       "address-family ipv6 unicast",
+DEFUN (address_family_ipv6,
+       address_family_ipv6_cmd,
+       "address-family ipv6",
        "Enter Address Family command mode\n"
        "Address family\n"
        "unicast\n")
@@ -3926,11 +4061,21 @@ DEFUN (address_family_ipv6_unicast,
   return CMD_SUCCESS;
 }
 
-ALIAS (address_family_ipv6_unicast,
-       address_family_ipv6_cmd,
-       "address-family ipv6",
+DEFUN (address_family_ipv6_safi,
+       address_family_ipv6_safi_cmd,
+       "address-family ipv6 (unicast|multicast)",
        "Enter Address Family command mode\n"
-       "Address family\n")
+       "Address family\n"
+       "Address Family modifier\n"
+       "Address Family modifier\n")
+{
+  if (strncmp (argv[0], "m", 1) == 0)
+    vty->node = BGP_IPV6M_NODE;
+  else
+    vty->node = BGP_IPV6_NODE;
+
+  return CMD_SUCCESS;
+}
 
 DEFUN (address_family_vpnv4,
        address_family_vpnv4_cmd,
@@ -3957,7 +4102,8 @@ DEFUN (exit_address_family,
   if (vty->node == BGP_IPV4_NODE
       || vty->node == BGP_IPV4M_NODE
       || vty->node == BGP_VPNV4_NODE
-      || vty->node == BGP_IPV6_NODE)
+      || vty->node == BGP_IPV6_NODE
+      || vty->node == BGP_IPV6M_NODE)
     vty->node = BGP_NODE;
   return CMD_SUCCESS;
 }
@@ -6498,7 +6644,7 @@ bgp_show_summary (struct vty *vty, struct bgp *bgp, int afi, int safi)
 
 	  vty_out (vty, "4 ");
 
-	  vty_out (vty, "%5d %7d %7d %8d %4d %4ld ",
+	  vty_out (vty, "%5d %7d %7d %8d %4d %4d ",
 		   peer->as,
 		   peer->open_in + peer->update_in + peer->keepalive_in
 		   + peer->notify_in + peer->refresh_in + peer->dynamic_cap_in,
@@ -6702,6 +6848,16 @@ ALIAS (show_bgp_instance_summary,
        "BGP view\n"
        "View name\n"
        "Address family\n"
+       "Summary of BGP neighbor status\n")
+
+ALIAS (show_bgp_instance_summary,
+       show_ipv6_bgp_instance_summary_cmd,
+       "show ipv6 bgp view WORD summary",
+       SHOW_STR
+       IPV6_STR
+       BGP_STR
+       "BGP view\n"
+       "View name\n"
        "Summary of BGP neighbor status\n")
 
 /* old command */
@@ -7220,7 +7376,7 @@ bgp_show_peer (struct vty *vty, struct peer *p)
   /* Packet counts. */
   vty_out (vty, "  Message statistics:%s", VTY_NEWLINE);
   vty_out (vty, "    Inq depth is 0%s", VTY_NEWLINE);
-  vty_out (vty, "    Outq depth is %ld%s", p->obuf->count, VTY_NEWLINE);
+  vty_out (vty, "    Outq depth is %d%s", p->obuf->count, VTY_NEWLINE);
   vty_out (vty, "                         Sent       Rcvd%s", VTY_NEWLINE);
   vty_out (vty, "    Opens:         %10d %10d%s", p->open_out, p->open_in, VTY_NEWLINE);
   vty_out (vty, "    Notifications: %10d %10d%s", p->notify_out, p->notify_in, VTY_NEWLINE);
@@ -7479,6 +7635,14 @@ ALIAS (show_ip_bgp_neighbors,
        "Address family\n"
        "Detailed information on TCP and BGP neighbor connections\n")
 
+ALIAS (show_ip_bgp_neighbors,
+       show_ipv6_bgp_neighbors_cmd,
+       "show ipv6 bgp neighbors",
+       SHOW_STR
+       IPV6_STR
+       BGP_STR
+       "Detailed information on TCP and BGP neighbor connections\n")
+
 DEFUN (show_ip_bgp_neighbors_peer,
        show_ip_bgp_neighbors_peer_cmd,
        "show ip bgp neighbors (A.B.C.D|X:X::X:X)",
@@ -7542,6 +7706,16 @@ ALIAS (show_ip_bgp_neighbors_peer,
        SHOW_STR
        BGP_STR
        "Address family\n"
+       "Detailed information on TCP and BGP neighbor connections\n"
+       "Neighbor to display information about\n"
+       "Neighbor to display information about\n")
+
+ALIAS (show_ip_bgp_neighbors_peer,
+       show_ipv6_bgp_neighbors_peer_cmd,
+       "show ipv6 bgp neighbors (A.B.C.D|X:X::X:X)",
+       SHOW_STR
+       IPV6_STR
+       BGP_STR
        "Detailed information on TCP and BGP neighbor connections\n"
        "Neighbor to display information about\n"
        "Neighbor to display information about\n")
@@ -7964,6 +8138,8 @@ bgp_str2route_type (int afi, const char *str)
 	return ZEBRA_ROUTE_RIP;
       else if (strncmp (str, "o", 1) == 0)
 	return ZEBRA_ROUTE_OSPF;
+      else if (strncmp (str, "d", 1) == 0)
+	return ZEBRA_ROUTE_DEP;
     }
   if (afi == AFI_IP6)
     {
@@ -7977,19 +8153,18 @@ bgp_str2route_type (int afi, const char *str)
 	return ZEBRA_ROUTE_RIPNG;
       else if (strncmp (str, "o", 1) == 0)
 	return ZEBRA_ROUTE_OSPF6;
+      else if (strncmp (str, "d", 1) == 0)
+	return ZEBRA_ROUTE_DEP;
+      else if (strncmp (str, "n", 1) == 0)
+	return ZEBRA_ROUTE_NATPT;
     }
   return 0;
 }
 
 DEFUN (bgp_redistribute_ipv4,
        bgp_redistribute_ipv4_cmd,
-       "redistribute (connected|kernel|ospf|rip|static)",
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPF)\n"
-       "Routing Information Protocol (RIP)\n"
-       "Static routes\n")
+       "redistribute (connected|kernel|ospf|rip|static|dep)",
+       BGP_4_REDISTRIBUTE_HELPSTR)
 {
   int type;
 
@@ -7999,18 +8174,16 @@ DEFUN (bgp_redistribute_ipv4,
       vty_out (vty, "%% Invalid route type%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
-  return bgp_redistribute_set (vty->index, AFI_IP, type);
+  if(vty->node == BGP_NODE)
+    return bgp_redistribute_set (vty->index, AFI_IP, type, 0, SAFI_UNICAST);
+  else
+    return bgp_redistribute_set (vty->index, AFI_IP, type, 0, bgp_node_safi (vty));
 }
 
 DEFUN (bgp_redistribute_ipv4_rmap,
        bgp_redistribute_ipv4_rmap_cmd,
-       "redistribute (connected|kernel|ospf|rip|static) route-map WORD",
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPF)\n"
-       "Routing Information Protocol (RIP)\n"
-       "Static routes\n"
+       "redistribute (connected|kernel|ospf|rip|static|dep) route-map WORD",
+       BGP_4_REDISTRIBUTE_HELPSTR 
        "Route map reference\n"
        "Pointer to route-map entries\n")
 {
@@ -8024,18 +8197,16 @@ DEFUN (bgp_redistribute_ipv4_rmap,
     }
 
   bgp_redistribute_rmap_set (vty->index, AFI_IP, type, argv[1]);
-  return bgp_redistribute_set (vty->index, AFI_IP, type);
+  if(vty->node == BGP_NODE)
+    return bgp_redistribute_set (vty->index, AFI_IP, type, 0, SAFI_UNICAST);
+  else
+    return bgp_redistribute_set (vty->index, AFI_IP, type, 0, bgp_node_safi (vty));
 }
 
 DEFUN (bgp_redistribute_ipv4_metric,
        bgp_redistribute_ipv4_metric_cmd,
-       "redistribute (connected|kernel|ospf|rip|static) metric <0-4294967295>",
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPF)\n"
-       "Routing Information Protocol (RIP)\n"
-       "Static routes\n"
+       "redistribute (connected|kernel|ospf|rip|static|dep) metric <0-4294967295>",
+       BGP_4_REDISTRIBUTE_HELPSTR 
        "Metric for redistributed routes\n"
        "Default metric\n")
 {
@@ -8051,18 +8222,16 @@ DEFUN (bgp_redistribute_ipv4_metric,
   VTY_GET_INTEGER ("metric", metric, argv[1]);
 
   bgp_redistribute_metric_set (vty->index, AFI_IP, type, metric);
-  return bgp_redistribute_set (vty->index, AFI_IP, type);
+  if(vty->node == BGP_NODE)
+    return bgp_redistribute_set (vty->index, AFI_IP, type, 0, SAFI_UNICAST);
+  else
+    return bgp_redistribute_set (vty->index, AFI_IP, type, 0, bgp_node_safi (vty));
 }
 
 DEFUN (bgp_redistribute_ipv4_rmap_metric,
        bgp_redistribute_ipv4_rmap_metric_cmd,
-       "redistribute (connected|kernel|ospf|rip|static) route-map WORD metric <0-4294967295>",
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPF)\n"
-       "Routing Information Protocol (RIP)\n"
-       "Static routes\n"
+       "redistribute (connected|kernel|ospf|rip|static|dep) route-map WORD metric <0-4294967295>",
+       BGP_4_REDISTRIBUTE_HELPSTR 
        "Route map reference\n"
        "Pointer to route-map entries\n"
        "Metric for redistributed routes\n"
@@ -8081,18 +8250,16 @@ DEFUN (bgp_redistribute_ipv4_rmap_metric,
 
   bgp_redistribute_rmap_set (vty->index, AFI_IP, type, argv[1]);
   bgp_redistribute_metric_set (vty->index, AFI_IP, type, metric);
-  return bgp_redistribute_set (vty->index, AFI_IP, type);
+  if(vty->node == BGP_NODE)
+    return bgp_redistribute_set (vty->index, AFI_IP, type, 0, SAFI_UNICAST);
+  else
+    return bgp_redistribute_set (vty->index, AFI_IP, type, 0, bgp_node_safi (vty));
 }
 
 DEFUN (bgp_redistribute_ipv4_metric_rmap,
        bgp_redistribute_ipv4_metric_rmap_cmd,
-       "redistribute (connected|kernel|ospf|rip|static) metric <0-4294967295> route-map WORD",
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPF)\n"
-       "Routing Information Protocol (RIP)\n"
-       "Static routes\n"
+       "redistribute (connected|kernel|ospf|rip|static|dep) metric <0-4294967295> route-map WORD",
+       BGP_4_REDISTRIBUTE_HELPSTR
        "Metric for redistributed routes\n"
        "Default metric\n"
        "Route map reference\n"
@@ -8111,19 +8278,17 @@ DEFUN (bgp_redistribute_ipv4_metric_rmap,
 
   bgp_redistribute_metric_set (vty->index, AFI_IP, type, metric);
   bgp_redistribute_rmap_set (vty->index, AFI_IP, type, argv[2]);
-  return bgp_redistribute_set (vty->index, AFI_IP, type);
+  if(vty->node == BGP_NODE)
+    return bgp_redistribute_set (vty->index, AFI_IP, type, 0, SAFI_UNICAST);
+  else
+    return bgp_redistribute_set (vty->index, AFI_IP, type, 0, bgp_node_safi (vty));
 }
 
 DEFUN (no_bgp_redistribute_ipv4,
        no_bgp_redistribute_ipv4_cmd,
-       "no redistribute (connected|kernel|ospf|rip|static)",
+       "no redistribute (connected|kernel|ospf|rip|static|dep)",
        NO_STR
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPF)\n"
-       "Routing Information Protocol (RIP)\n"
-       "Static routes\n")
+       BGP_4_REDISTRIBUTE_HELPSTR)
 {
   int type;
 
@@ -8133,20 +8298,17 @@ DEFUN (no_bgp_redistribute_ipv4,
       vty_out (vty, "%% Invalid route type%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
-
-  return bgp_redistribute_unset (vty->index, AFI_IP, type);
+  if(vty->node == BGP_NODE)
+    return bgp_redistribute_set (vty->index, AFI_IP, type, 0, SAFI_UNICAST);
+  else
+    return bgp_redistribute_unset (vty->index, AFI_IP, type, 0, bgp_node_safi (vty));
 }
 
 DEFUN (no_bgp_redistribute_ipv4_rmap,
        no_bgp_redistribute_ipv4_rmap_cmd,
-       "no redistribute (connected|kernel|ospf|rip|static) route-map WORD",
+       "no redistribute (connected|kernel|ospf|rip|static|dep) route-map WORD",
        NO_STR
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPF)\n"
-       "Routing Information Protocol (RIP)\n"
-       "Static routes\n"
+       BGP_4_REDISTRIBUTE_HELPSTR 
        "Route map reference\n"
        "Pointer to route-map entries\n")
 {
@@ -8165,14 +8327,9 @@ DEFUN (no_bgp_redistribute_ipv4_rmap,
 
 DEFUN (no_bgp_redistribute_ipv4_metric,
        no_bgp_redistribute_ipv4_metric_cmd,
-       "no redistribute (connected|kernel|ospf|rip|static) metric <0-4294967295>",
+       "no redistribute (connected|kernel|ospf|rip|static|dep) metric <0-4294967295>",
        NO_STR
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPF)\n"
-       "Routing Information Protocol (RIP)\n"
-       "Static routes\n"
+       BGP_4_REDISTRIBUTE_HELPSTR 
        "Metric for redistributed routes\n"
        "Default metric\n")
 {
@@ -8191,14 +8348,9 @@ DEFUN (no_bgp_redistribute_ipv4_metric,
 
 DEFUN (no_bgp_redistribute_ipv4_rmap_metric,
        no_bgp_redistribute_ipv4_rmap_metric_cmd,
-       "no redistribute (connected|kernel|ospf|rip|static) route-map WORD metric <0-4294967295>",
+       "no redistribute (connected|kernel|ospf|rip|static|dep) route-map WORD metric <0-4294967295>",
        NO_STR
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPF)\n"
-       "Routing Information Protocol (RIP)\n"
-       "Static routes\n"
+       BGP_4_REDISTRIBUTE_HELPSTR
        "Route map reference\n"
        "Pointer to route-map entries\n"
        "Metric for redistributed routes\n"
@@ -8220,14 +8372,9 @@ DEFUN (no_bgp_redistribute_ipv4_rmap_metric,
 
 ALIAS (no_bgp_redistribute_ipv4_rmap_metric,
        no_bgp_redistribute_ipv4_metric_rmap_cmd,
-       "no redistribute (connected|kernel|ospf|rip|static) metric <0-4294967295> route-map WORD",
+       "no redistribute (connected|kernel|ospf|rip|static|dep) metric <0-4294967295> route-map WORD",
        NO_STR
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPF)\n"
-       "Routing Information Protocol (RIP)\n"
-       "Static routes\n"
+       BGP_4_REDISTRIBUTE_HELPSTR 
        "Metric for redistributed routes\n"
        "Default metric\n"
        "Route map reference\n"
@@ -8236,13 +8383,8 @@ ALIAS (no_bgp_redistribute_ipv4_rmap_metric,
 #ifdef HAVE_IPV6
 DEFUN (bgp_redistribute_ipv6,
        bgp_redistribute_ipv6_cmd,
-       "redistribute (connected|kernel|ospf6|ripng|static)",
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPFv3)\n"
-       "Routing Information Protocol (RIPng)\n"
-       "Static routes\n")
+       "redistribute (connected|kernel|ospf6|ripng|static|dep|natpt)",
+       BGP_6_REDISTRIBUTE_HELPSTR) 
 {
   int type;
 
@@ -8253,18 +8395,13 @@ DEFUN (bgp_redistribute_ipv6,
       return CMD_WARNING;
     }
 
-  return bgp_redistribute_set (vty->index, AFI_IP6, type);
+  return bgp_redistribute_set (vty->index, AFI_IP6, type, 0, bgp_node_safi (vty));
 }
 
 DEFUN (bgp_redistribute_ipv6_rmap,
        bgp_redistribute_ipv6_rmap_cmd,
-       "redistribute (connected|kernel|ospf6|ripng|static) route-map WORD",
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPFv3)\n"
-       "Routing Information Protocol (RIPng)\n"
-       "Static routes\n"
+       "redistribute (connected|kernel|ospf6|ripng|static|dep|natpt) route-map WORD",
+       BGP_6_REDISTRIBUTE_HELPSTR 
        "Route map reference\n"
        "Pointer to route-map entries\n")
 {
@@ -8278,18 +8415,13 @@ DEFUN (bgp_redistribute_ipv6_rmap,
     }
 
   bgp_redistribute_rmap_set (vty->index, AFI_IP6, type, argv[1]);
-  return bgp_redistribute_set (vty->index, AFI_IP6, type);
+  return bgp_redistribute_set (vty->index, AFI_IP6, type, 0, bgp_node_safi (vty));
 }
 
 DEFUN (bgp_redistribute_ipv6_metric,
        bgp_redistribute_ipv6_metric_cmd,
-       "redistribute (connected|kernel|ospf6|ripng|static) metric <0-4294967295>",
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPFv3)\n"
-       "Routing Information Protocol (RIPng)\n"
-       "Static routes\n"
+       "redistribute (connected|kernel|ospf6|ripng|static|dep|natpt) metric <0-4294967295>",
+       BGP_6_REDISTRIBUTE_HELPSTR 
        "Metric for redistributed routes\n"
        "Default metric\n")
 {
@@ -8305,18 +8437,13 @@ DEFUN (bgp_redistribute_ipv6_metric,
   VTY_GET_INTEGER ("metric", metric, argv[1]);
 
   bgp_redistribute_metric_set (vty->index, AFI_IP6, type, metric);
-  return bgp_redistribute_set (vty->index, AFI_IP6, type);
+  return bgp_redistribute_set (vty->index, AFI_IP6, type, 0, bgp_node_safi (vty));
 }
 
 DEFUN (bgp_redistribute_ipv6_rmap_metric,
        bgp_redistribute_ipv6_rmap_metric_cmd,
-       "redistribute (connected|kernel|ospf6|ripng|static) route-map WORD metric <0-4294967295>",
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPFv3)\n"
-       "Routing Information Protocol (RIPng)\n"
-       "Static routes\n"
+       "redistribute (connected|kernel|ospf6|ripng|static|dep|natpt) route-map WORD metric <0-4294967295>",
+       BGP_6_REDISTRIBUTE_HELPSTR 
        "Route map reference\n"
        "Pointer to route-map entries\n"
        "Metric for redistributed routes\n"
@@ -8335,18 +8462,13 @@ DEFUN (bgp_redistribute_ipv6_rmap_metric,
 
   bgp_redistribute_rmap_set (vty->index, AFI_IP6, type, argv[1]);
   bgp_redistribute_metric_set (vty->index, AFI_IP6, type, metric);
-  return bgp_redistribute_set (vty->index, AFI_IP6, type);
+  return bgp_redistribute_set (vty->index, AFI_IP6, type, 0, bgp_node_safi (vty));
 }
 
 DEFUN (bgp_redistribute_ipv6_metric_rmap,
        bgp_redistribute_ipv6_metric_rmap_cmd,
-       "redistribute (connected|kernel|ospf6|ripng|static) metric <0-4294967295> route-map WORD",
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPFv3)\n"
-       "Routing Information Protocol (RIPng)\n"
-       "Static routes\n"
+       "redistribute (connected|kernel|ospf6|ripng|static|dep|natpt) metric <0-4294967295> route-map WORD",
+       BGP_6_REDISTRIBUTE_HELPSTR 
        "Metric for redistributed routes\n"
        "Default metric\n"
        "Route map reference\n"
@@ -8365,19 +8487,14 @@ DEFUN (bgp_redistribute_ipv6_metric_rmap,
 
   bgp_redistribute_metric_set (vty->index, AFI_IP6, type, metric);
   bgp_redistribute_rmap_set (vty->index, AFI_IP6, type, argv[2]);
-  return bgp_redistribute_set (vty->index, AFI_IP6, type);
+  return bgp_redistribute_set (vty->index, AFI_IP6, type, 0, bgp_node_safi (vty));
 }
 
 DEFUN (no_bgp_redistribute_ipv6,
        no_bgp_redistribute_ipv6_cmd,
-       "no redistribute (connected|kernel|ospf6|ripng|static)",
+       "no redistribute (connected|kernel|ospf6|ripng|static|dep|natpt)",
        NO_STR
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPFv3)\n"
-       "Routing Information Protocol (RIPng)\n"
-       "Static routes\n")
+       BGP_6_REDISTRIBUTE_HELPSTR)
 {
   int type;
 
@@ -8388,19 +8505,14 @@ DEFUN (no_bgp_redistribute_ipv6,
       return CMD_WARNING;
     }
 
-  return bgp_redistribute_unset (vty->index, AFI_IP6, type);
+  return bgp_redistribute_unset (vty->index, AFI_IP6, type, 0, bgp_node_safi (vty));
 }
 
 DEFUN (no_bgp_redistribute_ipv6_rmap,
        no_bgp_redistribute_ipv6_rmap_cmd,
-       "no redistribute (connected|kernel|ospf6|ripng|static) route-map WORD",
+       "no redistribute (connected|kernel|ospf6|ripng|static|dep|natpt) route-map WORD",
        NO_STR
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPFv3)\n"
-       "Routing Information Protocol (RIPng)\n"
-       "Static routes\n"
+       BGP_6_REDISTRIBUTE_HELPSTR 
        "Route map reference\n"
        "Pointer to route-map entries\n")
 {
@@ -8419,14 +8531,9 @@ DEFUN (no_bgp_redistribute_ipv6_rmap,
 
 DEFUN (no_bgp_redistribute_ipv6_metric,
        no_bgp_redistribute_ipv6_metric_cmd,
-       "no redistribute (connected|kernel|ospf6|ripng|static) metric <0-4294967295>",
+       "no redistribute (connected|kernel|ospf6|ripng|static|dep|natpt) metric <0-4294967295>",
        NO_STR
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPFv3)\n"
-       "Routing Information Protocol (RIPng)\n"
-       "Static routes\n"
+       BGP_6_REDISTRIBUTE_HELPSTR 
        "Metric for redistributed routes\n"
        "Default metric\n")
 {
@@ -8445,14 +8552,9 @@ DEFUN (no_bgp_redistribute_ipv6_metric,
 
 DEFUN (no_bgp_redistribute_ipv6_rmap_metric,
        no_bgp_redistribute_ipv6_rmap_metric_cmd,
-       "no redistribute (connected|kernel|ospf6|ripng|static) route-map WORD metric <0-4294967295>",
+       "no redistribute (connected|kernel|ospf6|ripng|static|dep|natpt) route-map WORD metric <0-4294967295>",
        NO_STR
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPFv3)\n"
-       "Routing Information Protocol (RIPng)\n"
-       "Static routes\n"
+       BGP_6_REDISTRIBUTE_HELPSTR
        "Route map reference\n"
        "Pointer to route-map entries\n"
        "Metric for redistributed routes\n"
@@ -8474,14 +8576,9 @@ DEFUN (no_bgp_redistribute_ipv6_rmap_metric,
 
 ALIAS (no_bgp_redistribute_ipv6_rmap_metric,
        no_bgp_redistribute_ipv6_metric_rmap_cmd,
-       "no redistribute (connected|kernel|ospf6|ripng|static) metric <0-4294967295> route-map WORD",
+       "no redistribute (connected|kernel|ospf6|ripng|static|dep|natpt) metric <0-4294967295> route-map WORD",
        NO_STR
-       "Redistribute information from another routing protocol\n"
-       "Connected\n"
-       "Kernel routes\n"
-       "Open Shurtest Path First (OSPFv3)\n"
-       "Routing Information Protocol (RIPng)\n"
-       "Static routes\n"
+       BGP_6_REDISTRIBUTE_HELPSTR 
        "Metric for redistributed routes\n"
        "Default metric\n"
        "Route map reference\n"
@@ -8494,16 +8591,13 @@ bgp_config_write_redistribute (struct vty *vty, struct bgp *bgp, afi_t afi,
 {
   int i;
   const char *str[] = { "system", "kernel", "connected", "static", "rip",
-		  "ripng", "ospf", "ospf6", "isis", "bgp"};
-
-  /* Unicast redistribution only.  */
-  if (safi != SAFI_UNICAST)
-    return 0;
+		  "ripng", "ospf", "ospf6", "isis", "bgp", "hsls", "dep",
+		  "natpt" };
 
   for (i = 0; i < ZEBRA_ROUTE_MAX; i++)
     {
       /* Redistribute BGP does not make sense.  */
-      if (bgp->redist[afi][i] && i != ZEBRA_ROUTE_BGP)
+      if (bgp->redist[afi][i].safi[safi] && i != ZEBRA_ROUTE_BGP)
 	{
 	  /* Display "address-family" when it is not yet diplayed.  */
 	  bgp_config_write_family_header (vty, afi, safi, write);
@@ -8552,6 +8646,13 @@ struct cmd_node bgp_ipv6_unicast_node =
   1,
 };
 
+struct cmd_node bgp_ipv6_multicast_node =
+{
+  BGP_IPV6M_NODE,
+  "%s(config-router-af)# ",
+  1,
+};
+
 struct cmd_node bgp_vpnv4_node =
 {
   BGP_VPNV4_NODE,
@@ -8570,6 +8671,7 @@ bgp_vty_init ()
   install_node (&bgp_ipv4_unicast_node, NULL);
   install_node (&bgp_ipv4_multicast_node, NULL);
   install_node (&bgp_ipv6_unicast_node, NULL);
+  install_node (&bgp_ipv6_multicast_node, NULL);
   install_node (&bgp_vpnv4_node, NULL);
 
   /* Install default VTY commands to new nodes.  */
@@ -8577,6 +8679,7 @@ bgp_vty_init ()
   install_default (BGP_IPV4_NODE);
   install_default (BGP_IPV4M_NODE);
   install_default (BGP_IPV6_NODE);
+  install_default (BGP_IPV6M_NODE);
   install_default (BGP_VPNV4_NODE);
   
   /* "bgp multiple-instance" commands. */
@@ -8642,6 +8745,10 @@ bgp_vty_init ()
   install_element (BGP_NODE, &bgp_graceful_restart_stalepath_time_cmd);
   install_element (BGP_NODE, &no_bgp_graceful_restart_stalepath_time_cmd);
   install_element (BGP_NODE, &no_bgp_graceful_restart_stalepath_time_val_cmd);
+  install_element (BGP_NODE, &bgp_graceful_restart_restart_time_cmd);
+  install_element (BGP_NODE, &no_bgp_graceful_restart_restart_time_cmd);
+  install_element (BGP_NODE, &no_bgp_graceful_restart_restart_time_val_cmd);
+
  
   /* "bgp fast-external-failover" commands */
   install_element (BGP_NODE, &bgp_fast_external_failover_cmd);
@@ -8705,11 +8812,18 @@ bgp_vty_init ()
   install_element (BGP_NODE, &no_neighbor_local_as_val_cmd);
   install_element (BGP_NODE, &no_neighbor_local_as_val2_cmd);
 
+#ifdef HAVE_TCP_MD5
+  /* "neighbor password" commands. */
+  install_element (BGP_NODE, &neighbor_password_cmd);
+  install_element (BGP_NODE, &no_neighbor_password_cmd);
+#endif /* HAVE_TCP_MD5 */
+
   /* "neighbor activate" commands. */
   install_element (BGP_NODE, &neighbor_activate_cmd);
   install_element (BGP_IPV4_NODE, &neighbor_activate_cmd);
   install_element (BGP_IPV4M_NODE, &neighbor_activate_cmd);
   install_element (BGP_IPV6_NODE, &neighbor_activate_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_activate_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_activate_cmd);
 
   /* "no neighbor activate" commands. */
@@ -8717,6 +8831,7 @@ bgp_vty_init ()
   install_element (BGP_IPV4_NODE, &no_neighbor_activate_cmd);
   install_element (BGP_IPV4M_NODE, &no_neighbor_activate_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_activate_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_activate_cmd);
   install_element (BGP_VPNV4_NODE, &no_neighbor_activate_cmd);
 
   /* "neighbor peer-group set" commands. */
@@ -8724,6 +8839,7 @@ bgp_vty_init ()
   install_element (BGP_IPV4_NODE, &neighbor_set_peer_group_cmd);
   install_element (BGP_IPV4M_NODE, &neighbor_set_peer_group_cmd);
   install_element (BGP_IPV6_NODE, &neighbor_set_peer_group_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_set_peer_group_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_set_peer_group_cmd);
   
   /* "no neighbor peer-group unset" commands. */
@@ -8731,6 +8847,7 @@ bgp_vty_init ()
   install_element (BGP_IPV4_NODE, &no_neighbor_set_peer_group_cmd);
   install_element (BGP_IPV4M_NODE, &no_neighbor_set_peer_group_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_set_peer_group_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_set_peer_group_cmd);
   install_element (BGP_VPNV4_NODE, &no_neighbor_set_peer_group_cmd);
   
   /* "neighbor softreconfiguration inbound" commands.*/
@@ -8742,6 +8859,8 @@ bgp_vty_init ()
   install_element (BGP_IPV4M_NODE, &no_neighbor_soft_reconfiguration_cmd);
   install_element (BGP_IPV6_NODE, &neighbor_soft_reconfiguration_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_soft_reconfiguration_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_soft_reconfiguration_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_soft_reconfiguration_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_soft_reconfiguration_cmd);
   install_element (BGP_VPNV4_NODE, &no_neighbor_soft_reconfiguration_cmd);
 
@@ -8834,6 +8953,28 @@ bgp_vty_init ()
   install_element (BGP_IPV6_NODE, &no_neighbor_attr_unchanged8_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_attr_unchanged9_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_attr_unchanged10_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_attr_unchanged_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_attr_unchanged1_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_attr_unchanged2_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_attr_unchanged3_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_attr_unchanged4_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_attr_unchanged5_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_attr_unchanged6_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_attr_unchanged7_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_attr_unchanged8_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_attr_unchanged9_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_attr_unchanged10_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_attr_unchanged_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_attr_unchanged1_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_attr_unchanged2_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_attr_unchanged3_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_attr_unchanged4_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_attr_unchanged5_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_attr_unchanged6_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_attr_unchanged7_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_attr_unchanged8_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_attr_unchanged9_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_attr_unchanged10_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_attr_unchanged_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_attr_unchanged1_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_attr_unchanged2_cmd);
@@ -8875,6 +9016,8 @@ bgp_vty_init ()
   install_element (BGP_IPV4M_NODE, &no_neighbor_nexthop_self_cmd);
   install_element (BGP_IPV6_NODE, &neighbor_nexthop_self_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_nexthop_self_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_nexthop_self_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_nexthop_self_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_nexthop_self_cmd);
   install_element (BGP_VPNV4_NODE, &no_neighbor_nexthop_self_cmd);
 
@@ -8887,6 +9030,8 @@ bgp_vty_init ()
   install_element (BGP_IPV4M_NODE, &no_neighbor_remove_private_as_cmd);
   install_element (BGP_IPV6_NODE, &neighbor_remove_private_as_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_remove_private_as_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_remove_private_as_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_remove_private_as_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_remove_private_as_cmd);
   install_element (BGP_VPNV4_NODE, &no_neighbor_remove_private_as_cmd);
 
@@ -8907,6 +9052,10 @@ bgp_vty_init ()
   install_element (BGP_IPV6_NODE, &neighbor_send_community_type_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_send_community_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_send_community_type_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_send_community_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_send_community_type_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_send_community_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_send_community_type_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_send_community_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_send_community_type_cmd);
   install_element (BGP_VPNV4_NODE, &no_neighbor_send_community_cmd);
@@ -8921,6 +9070,8 @@ bgp_vty_init ()
   install_element (BGP_IPV4M_NODE, &no_neighbor_route_reflector_client_cmd);
   install_element (BGP_IPV6_NODE, &neighbor_route_reflector_client_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_route_reflector_client_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_route_reflector_client_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_route_reflector_client_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_route_reflector_client_cmd);
   install_element (BGP_VPNV4_NODE, &no_neighbor_route_reflector_client_cmd);
 
@@ -8933,6 +9084,8 @@ bgp_vty_init ()
   install_element (BGP_IPV4M_NODE, &no_neighbor_route_server_client_cmd);
   install_element (BGP_IPV6_NODE, &neighbor_route_server_client_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_route_server_client_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_route_server_client_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_route_server_client_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_route_server_client_cmd);
   install_element (BGP_VPNV4_NODE, &no_neighbor_route_server_client_cmd);
 
@@ -8957,6 +9110,8 @@ bgp_vty_init ()
   install_element (BGP_IPV4M_NODE, &no_neighbor_capability_orf_prefix_cmd);
   install_element (BGP_IPV6_NODE, &neighbor_capability_orf_prefix_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_capability_orf_prefix_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_capability_orf_prefix_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_capability_orf_prefix_cmd);
 
   /* "neighbor capability dynamic" commands.*/
   install_element (BGP_NODE, &neighbor_capability_dynamic_cmd);
@@ -8975,6 +9130,8 @@ bgp_vty_init ()
   /* "neighbor disable-connected-check" commands.  */
   install_element (BGP_NODE, &neighbor_disable_connected_check_cmd);
   install_element (BGP_NODE, &no_neighbor_disable_connected_check_cmd);
+
+  /* "neighbor enforce-multihop" commands.  */
   install_element (BGP_NODE, &neighbor_enforce_multihop_cmd);
   install_element (BGP_NODE, &no_neighbor_enforce_multihop_cmd);
 
@@ -9004,6 +9161,10 @@ bgp_vty_init ()
   install_element (BGP_IPV6_NODE, &neighbor_default_originate_rmap_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_default_originate_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_default_originate_rmap_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_default_originate_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_default_originate_rmap_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_default_originate_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_default_originate_rmap_cmd);
 
   /* "neighbor port" commands. */
   install_element (BGP_NODE, &neighbor_port_cmd);
@@ -9053,6 +9214,8 @@ bgp_vty_init ()
   install_element (BGP_IPV4M_NODE, &no_neighbor_distribute_list_cmd);
   install_element (BGP_IPV6_NODE, &neighbor_distribute_list_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_distribute_list_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_distribute_list_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_distribute_list_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_distribute_list_cmd);
   install_element (BGP_VPNV4_NODE, &no_neighbor_distribute_list_cmd);
 
@@ -9065,6 +9228,8 @@ bgp_vty_init ()
   install_element (BGP_IPV4M_NODE, &no_neighbor_prefix_list_cmd);
   install_element (BGP_IPV6_NODE, &neighbor_prefix_list_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_prefix_list_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_prefix_list_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_prefix_list_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_prefix_list_cmd);
   install_element (BGP_VPNV4_NODE, &no_neighbor_prefix_list_cmd);
 
@@ -9077,6 +9242,8 @@ bgp_vty_init ()
   install_element (BGP_IPV4M_NODE, &no_neighbor_filter_list_cmd);
   install_element (BGP_IPV6_NODE, &neighbor_filter_list_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_filter_list_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_filter_list_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_filter_list_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_filter_list_cmd);
   install_element (BGP_VPNV4_NODE, &no_neighbor_filter_list_cmd);
 
@@ -9089,6 +9256,8 @@ bgp_vty_init ()
   install_element (BGP_IPV4M_NODE, &no_neighbor_route_map_cmd);
   install_element (BGP_IPV6_NODE, &neighbor_route_map_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_route_map_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_route_map_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_route_map_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_route_map_cmd);
   install_element (BGP_VPNV4_NODE, &no_neighbor_route_map_cmd);
 
@@ -9101,6 +9270,8 @@ bgp_vty_init ()
   install_element (BGP_IPV4M_NODE, &no_neighbor_unsuppress_map_cmd);
   install_element (BGP_IPV6_NODE, &neighbor_unsuppress_map_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_unsuppress_map_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_unsuppress_map_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_unsuppress_map_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_unsuppress_map_cmd);
   install_element (BGP_VPNV4_NODE, &no_neighbor_unsuppress_map_cmd);  
 
@@ -9157,6 +9328,19 @@ bgp_vty_init ()
   install_element (BGP_IPV6_NODE, &no_neighbor_maximum_prefix_threshold_warning_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_maximum_prefix_restart_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_maximum_prefix_threshold_restart_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_maximum_prefix_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_maximum_prefix_threshold_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_maximum_prefix_warning_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_maximum_prefix_threshold_warning_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_maximum_prefix_restart_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_maximum_prefix_threshold_restart_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_maximum_prefix_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_maximum_prefix_val_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_maximum_prefix_threshold_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_maximum_prefix_warning_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_maximum_prefix_threshold_warning_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_maximum_prefix_restart_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_maximum_prefix_threshold_restart_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_maximum_prefix_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_maximum_prefix_threshold_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_maximum_prefix_warning_cmd);
@@ -9184,6 +9368,9 @@ bgp_vty_init ()
   install_element (BGP_IPV6_NODE, &neighbor_allowas_in_cmd);
   install_element (BGP_IPV6_NODE, &neighbor_allowas_in_arg_cmd);
   install_element (BGP_IPV6_NODE, &no_neighbor_allowas_in_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_allowas_in_cmd);
+  install_element (BGP_IPV6M_NODE, &neighbor_allowas_in_arg_cmd);
+  install_element (BGP_IPV6M_NODE, &no_neighbor_allowas_in_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_allowas_in_cmd);
   install_element (BGP_VPNV4_NODE, &neighbor_allowas_in_arg_cmd);
   install_element (BGP_VPNV4_NODE, &no_neighbor_allowas_in_cmd);
@@ -9193,7 +9380,7 @@ bgp_vty_init ()
   install_element (BGP_NODE, &address_family_ipv4_safi_cmd);
 #ifdef HAVE_IPV6
   install_element (BGP_NODE, &address_family_ipv6_cmd);
-  install_element (BGP_NODE, &address_family_ipv6_unicast_cmd);
+  install_element (BGP_NODE, &address_family_ipv6_safi_cmd);
 #endif /* HAVE_IPV6 */
   install_element (BGP_NODE, &address_family_vpnv4_cmd);
   install_element (BGP_NODE, &address_family_vpnv4_unicast_cmd);
@@ -9202,7 +9389,13 @@ bgp_vty_init ()
   install_element (BGP_IPV4_NODE, &exit_address_family_cmd);
   install_element (BGP_IPV4M_NODE, &exit_address_family_cmd);
   install_element (BGP_IPV6_NODE, &exit_address_family_cmd);
+  install_element (BGP_IPV6M_NODE, &exit_address_family_cmd);
   install_element (BGP_VPNV4_NODE, &exit_address_family_cmd);
+
+#ifdef HAVE_IPV6
+  install_element (BGP_NODE, &neighbor_ipv6_interface_remote_as_cmd);
+  install_element (BGP_NODE, &no_neighbor_ipv6_interface_remote_as_cmd);
+#endif
 
   /* "clear ip bgp commands" */
   install_element (ENABLE_NODE, &clear_ip_bgp_all_cmd);
@@ -9399,7 +9592,7 @@ bgp_vty_init ()
   install_element (ENABLE_NODE, &clear_bgp_ipv6_instance_peer_rsclient_cmd);
 #endif /* HAVE_IPV6 */
 
-  /* "show ip bgp summary" commands. */
+  /* "show ip[v6] bgp summary" commands. */
   install_element (VIEW_NODE, &show_ip_bgp_summary_cmd);
   install_element (VIEW_NODE, &show_ip_bgp_instance_summary_cmd);
   install_element (VIEW_NODE, &show_ip_bgp_ipv4_summary_cmd);
@@ -9409,6 +9602,7 @@ bgp_vty_init ()
 #ifdef HAVE_IPV6
   install_element (VIEW_NODE, &show_bgp_summary_cmd);
   install_element (VIEW_NODE, &show_bgp_instance_summary_cmd);
+  install_element (VIEW_NODE, &show_ipv6_bgp_instance_summary_cmd);
   install_element (VIEW_NODE, &show_bgp_ipv6_summary_cmd);
   install_element (VIEW_NODE, &show_bgp_instance_ipv6_summary_cmd);
 #endif /* HAVE_IPV6 */
@@ -9421,6 +9615,7 @@ bgp_vty_init ()
 #ifdef HAVE_IPV6
   install_element (ENABLE_NODE, &show_bgp_summary_cmd);
   install_element (ENABLE_NODE, &show_bgp_instance_summary_cmd);
+  install_element (ENABLE_NODE, &show_ipv6_bgp_instance_summary_cmd);
   install_element (ENABLE_NODE, &show_bgp_ipv6_summary_cmd);
   install_element (ENABLE_NODE, &show_bgp_instance_ipv6_summary_cmd);
 #endif /* HAVE_IPV6 */
@@ -9450,16 +9645,20 @@ bgp_vty_init ()
 #ifdef HAVE_IPV6
   install_element (VIEW_NODE, &show_bgp_neighbors_cmd);
   install_element (VIEW_NODE, &show_bgp_ipv6_neighbors_cmd);
+  install_element (VIEW_NODE, &show_ipv6_bgp_neighbors_cmd);
   install_element (VIEW_NODE, &show_bgp_neighbors_peer_cmd);
   install_element (VIEW_NODE, &show_bgp_ipv6_neighbors_peer_cmd);
+  install_element (VIEW_NODE, &show_ipv6_bgp_neighbors_peer_cmd);
   install_element (VIEW_NODE, &show_bgp_instance_neighbors_cmd);
   install_element (VIEW_NODE, &show_bgp_instance_ipv6_neighbors_cmd);
   install_element (VIEW_NODE, &show_bgp_instance_neighbors_peer_cmd);
   install_element (VIEW_NODE, &show_bgp_instance_ipv6_neighbors_peer_cmd);
   install_element (ENABLE_NODE, &show_bgp_neighbors_cmd);
   install_element (ENABLE_NODE, &show_bgp_ipv6_neighbors_cmd);
+  install_element (ENABLE_NODE, &show_ipv6_bgp_neighbors_cmd);
   install_element (ENABLE_NODE, &show_bgp_neighbors_peer_cmd);
   install_element (ENABLE_NODE, &show_bgp_ipv6_neighbors_peer_cmd);
+  install_element (ENABLE_NODE, &show_ipv6_bgp_neighbors_peer_cmd);
   install_element (ENABLE_NODE, &show_bgp_instance_neighbors_cmd);
   install_element (ENABLE_NODE, &show_bgp_instance_ipv6_neighbors_cmd);
   install_element (ENABLE_NODE, &show_bgp_instance_neighbors_peer_cmd);
@@ -9518,6 +9717,28 @@ bgp_vty_init ()
   install_element (BGP_NODE, &bgp_redistribute_ipv4_metric_rmap_cmd);
   install_element (BGP_NODE, &no_bgp_redistribute_ipv4_rmap_metric_cmd);
   install_element (BGP_NODE, &no_bgp_redistribute_ipv4_metric_rmap_cmd);
+
+  install_element (BGP_IPV4_NODE, &bgp_redistribute_ipv4_cmd);
+  install_element (BGP_IPV4_NODE, &no_bgp_redistribute_ipv4_cmd);
+  install_element (BGP_IPV4_NODE, &bgp_redistribute_ipv4_rmap_cmd);
+  install_element (BGP_IPV4_NODE, &no_bgp_redistribute_ipv4_rmap_cmd);
+  install_element (BGP_IPV4_NODE, &bgp_redistribute_ipv4_metric_cmd);
+  install_element (BGP_IPV4_NODE, &no_bgp_redistribute_ipv4_metric_cmd);
+  install_element (BGP_IPV4_NODE, &bgp_redistribute_ipv4_rmap_metric_cmd);
+  install_element (BGP_IPV4_NODE, &bgp_redistribute_ipv4_metric_rmap_cmd);
+  install_element (BGP_IPV4_NODE, &no_bgp_redistribute_ipv4_rmap_metric_cmd);
+  install_element (BGP_IPV4_NODE, &no_bgp_redistribute_ipv4_metric_rmap_cmd);
+
+  install_element (BGP_IPV4M_NODE, &bgp_redistribute_ipv4_cmd);
+  install_element (BGP_IPV4M_NODE, &no_bgp_redistribute_ipv4_cmd);
+  install_element (BGP_IPV4M_NODE, &bgp_redistribute_ipv4_rmap_cmd);
+  install_element (BGP_IPV4M_NODE, &no_bgp_redistribute_ipv4_rmap_cmd);
+  install_element (BGP_IPV4M_NODE, &bgp_redistribute_ipv4_metric_cmd);
+  install_element (BGP_IPV4M_NODE, &no_bgp_redistribute_ipv4_metric_cmd);
+  install_element (BGP_IPV4M_NODE, &bgp_redistribute_ipv4_rmap_metric_cmd);
+  install_element (BGP_IPV4M_NODE, &bgp_redistribute_ipv4_metric_rmap_cmd);
+  install_element (BGP_IPV4M_NODE, &no_bgp_redistribute_ipv4_rmap_metric_cmd);
+  install_element (BGP_IPV4M_NODE, &no_bgp_redistribute_ipv4_metric_rmap_cmd);
 #ifdef HAVE_IPV6
   install_element (BGP_IPV6_NODE, &bgp_redistribute_ipv6_cmd);
   install_element (BGP_IPV6_NODE, &no_bgp_redistribute_ipv6_cmd);
@@ -9529,6 +9750,18 @@ bgp_vty_init ()
   install_element (BGP_IPV6_NODE, &bgp_redistribute_ipv6_metric_rmap_cmd);
   install_element (BGP_IPV6_NODE, &no_bgp_redistribute_ipv6_rmap_metric_cmd);
   install_element (BGP_IPV6_NODE, &no_bgp_redistribute_ipv6_metric_rmap_cmd);
+
+  install_element (BGP_IPV6M_NODE, &bgp_redistribute_ipv6_cmd);
+  install_element (BGP_IPV6M_NODE, &no_bgp_redistribute_ipv6_cmd);
+  install_element (BGP_IPV6M_NODE, &bgp_redistribute_ipv6_rmap_cmd);
+  install_element (BGP_IPV6M_NODE, &no_bgp_redistribute_ipv6_rmap_cmd);
+  install_element (BGP_IPV6M_NODE, &bgp_redistribute_ipv6_metric_cmd);
+  install_element (BGP_IPV6M_NODE, &no_bgp_redistribute_ipv6_metric_cmd);
+  install_element (BGP_IPV6M_NODE, &bgp_redistribute_ipv6_rmap_metric_cmd);
+  install_element (BGP_IPV6M_NODE, &bgp_redistribute_ipv6_metric_rmap_cmd);
+  install_element (BGP_IPV6M_NODE, &no_bgp_redistribute_ipv6_rmap_metric_cmd);
+  install_element (BGP_IPV6M_NODE, &no_bgp_redistribute_ipv6_metric_rmap_cmd);
+
 #endif /* HAVE_IPV6 */
 
   /* Community-list. */

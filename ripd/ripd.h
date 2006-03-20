@@ -94,6 +94,14 @@
 #define RIP_AUTH_MD5_SIZE               16
 #define RIP_AUTH_MD5_COMPAT_SIZE        RIP_RTE_SIZE
 
+#define RIP_TRIGGERED_UPDATE_ENABLE      0
+#define RIP_TRIGGERED_UPDATE_DISABLE    -1
+
+/* RIP-ECMP Multipath Limit */
+#ifndef RIP_MULTI_PATH_LIMIT
+#define RIP_MULTI_PATH_LIMIT       1
+#endif 
+
 /* RIP structure. */
 struct rip 
 {
@@ -142,6 +150,9 @@ struct rip
   /* RIP default distance. */
   u_char distance;
   struct route_table *distance_table;
+ 
+  /* RIP ECMP limit */
+  unsigned int ecmp;
 
   /* For redistribute route map. */
   struct
@@ -396,8 +407,8 @@ void rip_redistribute_add (int, int, struct prefix_ipv4 *, unsigned int,
 			   struct in_addr *);
 void rip_redistribute_delete (int, int, struct prefix_ipv4 *, unsigned int);
 void rip_redistribute_withdraw (int);
-void rip_zebra_ipv4_add (struct prefix_ipv4 *, struct in_addr *, u_int32_t, u_char);
-void rip_zebra_ipv4_delete (struct prefix_ipv4 *, struct in_addr *, u_int32_t);
+void rip_zebra_ipv4_add (struct prefix_ipv4 *, struct in_addr *, u_int32_t, u_char, void *);
+void rip_zebra_ipv4_delete (struct prefix_ipv4 *, struct in_addr *, u_int32_t, void *);
 void rip_interface_multicast_set (int, struct connected *);
 void rip_distribute_update_interface (struct interface *);
 void rip_if_rmap_update_interface (struct interface *);

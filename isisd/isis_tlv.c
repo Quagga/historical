@@ -21,6 +21,10 @@
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
 #include <zebra.h>
 
 #include "log.h"
@@ -569,6 +573,7 @@ parse_tlvs (char *areatag, u_char * stream, int size, u_int32_t * expected,
 		  ipv4_reach = (struct ipv4_reachability *) pnt;
 		  if (!tlvs->ipv4_ext_reachs)
 		    tlvs->ipv4_ext_reachs = list_new ();
+		  ipv4_reach->tag = NULL;
 		  listnode_add (tlvs->ipv4_ext_reachs, ipv4_reach);
 		  value_len += 12;
 		  pnt += 12;
@@ -925,6 +930,12 @@ tlv_add_dynamic_hostname (struct hostname *hostname, struct stream *stream)
 {
   return add_tlv (DYNAMIC_HOSTNAME, hostname->namelen, hostname->name,
 		  stream);
+}
+
+int tlv_add_lsp_buffersize(int lsp_buffersize,struct stream *stream)
+{
+  return add_tlv (LSP_BUFFERSIZE, LSP_BUFFERSIZE_LEN, 
+                  (u_char *)(&lsp_buffersize), stream);
 }
 
 int

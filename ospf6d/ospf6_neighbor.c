@@ -19,6 +19,10 @@
  * Boston, MA 02111-1307, USA.  
  */
 
+/*
+ * Copyright (C) 2005 6WIND  
+ */
+
 #include <zebra.h>
 
 #include "log.h"
@@ -32,6 +36,7 @@
 #include "ospf6_lsa.h"
 #include "ospf6_lsdb.h"
 #include "ospf6_message.h"
+#include "ospf6_route.h"
 #include "ospf6_top.h"
 #include "ospf6_area.h"
 #include "ospf6_interface.h"
@@ -133,12 +138,23 @@ ospf6_neighbor_delete (struct ospf6_neighbor *on)
   ospf6_lsdb_delete (on->lsupdate_list);
   ospf6_lsdb_delete (on->lsack_list);
 
+  if (OSPF6_MULTI_PATH_LIMIT > 1)
+    {
+      ospf6_interface_ecmp_nexthop_flush (on->ospf6_if, 
+                                          on->ospf6_if->area->route_table);
+      ospf6_interface_ecmp_nexthop_flush (on->ospf6_if, ospf6->route_table);
+      ospf6_interface_ecmp_nexthop_flush (on->ospf6_if, ospf6->stale_table);
+    }
+
   THREAD_OFF (on->inactivity_timer);
 
   THREAD_OFF (on->thread_send_dbdesc);
   THREAD_OFF (on->thread_send_lsreq);
   THREAD_OFF (on->thread_send_lsupdate);
   THREAD_OFF (on->thread_send_lsack);
+
+  /* cancel all thread events referencing on */
+  thread_cancel_event(master, on);
 
   XFREE (MTYPE_OSPF6_NEIGHBOR, on);
 }
@@ -147,6 +163,8 @@ static void
 ospf6_neighbor_state_change (u_char next_state, struct ospf6_neighbor *on)
 {
   u_char prev_state;
+  struct ospf6_interface *oi = on->ospf6_if;
+  struct ospf6_area *vl_area;
 
   prev_state = on->state;
   on->state = next_state;
@@ -162,6 +180,23 @@ ospf6_neighbor_state_change (u_char next_state, struct ospf6_neighbor *on)
       zlog_debug ("Neighbor state change %s: [%s]->[%s]", on->name,
 		  ospf6_neighbor_state_str[prev_state],
 		  ospf6_neighbor_state_str[next_state]);
+    }
+
+  /* Update count of full vls in the transit area for VLINK */
+  /* Originate router LSA with V-bit set */
+  if (oi->nw_type == OSPF6_NWTYPE_VIRTUALLINK)
+    {
+      vl_area = ospf6_area_lookup (oi->vl_data->vl_area_id, oi->area->ospf6);
+      if (vl_area != NULL)
+        {
+          if (next_state == OSPF6_NEIGHBOR_FULL)
+            vl_area->full_vls++;
+
+          if (prev_state == OSPF6_NEIGHBOR_FULL)
+            vl_area->full_vls--;
+
+          OSPF6_ROUTER_LSA_SCHEDULE (vl_area);
+        }
     }
 
   if (prev_state == OSPF6_NEIGHBOR_FULL || next_state == OSPF6_NEIGHBOR_FULL)
@@ -197,7 +232,8 @@ need_adjacency (struct ospf6_neighbor *on)
 {
   if (on->ospf6_if->state == OSPF6_INTERFACE_POINTTOPOINT ||
       on->ospf6_if->state == OSPF6_INTERFACE_DR ||
-      on->ospf6_if->state == OSPF6_INTERFACE_BDR)
+      on->ospf6_if->state == OSPF6_INTERFACE_BDR ||
+      on->ospf6_if->nw_type == OSPF6_NWTYPE_VIRTUALLINK)
     return 1;
 
   if (on->ospf6_if->drouter == on->router_id ||
@@ -315,16 +351,20 @@ negotiation_done (struct thread *thread)
     }
 
   /* AS scoped LSAs */
-  for (lsa = ospf6_lsdb_head (on->ospf6_if->area->ospf6->lsdb); lsa;
+  if ( (! IS_AREA_STUB_OR_NSSA (on->ospf6_if->area)) && 
+       (on->ospf6_if->nw_type != OSPF6_NWTYPE_VIRTUALLINK) )
+    {	
+      for (lsa = ospf6_lsdb_head (on->ospf6_if->area->ospf6->lsdb); lsa;
        lsa = ospf6_lsdb_next (lsa))
-    {
-      if (OSPF6_LSA_IS_MAXAGE (lsa))
         {
-          ospf6_increment_retrans_count (lsa);
-          ospf6_lsdb_add (ospf6_lsa_copy (lsa), on->retrans_list);
+          if (OSPF6_LSA_IS_MAXAGE (lsa))
+            {
+              ospf6_increment_retrans_count (lsa);
+              ospf6_lsdb_add (ospf6_lsa_copy (lsa), on->retrans_list);
+            }
+          else
+            ospf6_lsdb_add (ospf6_lsa_copy (lsa), on->summary_list);
         }
-      else
-        ospf6_lsdb_add (ospf6_lsa_copy (lsa), on->summary_list);
     }
 
   UNSET_FLAG (on->dbdesc_bits, OSPF6_DBDESC_IBIT);
@@ -592,7 +632,8 @@ ospf6_neighbor_show (struct vty *vty, struct ospf6_neighbor *on)
   snprintf (deadtime, sizeof (deadtime), "%02ld:%02ld:%02ld", h, m, s);
 
   /* Neighbor State */
-  if (if_is_pointopoint (on->ospf6_if->interface))
+  if ( (if_is_pointopoint (on->ospf6_if->interface)) || 
+       (on->ospf6_if->nw_type == OSPF6_NWTYPE_VIRTUALLINK))
     snprintf (nstate, sizeof (nstate), "PointToPoint");
   else
     {
@@ -810,7 +851,7 @@ ALIAS (show_ipv6_ospf6_neighbor,
        "Neighbor list\n"
        "Display details\n"
        "Display DR choices\n"
-      );
+      )
 
 DEFUN (show_ipv6_ospf6_neighbor_one,
        show_ipv6_ospf6_neighbor_one_cmd,
@@ -887,7 +928,7 @@ ALIAS (debug_ospf6_neighbor,
        "Debug OSPFv3 Neighbor\n"
        "Debug OSPFv3 Neighbor State Change\n"
        "Debug OSPFv3 Neighbor Event\n"
-      );
+      )
 
 DEFUN (no_debug_ospf6_neighbor,
        no_debug_ospf6_neighbor_cmd,
@@ -922,7 +963,7 @@ ALIAS (no_debug_ospf6_neighbor,
        "Debug OSPFv3 Neighbor\n"
        "Debug OSPFv3 Neighbor State Change\n"
        "Debug OSPFv3 Neighbor Event\n"
-      );
+      )
 
 int
 config_write_ospf6_debug_neighbor (struct vty *vty)

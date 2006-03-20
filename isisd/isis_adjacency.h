@@ -22,6 +22,10 @@
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
 #ifndef _ZEBRA_ISIS_ADJACENCY_H
 #define _ZEBRA_ISIS_ADJACENCY_H
 
@@ -123,5 +127,5 @@ void isis_adj_build_up_list (struct list *adjdb, struct list *list);
 void isis_adjdb_iterate (struct list *adjdb,
 			 void (*func) (struct isis_adjacency *,
 				       void *), void *arg);
-
+void isis_free_adj (void * adj_val);
 #endif /* ISIS_ADJACENCY_H */

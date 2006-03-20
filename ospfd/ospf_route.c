@@ -745,6 +745,7 @@ ospf_route_cmp (struct ospf *ospf, struct ospf_route *r1,
   if ((ret = (r1->path_type - r2->path_type)))
     return ret;
 
+
   if (IS_DEBUG_OSPF_EVENT)
     zlog_debug ("Route[Compare]: Path types are the same.");
   /* Path types are the same, compare any cost. */
@@ -774,8 +775,28 @@ ospf_route_cmp (struct ospf *ospf, struct ospf_route *r1,
       break;
     }      
 
-  /* Anyway, compare the costs. */
-  return (r1->cost - r2->cost);
+  if (r1->cost != r2->cost)
+    return (r1->cost - r2->cost);
+
+  if ((r1->path_type == OSPF_PATH_TYPE1_EXTERNAL ||
+       r1->path_type == OSPF_PATH_TYPE2_EXTERNAL)) 
+    {
+      if ((r1->u.ext.origin->data->type==OSPF_AS_NSSA_LSA) &&
+          (r2->u.ext.origin->data->type==OSPF_AS_NSSA_LSA))
+        {
+          if (CHECK_FLAG(r1->u.ext.origin->data->options, OSPF_OPTION_NP) !=
+              CHECK_FLAG(r2->u.ext.origin->data->options, OSPF_OPTION_NP))
+            return (CHECK_FLAG(r2->u.ext.origin->data->options, OSPF_OPTION_NP) -
+                    CHECK_FLAG(r1->u.ext.origin->data->options, OSPF_OPTION_NP));
+
+          if (!(IPV4_ADDR_SAME(&r1->u.ext.origin->data->adv_router,
+                &r2->u.ext.origin->data->adv_router)))
+            return (IPV4_ADDR_CMP(&r2->u.ext.origin->data->adv_router,
+                    &r1->u.ext.origin->data->adv_router));
+        }
+    }
+
+  return 0;
 }
 
 int

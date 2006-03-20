@@ -335,13 +335,13 @@ kernel_ioctl_ipv4 (u_long cmd, struct prefix *p, struct rib *rib, int family)
 }
 
 int
-kernel_add_ipv4 (struct prefix *p, struct rib *rib)
+kernel_add_ipv4 (struct prefix *p, struct rib *rib, int vrf_id, safi_t safi)
 {
   return kernel_ioctl_ipv4 (SIOCADDRT, p, rib, AF_INET);
 }
 
 int
-kernel_delete_ipv4 (struct prefix *p, struct rib *rib)
+kernel_delete_ipv4 (struct prefix *p, struct rib *rib, int vrf_id, safi_t safi)
 {
   return kernel_ioctl_ipv4 (SIOCDELRT, p, rib, AF_INET);
 }
@@ -537,13 +537,13 @@ kernel_ioctl_ipv6_multipath (u_long cmd, struct prefix *p, struct rib *rib,
 }
 
 int
-kernel_add_ipv6 (struct prefix *p, struct rib *rib)
+kernel_add_ipv6 (struct prefix *p, struct rib *rib, int vrf_id, safi_t safi)
 {
   return kernel_ioctl_ipv6_multipath (SIOCADDRT, p, rib, AF_INET6);
 }
 
 int
-kernel_delete_ipv6 (struct prefix *p, struct rib *rib)
+kernel_delete_ipv6 (struct prefix *p, struct rib *rib, int vrf_id, safi_t safi)
 {
   return kernel_ioctl_ipv6_multipath (SIOCDELRT, p, rib, AF_INET6);
 }
@@ -551,7 +551,8 @@ kernel_delete_ipv6 (struct prefix *p, struct rib *rib)
 /* Delete IPv6 route from the kernel. */
 int
 kernel_delete_ipv6_old (struct prefix_ipv6 *dest, struct in6_addr *gate,
-		    int index, int flags, int table)
+		    int index, int flags, int table,
+		    int vrf_id, safi_t safi)
 {
   return kernel_ioctl_ipv6 (SIOCDELRT, dest, gate, index, flags);
 }

@@ -144,7 +144,7 @@ struct prefix *sockunion2prefix ();
 struct prefix *sockunion2hostprefix ();
 
 struct prefix_ipv4 *prefix_ipv4_new ();
-void prefix_ipv4_free (struct prefix_ipv4 *);
+void prefix_ipv4_free (struct prefix *);
 int str2prefix_ipv4 (const char *, struct prefix_ipv4 *);
 void apply_mask_ipv4 (struct prefix_ipv4 *);
 
@@ -165,7 +165,7 @@ int netmask_str2prefix_str (const char *, const char *, char *);
 
 #ifdef HAVE_IPV6
 struct prefix_ipv6 *prefix_ipv6_new ();
-void prefix_ipv6_free (struct prefix_ipv6 *);
+void prefix_ipv6_free (struct prefix *);
 int str2prefix_ipv6 (const char *, struct prefix_ipv6 *);
 void apply_mask_ipv6 (struct prefix_ipv6 *);
 

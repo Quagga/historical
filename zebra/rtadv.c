@@ -1374,7 +1374,7 @@ DEFUN (no_ipv6_nd_prefix,
 }
 /* Write configuration about router advertisement. */
 void
-rtadv_config_write (struct vty *vty, struct interface *ifp)
+rtadv_config_write (struct vty *vty, struct interface *ifp, int *title)
 {
   struct zebra_if *zif;
   struct listnode *node;
@@ -1384,6 +1384,12 @@ rtadv_config_write (struct vty *vty, struct interface *ifp)
 
   if (! rtadv)
     return;
+
+  if (*title == 0)
+    {
+      vty_out (vty, "interface %s%s", ifp->name, VTY_NEWLINE);
+      *title ++;
+    }
 
   zif = ifp->info;
 

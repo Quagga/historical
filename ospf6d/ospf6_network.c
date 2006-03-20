@@ -224,7 +224,10 @@ ospf6_sendmsg (struct in6_addr *src, struct in6_addr *dst,
   struct sockaddr_in6 dst_sin6;
 
   assert (dst);
+  /*virtual link has ifindex 0*/
+  #if 0
   assert (*ifindex);
+  #endif
 
   scmsgp = (struct cmsghdr *)cmsgbuf;
   pktinfo = (struct in6_pktinfo *)(CMSG_DATA(scmsgp));

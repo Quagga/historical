@@ -65,8 +65,11 @@ struct ospf6_neighbor
   /* Options field (Capability) */
   char options[3];
 
-  /* IPaddr of I/F on our side link */
+  /* Linklocal addr of I/F on our side link */
   struct in6_addr linklocal_addr;
+  
+  /* Global addr of I/F on our side link */
+  struct in6_addr global_addr; 
 
   /* For Database Exchange */
   u_char               dbdesc_bits;
@@ -107,7 +110,6 @@ struct ospf6_neighbor
 
 const extern char *ospf6_neighbor_state_str[];
 
-
 /* Function Prototypes */
 int ospf6_neighbor_cmp (void *va, void *vb);
 void ospf6_neighbor_dbex_init (struct ospf6_neighbor *on);

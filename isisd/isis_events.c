@@ -19,6 +19,11 @@
  * with this program; if not, write to the Free Software Foundation, Inc., 
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
+
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
@@ -90,15 +95,17 @@ isis_event_system_type_change (struct isis_area *area, int newtype)
 {
   struct listnode *node, *nnode;
   struct isis_circuit *circuit;
+  int oldtype = area->is_type;
 
   if (isis->debugs & DEBUG_EVENTS)
     zlog_debug ("ISIS-Evt (%s) system type change %s -> %s", area->area_tag,
 	       circuit_t2string (area->is_type), circuit_t2string (newtype));
 
-  if (area->is_type == newtype)
+  if (oldtype == newtype)
     return;			/* No change */
-
-  switch (area->is_type)
+  area->is_type = newtype;
+  
+  switch (oldtype)
     {
     case IS_LEVEL_1:
       if (area->lspdb[1] == NULL)
@@ -124,7 +131,6 @@ isis_event_system_type_change (struct isis_area *area, int newtype)
       break;
     }
 
-  area->is_type = newtype;
   for (ALL_LIST_ELEMENTS (area->circuit_list, node, nnode, circuit))
     isis_event_circuit_type_change (circuit, newtype);
 
@@ -143,8 +149,12 @@ isis_event_area_addr_change (struct isis_area *area)
 static void
 circuit_commence_level (struct isis_circuit *circuit, int level)
 {
+  /* joining ALL_L1_ISS/ALL_L2_ISS */
+  isis_multicast_join (circuit->fd, level, circuit->interface->ifindex);
   if (level == 1)
     {
+      /* joining ALL_ISS */
+      isis_multicast_join (circuit->fd, 3, circuit->interface->ifindex);
       THREAD_TIMER_ON (master, circuit->t_send_psnp[0], send_l1_psnp, circuit,
 		       isis_jitter (circuit->psnp_interval[0], PSNP_JITTER));
 
@@ -197,7 +207,14 @@ circuit_resign_level (struct isis_circuit *circuit, int level)
       THREAD_TIMER_OFF (circuit->u.bc.t_run_dr[idx]);
       circuit->u.bc.run_dr_elect[idx] = 0;
     }
-
+ 
+  /* unjoining ALL_L1_ISS/ALL_L2_ISS */
+  isis_multicast_unjoin (circuit->fd, level, circuit->interface->ifindex);
+  /* unjoining ALL_ISS */
+  if (level == 1)
+      isis_multicast_unjoin (circuit->fd, 3, circuit->interface->ifindex);
+  list_delete_all_node (circuit->u.bc.adjdb[level-1]);  
+  list_delete_all_node (circuit->u.bc.lan_neighs[level - 1]);
   return;
 }
 
@@ -274,7 +291,8 @@ isis_event_circuit_type_change (struct isis_circuit *circuit, int newtype)
   * ***********************************************************************/
 
 void
-isis_event_adjacency_state_change (struct isis_adjacency *adj, int newstate)
+isis_event_adjacency_state_change (struct isis_adjacency *adj, 
+	     enum isis_adj_state newstate, const char *reason)
 {
   /* adjacency state change event. 
    * - the only proto-type was supported */
@@ -285,9 +303,11 @@ isis_event_adjacency_state_change (struct isis_adjacency *adj, int newstate)
 
   zlog_debug ("ISIS-Evt (%s) Adjacency State change",
 	      adj->circuit->area->area_tag);
-
+  isis_adj_state_change(adj, newstate, reason);
+  
   /* LSP generation again */
-  lsp_regenerate_schedule (adj->circuit->area);
+  if ((newstate == ISIS_ADJ_UP) || (newstate == ISIS_ADJ_DOWN))
+      lsp_regenerate_schedule (adj->circuit->area);
 
   return;
 }
@@ -318,6 +338,5 @@ isis_event_auth_failure (char *area_tag, const char *error_string, u_char *sysid
 {
   zlog_debug ("ISIS-Evt (%s) Authentication failure %s from %s",
 	      area_tag, error_string, sysid_print (sysid));
-
   return;
 }

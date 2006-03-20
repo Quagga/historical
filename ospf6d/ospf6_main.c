@@ -21,12 +21,14 @@
 
 #include <zebra.h>
 #include <lib/version.h>
+#include <string.h>
 
 #include "getopt.h"
 #include "thread.h"
 #include "log.h"
 #include "command.h"
 #include "vty.h"
+#include "zclient.h"
 #include "memory.h"
 #include "if.h"
 #include "filter.h"
@@ -35,7 +37,15 @@
 #include "privs.h"
 #include "sigevent.h"
 
+#if defined(HAVE_SNMP) && defined(FORCE_SMUX)
+#include <asn1.h>
+#include "smux.h"
+#endif
+
 #include "ospf6d.h"
+
+/* OSPF6 file name */
+static char ospf6_vtysh_path[sizeof (OSPF6_VTYSH_PATH) + 20] = OSPF6_VTYSH_PATH;
 
 /* Default configuration file name for ospf6d. */
 #define OSPF6_DEFAULT_CONFIG       "ospf6d.conf"
@@ -77,6 +87,7 @@ struct option longopts[] =
   { "user",        required_argument, NULL, 'u'},
   { "group",       required_argument, NULL, 'g'},
   { "version",     no_argument,       NULL, 'v'},
+  { "vpn",         required_argument, NULL, 'V'},
   { "help",        no_argument,       NULL, 'h'},
   { 0 }
 };
@@ -113,6 +124,7 @@ Daemon which manages OSPF version 3.\n\n\
 -P, --vty_port     Set vty's port number\n\
 -u, --user         User to run as\n\
 -g, --group        Group to run as\n\
+-V, --vpn_id	   Number of the routing table\n\
 -v, --version      Print program version\n\
 -h, --help         Display this help and exit\n\
 \n\
@@ -179,9 +191,12 @@ int
 main (int argc, char *argv[], char *envp[])
 {
   char *p;
+  char fnt[] = ".";
+  char *vpn_id_tmp = NULL;
   int opt;
   char *vty_addr = NULL;
   int vty_port = 0;
+  int temp = 0;
   char *config_file = NULL;
   struct thread thread;
 
@@ -194,7 +209,7 @@ main (int argc, char *argv[], char *envp[])
   /* Command line argument treatment. */
   while (1) 
     {
-      opt = getopt_long (argc, argv, "df:i:hp:A:P:u:g:v", longopts, 0);
+      opt = getopt_long (argc, argv, "df:i:hp:A:P:u:g:V:v", longopts, 0);
     
       if (opt == EOF)
         break;
@@ -232,6 +247,13 @@ main (int argc, char *argv[], char *envp[])
 	case 'g':
 	  ospf6d_privs.group = optarg;
 	  break;
+	case 'V':
+	  vpn_id_tmp = optarg;
+	  temp = atoi (optarg);
+	  vpn_id_set (temp); /* Set vty socket port */
+	  vpn_id_zset (temp); /* Set TCP socket port */
+	  vpn_path_zset (vpn_id_tmp); /* Set unix socket path */
+          break; 
         case 'v':
           print_version (progname);
           exit (0);
@@ -245,11 +267,17 @@ main (int argc, char *argv[], char *envp[])
         }
     }
 
+  if (temp)
+  {
+    strncat (ospf6_vtysh_path, fnt, sizeof(ospf6_vtysh_path));
+    strncat (ospf6_vtysh_path, vpn_id_tmp, sizeof(ospf6_vtysh_path));
+  }
+
   /* thread master */
   master = thread_master_create ();
 
   /* Initializations. */
-  zlog_default = openzlog (progname, ZLOG_OSPF6,
+  zlog_default = openzlog ("OSPF6", ZLOG_OSPF6,
                            LOG_CONS|LOG_NDELAY|LOG_PID,
                            LOG_DAEMON);
   zprivs_init (&ospf6d_privs);
@@ -280,12 +308,19 @@ main (int argc, char *argv[], char *envp[])
   /* Make ospf6 vty socket. */
   if (!vty_port)
     vty_port = OSPF6_VTY_PORT;
-  vty_serv_sock (vty_addr, vty_port, OSPF6_VTYSH_PATH);
+  vty_serv_sock (vty_addr, vty_port, ospf6_vtysh_path);
 
+#ifdef DEBUG
   /* Print start message */
   zlog_notice ("OSPF6d (Quagga-%s ospf6d-%s) starts: vty@%d",
                QUAGGA_VERSION, OSPF6_DAEMON_VERSION,vty_port);
+#endif
 
+#if defined(HAVE_SNMP) && defined(FORCE_SMUX)
+  /* smux peer .1.3.6.1.4.1.3317.1.2.6 */
+  if (smux_peer_oid(NULL, ".1.3.6.1.4.1.3317.1.2.6", NULL) == 0)
+    smux_start();
+#endif /* HAVE_SNMP && FORCE_SMUX */
   /* Start finite state machine, here we go! */
   while (thread_fetch (master, &thread))
     thread_call (&thread);

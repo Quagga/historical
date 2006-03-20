@@ -75,8 +75,18 @@
 #define OSPF6_SCOPE_RESERVED   0x6000
 
 /* XXX U-bit handling should be treated here */
+#define OSPF6_LSA_UBIT(type) \
+  (ntohs (type) & OSPF6_LSTYPE_UBIT_MASK)
 #define OSPF6_LSA_SCOPE(type) \
   (ntohs (type) & OSPF6_LSTYPE_SCOPE_MASK)
+#define OSPF6_LSA_FCODE(type) \
+  (ntohs (type) & OSPF6_LSTYPE_FCODE_MASK)
+
+#define OSPF6_LSA_IS_FCODE_UNKNOWN(type) \
+  (((OSPF6_LSA_FCODE (type) < \
+     (OSPF6_LSTYPE_ROUTER & OSPF6_LSTYPE_FCODE_MASK)) || \
+    (OSPF6_LSA_FCODE (type) > \
+     (OSPF6_LSTYPE_INTRA_PREFIX & OSPF6_LSTYPE_FCODE_MASK))) ? 1 : 0) 
 
 /* LSA Header */
 struct ospf6_lsa_header
@@ -139,6 +149,7 @@ struct ospf6_lsa
 #define OSPF6_LSA_FLOODBACK  0x02
 #define OSPF6_LSA_DUPLICATE  0x04
 #define OSPF6_LSA_IMPLIEDACK 0x08
+#define OSPF6_LSA_TRANSLATED 0x10
 
 struct ospf6_lsa_handler
 {
@@ -247,6 +258,7 @@ void ospf6_lsa_cmd_init ();
 
 int config_write_ospf6_debug_lsa (struct vty *vty);
 void install_element_ospf6_debug_lsa ();
+int ospf6_default_originate_timer (struct thread *thread);
 
 #endif /* OSPF6_LSA_H */
 

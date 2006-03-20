@@ -19,6 +19,10 @@
  * Boston, MA 02111-1307, USA.  
  */
 
+/*
+ * Copyright (C) 2005 6WIND  
+ */
+
 /* Shortest Path First calculation for OSPFv3 */
 
 #include <zebra.h>
@@ -135,7 +139,8 @@ ospf6_lsdesc_lsa (caddr_t lsdesc, struct ospf6_vertex *v)
     }
   else
     {
-      if (ROUTER_LSDESC_IS_TYPE (POINTTOPOINT, lsdesc))
+      if (ROUTER_LSDESC_IS_TYPE (POINTTOPOINT, lsdesc) || 
+          ROUTER_LSDESC_IS_TYPE (VIRTUAL_LINK, lsdesc))
         {
           type = htons (OSPF6_LSTYPE_ROUTER);
           id = htonl (0);
@@ -195,9 +200,11 @@ ospf6_lsdesc_backlink (struct ospf6_lsa *lsa,
         found = backlink;
       else
         {
-          if (! ROUTER_LSDESC_IS_TYPE (POINTTOPOINT, backlink) ||
-              ! ROUTER_LSDESC_IS_TYPE (POINTTOPOINT, lsdesc))
-            continue;
+          if ((! ROUTER_LSDESC_IS_TYPE (POINTTOPOINT, backlink) ||
+               ! ROUTER_LSDESC_IS_TYPE (POINTTOPOINT, lsdesc)) &&
+              (! ROUTER_LSDESC_IS_TYPE (VIRTUAL_LINK, backlink) ||
+               ! ROUTER_LSDESC_IS_TYPE (VIRTUAL_LINK, lsdesc)))
+            continue;  
           if (ROUTER_LSDESC_GET_NBR_IFID (backlink) !=
               ROUTER_LSDESC_GET_IFID (lsdesc) ||
               ROUTER_LSDESC_GET_NBR_IFID (lsdesc) !=
@@ -274,6 +281,22 @@ ospf6_nexthop_calc (struct ospf6_vertex *w, struct ospf6_vertex *v,
     zlog_debug ("No nexthop for %s found", w->name);
 }
 
+static void
+ospf6_spf_network_update (struct prefix prefix, struct ospf6_route *route,
+                          struct ospf6_route_table *result_table)
+{
+  struct ospf6_route *parent;
+  u_int32_t id;
+
+  /* check if prefix corresponds to any router network */
+  memcpy (&id, &prefix.u.prefix6.s6_addr[4], 4);
+  if (ntohl (id))
+    return;
+
+  parent = ospf6_route_lookup (&prefix, result_table);
+  ospf6_nexthop_update (parent, route);
+}
+
 int
 ospf6_spf_install (struct ospf6_vertex *v,
                    struct ospf6_route_table *result_table)
@@ -315,6 +338,10 @@ ospf6_spf_install (struct ospf6_vertex *v,
                     continue;
                 }
               ospf6_nexthop_copy (&route->nexthop[j], &v->nexthop[i]);
+
+              if (route->path.cost > v->parent->cost)
+                ospf6_spf_network_update(v->parent->vertex_id, route, result_table);
+
               break;
             }
         }
@@ -415,12 +442,12 @@ ospf6_spf_calculation (u_int32_t router_id,
   lsa = ospf6_lsdb_lookup (htons (OSPF6_LSTYPE_ROUTER), htonl (0),
                            router_id, oa->lsdb);
   if (lsa == NULL)
-    return;
+    goto end;
   root = ospf6_vertex_create (lsa);
   root->area = oa;
   root->cost = 0;
   root->hops = 0;
-  root->nexthop[0].ifindex = 0; /* loopbak I/F is better ... */
+  root->nexthop[0].ifindex = 0; /* loopback I/F is better ... */
   inet_pton (AF_INET6, "::1", &root->nexthop[0].address);
 
   /* Actually insert root to the candidate-list as the only candidate */
@@ -484,6 +511,7 @@ ospf6_spf_calculation (u_int32_t router_id,
         }
     }
 
+end:
   pqueue_delete (candidate_list);
 }
 
@@ -525,7 +553,7 @@ ospf6_spf_calculation_thread (struct thread *t)
     zlog_debug ("SPF calculation for Area %s", oa->name);
   if (IS_OSPF6_DEBUG_SPF (DATABASE))
     ospf6_spf_log_database (oa);
-
+  
   /* execute SPF calculation */
   gettimeofday (&start, (struct timezone *) NULL);
   ospf6_spf_calculation (oa->ospf6->router_id, oa->spf_table, oa);
@@ -538,6 +566,9 @@ ospf6_spf_calculation_thread (struct thread *t)
 
   ospf6_intra_route_calculation (oa);
   ospf6_intra_brouter_calculation (oa);
+  
+  /* Maintenance for Virtual Links */
+  ospf6_declare_vlinks_up (oa);
 
   return 0;
 }
@@ -545,6 +576,10 @@ ospf6_spf_calculation_thread (struct thread *t)
 void
 ospf6_spf_schedule (struct ospf6_area *oa)
 {
+
+  if (oa == NULL)
+    return;
+
   if (oa->thread_spf_calculation)
     return;
   oa->thread_spf_calculation =

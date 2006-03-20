@@ -96,6 +96,9 @@ void route_read ();
 void rtadv_init ();
 void zebra_snmp_init ();
 
+void vpn_id_zserv_set (int);
+void vpn_path_zserv_set (char *);
+
 int zsend_interface_add (struct zserv *, struct interface *);
 #if (defined(RTM_IFANNOUNCE) || defined(HAVE_NETLINK))
 int zsend_interface_delete (struct zserv *, struct interface *);
@@ -103,7 +106,7 @@ int zsend_interface_delete (struct zserv *, struct interface *);
 int zsend_interface_address (int, struct zserv *, struct interface *,
                              struct connected *);
 int zsend_interface_update (int, struct zserv *, struct interface *);
-int zsend_route_multipath (int, struct zserv *, struct prefix *, struct rib *);
+int zsend_route_multipath (int, struct zserv *, struct prefix *, struct rib *, int, safi_t);
 int zsend_router_id_update(struct zserv *, struct prefix *);
 
 extern pid_t pid;

@@ -19,6 +19,10 @@
  * 02111-1307, USA.  
  */
 
+/*
+ * Copyright (C) 2006 6WIND  
+ */
+
 #include <zebra.h>
 
 #include "command.h"
@@ -44,9 +48,11 @@ int rip_interface_down (int, struct zclient *, zebra_size_t);
 /* RIPd to zebra command interface. */
 void
 rip_zebra_ipv4_add (struct prefix_ipv4 *p, struct in_addr *nexthop, 
-		    u_int32_t metric, u_char distance)
+		    u_int32_t metric, u_char distance, void *list)
 {
   struct zapi_ipv4 api;
+  struct in_addr *nexthops[RIP_MULTI_PATH_LIMIT];
+  struct list *rinfo_list = list;
 
   if (zclient->redist[ZEBRA_ROUTE_RIP])
     {
@@ -54,8 +60,27 @@ rip_zebra_ipv4_add (struct prefix_ipv4 *p, struct in_addr *nexthop,
       api.flags = 0;
       api.message = 0;
       SET_FLAG (api.message, ZAPI_MESSAGE_NEXTHOP);
-      api.nexthop_num = 1;
-      api.nexthop = &nexthop;
+      if ( !rinfo_list || rinfo_list->count == 1)
+        {
+          api.nexthop_num = 1;
+          api.nexthop = &nexthop;
+        }
+      else
+        {/* multiple nexthop route entries */
+          struct listnode *listnode=NULL;
+          struct rip_info *rinfo=NULL;
+          int count=0;
+          api.nexthop_num = rinfo_list->count;
+          for (ALL_LIST_ELEMENTS_RO(rinfo_list, listnode, rinfo))
+          {
+            if ( rinfo->metric == RIP_METRIC_INFINITY) 
+              api.nexthop_num--;
+            else
+              nexthops[count++] = &rinfo->nexthop;		
+            rinfo = NULL;
+	  }
+          api.nexthop = nexthops;
+        }
       api.ifindex_num = 0;
       SET_FLAG (api.message, ZAPI_MESSAGE_METRIC);
       api.metric = metric;
@@ -74,11 +99,12 @@ rip_zebra_ipv4_add (struct prefix_ipv4 *p, struct in_addr *nexthop,
 
 void
 rip_zebra_ipv4_delete (struct prefix_ipv4 *p, struct in_addr *nexthop, 
-		       u_int32_t metric)
+		       u_int32_t metric, void *list)
 {
   struct zapi_ipv4 api;
+  struct list *rinfo_list = list;
 
-  if (zclient->redist[ZEBRA_ROUTE_RIP])
+  if (zclient->redist[ZEBRA_ROUTE_RIP] && ( !rinfo_list || rinfo_list->count == 1))
     {
       api.type = ZEBRA_ROUTE_RIP;
       api.flags = 0;
@@ -94,6 +120,45 @@ rip_zebra_ipv4_delete (struct prefix_ipv4 *p, struct in_addr *nexthop,
 
       rip_global_route_changes++;
     }
+  else if(zclient->redist[ZEBRA_ROUTE_RIP] && rinfo_list->count > 1)
+    {/* For ECMP, remove all from zebra and add the remaining */
+      struct listnode *listnode = NULL;
+      struct rip_info *rinfo = NULL, *rinfo_tmp = NULL;
+      struct in_addr *nexthops[RIP_MULTI_PATH_LIMIT];
+      int count = 0;
+
+      api.type = ZEBRA_ROUTE_RIP;
+      api.flags = 0;
+      api.message = 0;
+      SET_FLAG (api.message, ZAPI_MESSAGE_NEXTHOP);
+      api.nexthop_num = rinfo_list->count;
+      for (ALL_LIST_ELEMENTS_RO(rinfo_list, listnode, rinfo))
+        {
+          nexthops[count++] = &rinfo->nexthop;
+          rinfo = NULL;
+        }
+      api.nexthop = nexthops;
+      api.ifindex_num = 0;
+      SET_FLAG (api.message, ZAPI_MESSAGE_METRIC);
+      api.metric = metric;
+      zapi_ipv4_route (ZEBRA_IPV4_ROUTE_DELETE, zclient, p, &api);
+      rip_global_route_changes++;
+
+      /* Form a list except the route which is to be deleted */
+      struct list *list_temp = list_new();
+      for (ALL_LIST_ELEMENTS_RO(rinfo_list, listnode, rinfo))
+        {
+          if (!IPV4_ADDR_SAME (&rinfo->nexthop, nexthop))
+            { 
+              rinfo_tmp = rinfo;
+              listnode_add(list_temp, rinfo);
+            }
+        }
+      rip_zebra_ipv4_add(p, &rinfo_tmp->nexthop, rinfo_tmp->metric, rinfo_tmp->distance, list_temp); 
+      rip_global_route_changes++;
+      list_delete(list_temp);
+    }
+    return;
 }
 
 /* Zebra route add and delete treatment. */
@@ -134,8 +199,12 @@ rip_zebra_read_ipv4 (int command, struct zclient *zclient, zebra_size_t length)
     }
   if (CHECK_FLAG (api.message, ZAPI_MESSAGE_DISTANCE))
     api.distance = stream_getc (s);
+  else
+    api.distance = 0;
   if (CHECK_FLAG (api.message, ZAPI_MESSAGE_METRIC))
     api.metric = stream_getl (s);
+  else
+    api.metric = 0;
 
   /* Then fetch IPv4 prefixes. */
   if (command == ZEBRA_IPV4_ROUTE_ADD)
@@ -208,6 +277,7 @@ static struct {
   {ZEBRA_ROUTE_STATIC,  1, "static"},
   {ZEBRA_ROUTE_OSPF,    1, "ospf"},
   {ZEBRA_ROUTE_BGP,     1, "bgp"},
+  {ZEBRA_ROUTE_DEP,     1, "dep"},
   {0, 0, NULL}
 };
 
@@ -316,13 +386,14 @@ DEFUN (no_rip_redistribute_rip,
 
 DEFUN (rip_redistribute_type,
        rip_redistribute_type_cmd,
-       "redistribute (kernel|connected|static|ospf|bgp)",
+       "redistribute (kernel|connected|static|ospf|bgp|dep)",
        "Redistribute information from another routing protocol\n"
        "Kernel routes\n"
        "Connected\n"
        "Static routes\n"
        "Open Shortest Path First (OSPF)\n"
-       "Border Gateway Protocol (BGP)\n")
+       "Border Gateway Protocol (BGP)\n"
+       "DElegated Prefixes (DEP)\n")
 {
   int i;
 
@@ -333,6 +404,7 @@ DEFUN (rip_redistribute_type,
 	{
 	  zclient_redistribute (ZEBRA_REDISTRIBUTE_ADD, zclient, 
 	                        redist_type[i].type);
+
 	  return CMD_SUCCESS;
 	}
     }
@@ -345,14 +417,15 @@ DEFUN (rip_redistribute_type,
 
 DEFUN (no_rip_redistribute_type,
        no_rip_redistribute_type_cmd,
-       "no redistribute (kernel|connected|static|ospf|bgp)",
+       "no redistribute (kernel|connected|static|ospf|bgp|dep)",
        NO_STR
        "Redistribute information from another routing protocol\n"
        "Kernel routes\n"
        "Connected\n"
        "Static routes\n"
        "Open Shortest Path First (OSPF)\n"
-       "Border Gateway Protocol (BGP)\n")
+       "Border Gateway Protocol (BGP)\n"
+       "DElegated Prefixes (DEP)\n")
 {
   int i;
 
@@ -376,13 +449,14 @@ DEFUN (no_rip_redistribute_type,
 
 DEFUN (rip_redistribute_type_routemap,
        rip_redistribute_type_routemap_cmd,
-       "redistribute (kernel|connected|static|ospf|bgp) route-map WORD",
+       "redistribute (kernel|connected|static|ospf|bgp|dep) route-map WORD",
        "Redistribute information from another routing protocol\n"
        "Kernel routes\n"
        "Connected\n"
        "Static routes\n"
        "Open Shortest Path First (OSPF)\n"
        "Border Gateway Protocol (BGP)\n"
+       "DElegated Prefixes (DEP)\n"
        "Route map reference\n"
        "Pointer to route-map entries\n")
 {
@@ -406,7 +480,7 @@ DEFUN (rip_redistribute_type_routemap,
 
 DEFUN (no_rip_redistribute_type_routemap,
        no_rip_redistribute_type_routemap_cmd,
-       "no redistribute (kernel|connected|static|ospf|bgp) route-map WORD",
+       "no redistribute (kernel|connected|static|ospf|bgp|dep) route-map WORD",
        NO_STR
        "Redistribute information from another routing protocol\n"
        "Kernel routes\n"
@@ -414,6 +488,7 @@ DEFUN (no_rip_redistribute_type_routemap,
        "Static routes\n"
        "Open Shortest Path First (OSPF)\n"
        "Border Gateway Protocol (BGP)\n"
+       "DElegated Prefixes (DEP)\n"
        "Route map reference\n"
        "Pointer to route-map entries\n")
 {
@@ -439,13 +514,14 @@ DEFUN (no_rip_redistribute_type_routemap,
 
 DEFUN (rip_redistribute_type_metric,
        rip_redistribute_type_metric_cmd,
-       "redistribute (kernel|connected|static|ospf|bgp) metric <0-16>",
+       "redistribute (kernel|connected|static|ospf|bgp|dep) metric <0-16>",
        "Redistribute information from another routing protocol\n"
        "Kernel routes\n"
        "Connected\n"
        "Static routes\n"
        "Open Shortest Path First (OSPF)\n"
        "Border Gateway Protocol (BGP)\n"
+       "DElegated Prefixes (DEP)\n"
        "Metric\n"
        "Metric value\n")
 {
@@ -472,7 +548,7 @@ DEFUN (rip_redistribute_type_metric,
 
 DEFUN (no_rip_redistribute_type_metric,
        no_rip_redistribute_type_metric_cmd,
-       "no redistribute (kernel|connected|static|ospf|bgp) metric <0-16>",
+       "no redistribute (kernel|connected|static|ospf|bgp|dep) metric <0-16>",
        NO_STR
        "Redistribute information from another routing protocol\n"
        "Kernel routes\n"
@@ -480,6 +556,7 @@ DEFUN (no_rip_redistribute_type_metric,
        "Static routes\n"
        "Open Shortest Path First (OSPF)\n"
        "Border Gateway Protocol (BGP)\n"
+       "DElegated Prefixes (DEP)\n"
        "Metric\n"
        "Metric value\n")
 {
@@ -505,13 +582,14 @@ DEFUN (no_rip_redistribute_type_metric,
 
 DEFUN (rip_redistribute_type_metric_routemap,
        rip_redistribute_type_metric_routemap_cmd,
-       "redistribute (kernel|connected|static|ospf|bgp) metric <0-16> route-map WORD",
+       "redistribute (kernel|connected|static|ospf|bgp|dep) metric <0-16> route-map WORD",
        "Redistribute information from another routing protocol\n"
        "Kernel routes\n"
        "Connected\n"
        "Static routes\n"
        "Open Shortest Path First (OSPF)\n"
        "Border Gateway Protocol (BGP)\n"
+       "DElegated Prefixes (DEP)\n"
        "Metric\n"
        "Metric value\n"
        "Route map reference\n"
@@ -542,7 +620,7 @@ DEFUN (rip_redistribute_type_metric_routemap,
 
 DEFUN (no_rip_redistribute_type_metric_routemap,
        no_rip_redistribute_type_metric_routemap_cmd,
-       "no redistribute (kernel|connected|static|ospf|bgp) metric <0-16> route-map WORD",
+       "no redistribute (kernel|connected|static|ospf|bgp|dep) metric <0-16> route-map WORD",
        NO_STR
        "Redistribute information from another routing protocol\n"
        "Kernel routes\n"
@@ -550,6 +628,7 @@ DEFUN (no_rip_redistribute_type_metric_routemap,
        "Static routes\n"
        "Open Shortest Path First (OSPF)\n"
        "Border Gateway Protocol (BGP)\n"
+       "DElegated Prefixes (DEP)\n"
        "Metric\n"
        "Metric value\n"
        "Route map reference\n"
@@ -648,7 +727,8 @@ config_write_rip_redistribute (struct vty *vty, int config_mode)
 {
   int i;
   const char *str[] = { "system", "kernel", "connected", "static", "rip",
-			"ripng", "ospf", "ospf6", "isis", "bgp"};
+			"ripng", "ospf", "ospf6", "isis", "bgp", "hsls",
+			"dep", "natpt" };
 
   for (i = 0; i < ZEBRA_ROUTE_MAX; i++)
     if (i != zclient->redist_default && zclient->redist[i])

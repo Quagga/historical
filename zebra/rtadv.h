@@ -52,7 +52,7 @@ struct rtadv_prefix
 
 };
 
-void rtadv_config_write (struct vty *, struct interface *);
+void rtadv_config_write (struct vty *, struct interface *, int *);
 
 /* draft-ietf-mip6-mipext-advapi-03 */
 

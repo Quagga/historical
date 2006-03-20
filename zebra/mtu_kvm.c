@@ -20,8 +20,9 @@
  */
 
 #include <zebra.h>
-
+#ifdef KVM
 #include <kvm.h>
+#endif
 #include <limits.h>
 #include <fcntl.h>
 

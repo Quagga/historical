@@ -26,6 +26,7 @@
 #include "getopt.h"
 #include "vector.h"
 #include "vty.h"
+#include "zclient.h"
 #include "command.h"
 #include "memory.h"
 #include "thread.h"
@@ -36,6 +37,9 @@
 #include "sigevent.h"
 
 #include "ripngd/ripngd.h"
+
+/* Ripng file name */
+static char file_name[] = RIPNG_VTYSH_PATH;
 
 /* Configuration filename and directory. */
 char config_default[] = SYSCONFDIR RIPNG_DEFAULT_CONFIG;
@@ -51,6 +55,7 @@ struct option longopts[] =
   { "help",        no_argument,       NULL, 'h'},
   { "vty_addr",    required_argument, NULL, 'A'},
   { "vty_port",    required_argument, NULL, 'P'},
+  { "vpn_id",      required_argument, NULL, 'V'},
   { "retain",      no_argument,       NULL, 'r'},
   { "user",        required_argument, NULL, 'u'},
   { "group",       required_argument, NULL, 'g'},
@@ -97,7 +102,8 @@ int vty_port = RIPNG_VTY_PORT;
 struct thread_master *master;
 
 /* Process ID saved for use by init system */
-const char *pid_file = PATH_RIPNGD_PID;
+char pid_file[sizeof (PATH_RIPNGD_PID) + 20] = PATH_RIPNGD_PID;
+static int pid_set = 0;
 
 /* Help information display. */
 static void
@@ -116,6 +122,7 @@ Daemon which manages RIPng.\n\n\
 -A, --vty_addr     Set vty's bind address\n\
 -P, --vty_port     Set vty's port number\n\
 -r, --retain       When program terminates, retain added route by ripngd.\n\
+-V  --vpn_id       Number of the Routing table \n\
 -u, --user         User to run as\n\
 -g, --group        Group to run as\n\
 -v, --version      Print program version\n\
@@ -133,11 +140,13 @@ sighup (void)
   zlog_info ("SIGHUP received");
   ripng_clean ();
   ripng_reset ();
+  zlog_notice ("Terminating on signal");
 
-  /* Reload config file. */
+    /* Reload config file. */
   vty_read_config (config_file, config_default);
-  /* Create VTY's socket */
-  vty_serv_sock (vty_addr, vty_port, RIPNG_VTYSH_PATH);
+
+/* Create VTY's socket */
+  vty_serv_sock (vty_addr, vty_port, file_name);
 
   /* Try to return to normal operation. */
 }
@@ -159,6 +168,18 @@ void
 sigusr1 (void)
 {
   zlog_rotate (NULL);
+}
+
+static void
+vpn_pid_set (const char * vpn_path)
+{
+  char fnt[] = ".";
+  
+  if (!pid_set)
+  {
+    strncat (pid_file, fnt, sizeof (pid_file));
+    strncat (pid_file, vpn_path, sizeof (pid_file));
+  }
 }
 
 struct quagga_signal_t ripng_signals[] =
@@ -186,7 +207,10 @@ int
 main (int argc, char **argv)
 {
   char *p;
-  int vty_port = RIPNG_VTY_PORT;
+  char *vty_addr = NULL;
+  char fnt[] = ".";
+  char *vpn_id_tmp = NULL;
+  int temp = 0;
   int daemon_mode = 0;
   char *progname;
   struct thread thread;
@@ -197,14 +221,14 @@ main (int argc, char **argv)
   /* get program name */
   progname = ((p = strrchr (argv[0], '/')) ? ++p : argv[0]);
 
-  zlog_default = openzlog(progname, ZLOG_RIPNG,
+  zlog_default = openzlog("RIPNG", ZLOG_RIPNG,
 			  LOG_CONS|LOG_NDELAY|LOG_PID, LOG_DAEMON);
 
   while (1) 
     {
       int opt;
 
-      opt = getopt_long (argc, argv, "dlf:i:hA:P:u:g:v", longopts, 0);
+      opt = getopt_long (argc, argv, "dlf:i:hA:P:V:u:g:v", longopts, 0);
     
       if (opt == EOF)
 	break;
@@ -226,8 +250,9 @@ main (int argc, char **argv)
 	  vty_addr = optarg;
 	  break;
         case 'i':
-          pid_file = optarg;
-          break; 
+          strncpy (pid_file, optarg, sizeof (pid_file));
+	  pid_set = 1;
+          break;
 	case 'P':
           /* Deal with atoi() returning 0 on failure, and ripngd not
              listening on ripngd port... */
@@ -241,6 +266,14 @@ main (int argc, char **argv)
           break;
 	case 'r':
 	  retain_mode = 1;
+	  break;
+	case 'V':
+	  vpn_id_tmp = optarg;
+	  temp = atoi (optarg);
+	  vpn_id_set (temp); /* Set socket vty port */
+	  vpn_id_zset (temp); /* Set socket TCP port */
+	  vpn_path_zset (vpn_id_tmp); /* Set socket unix port */
+	  vpn_pid_set (vpn_id_tmp);
 	  break;
 	case 'u':
 	  ripngd_privs.user = optarg;
@@ -262,6 +295,11 @@ main (int argc, char **argv)
     }
 
   master = thread_master_create ();
+  if(temp)
+  {
+    strcat (file_name, fnt);
+    strcat (file_name, vpn_id_tmp);
+  }
 
   /* Library inits. */
   zprivs_init (&ripngd_privs);
@@ -286,7 +324,7 @@ main (int argc, char **argv)
     daemon (0, 0);
 
   /* Create VTY socket */
-  vty_serv_sock (vty_addr, vty_port, RIPNG_VTYSH_PATH);
+  vty_serv_sock (vty_addr, vty_port, file_name);
 
   /* Process id file create. */
   pid_output (pid_file);

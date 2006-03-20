@@ -5,7 +5,7 @@
 ##  Copyright (c) 1996, 97, 98, 99, 2000 Kunihiro Ishiguro <kunihiro@zebra.org>
 ##  Portions Copyright (c) 2003 Paul Jakma <paul@dishone.st>
 ##
-## $Id: configure.ac,v 1.105 2005/04/29 03:20:54 paul Exp $
+## $Id: configure.ac,v 1.8 2005/11/15 13:31:05 saillard Exp $
 AC_PREREQ(2.53)
 
 AC_INIT(Quagga, 0.99.1, [http://bugzilla.quagga.net])
@@ -55,6 +55,29 @@ if test "x$with_cflags" != "x" ; then
 elif test -n "$CFLAGS" ; then
   cflags_specified=yes ;
 fi
+
+dnl --------------
+dnl Check net-snmp
+dnl --------------
+AC_ARG_WITH(netsnmp,
+[  --with-netsnmp=dir       Set the net-snmp directory.])
+if test "x$with_netsnmp" != "x" ; then
+  NETSNMP_DIR="$with_netsnmp" ; netsnmp_specified=yes ;
+elif test -n "$NETSNMP_DIR" ; then
+  netsnmp_specified=yes ;
+fi
+
+dnl --------------
+dnl Check host
+dnl --------------
+case $host_os in
+	zoulou*)
+	AC_DEFINE(ZOULOU)
+	AC_DEFINE(SIXOS)
+	CPPFLAGS=" -nostdinc -I${APPLIDIR}/include $CPPFLAGS "
+	CFLAGS=" -nostdinc -I${APPLIDIR}/include $CFLAGS "
+	;;
+esac
 
 dnl --------------------
 dnl Check CC and friends
@@ -160,6 +183,8 @@ AC_ARG_WITH(libpam,
 [  --with-libpam           use libpam for PAM support in vtysh])
 AC_ARG_ENABLE(tcp-zebra,
 [  --enable-tcp-zebra      enable TCP/IP socket connection between zebra and protocol daemon])
+AC_ARG_ENABLE(tcp-vty,
+[  --disable-tcp-vty       disable TCP/IP socket connection to the daemons' vty])
 AC_ARG_ENABLE(opaque-lsa,
 [  --enable-opaque-lsa     enable OSPF Opaque-LSA with OSPFAPI support (RFC2370)])
 AC_ARG_ENABLE(ospfapi,
@@ -185,12 +210,18 @@ AC_ARG_ENABLE(logfile_mask,
 
 AC_ARG_ENABLE(rtadv,
 [  --disable-rtadv               disable IPV6 router advertisement feature])
+
+AC_ARG_ENABLE(vrf,
+[  --enable-vrf            enable VRF feature])
+
 AC_ARG_ENABLE(irdp,
 [  --enable-irdp                 enable IRDP server support in zebra])
 AC_ARG_ENABLE(isis_topology,
 [  --enable-isis-topology        enable IS-IS topology generator])
 AC_ARG_ENABLE(capabilities,
 [  --disable-capabilities        disable using POSIX capabilities])
+AC_ARG_ENABLE(tcp-md5,
+[  --enable-tcp-md5  enable TCP MD5 Signature Option (RFC2385)])
 AC_ARG_ENABLE(gcc_ultra_verbose,
 [  --enable-gcc-ultra-verbose    enable ultra verbose GCC warnings])
 AC_ARG_ENABLE(gcc-rdynamic,
@@ -231,6 +262,14 @@ if test "${enable_tcp_zebra}" = "yes"; then
   AC_DEFINE(HAVE_TCP_ZEBRA,,Use TCP for zebra communication)
 fi
 
+if test  "${enable_tcp_vty}" = "no"; then
+	AC_DEFINE(HAVE_NO_TCP_VTY,,No use daemons' vty)
+fi
+
+if test "${enable_vrf}" = "yes"; then
+  AC_DEFINE(VRF,,Use VRF feature)
+fi
+
 if test "${enable_opaque_lsa}" = "yes"; then
   AC_DEFINE(HAVE_OPAQUE_LSA,,OSPF Opaque LSA)
 fi
@@ -239,6 +278,11 @@ if test "${enable_ospf_te}" = "yes"; then
   AC_DEFINE(HAVE_OPAQUE_LSA,,OSPF Opaque LSA)
   AC_DEFINE(HAVE_OSPF_TE,,OSPF TE)
 fi
+
+if test "${enable_tcp_md5}" = "yes"; then
+  AC_DEFINE(HAVE_TCP_MD5,,Linux TCP MD5 Signature Option)
+fi
+
 
 AC_MSG_CHECKING(if zebra should be configurable to send Route Advertisements)
 if test "${enable_rtadv}" != "no"; then
@@ -392,34 +436,34 @@ esac
 dnl ---------------------
 dnl Integrated VTY option
 dnl ---------------------
-case "${enable_vtysh}" in
-  "yes") VTYSH="vtysh";
-         AC_DEFINE(VTYSH,,VTY shell)
-	 AC_PATH_PROG(PERL, perl)
+dnl case "${enable_vtysh}" in
+dnl   "yes") VTYSH="vtysh";
+dnl          AC_DEFINE(VTYSH,,VTY shell)
+dnl 	 AC_PATH_PROG(PERL, perl)
 dnl	 Vtysh uses libreadline, which looks for termcap functions at
 dnl	 configure time.  We follow readline's search order.
 dnl	 The required procedures are in libtermcap on NetBSD, in
 dnl	 [TODO] on Linux, and in [TODO] on Solaris.
-	 AC_CHECK_LIB(termcap, tputs, ,
-	 	AC_CHECK_LIB(tinfo, tputs, ,
-	 	AC_CHECK_LIB(curses, tputs, ,
-	 	AC_CHECK_LIB(ncurses, tputs))))
-         AC_CHECK_LIB(readline, main)
-         if test $ac_cv_lib_readline_main = no; then
-           AC_MSG_ERROR([vtysh needs libreadline but was not found and usable on your system.])
-         fi
-	 AC_CHECK_HEADER(readline/history.h)
-	 if test $ac_cv_header_readline_history_h = no;then
-           AC_MSG_ERROR([readline is too old to have readline/history.h, please update to the latest readline library.])
-	 fi
-	 AC_CHECK_LIB(readline, rl_completion_matches)
-         if test $ac_cv_lib_readline_rl_completion_matches = no; then
-           AC_DEFINE(rl_completion_matches,completion_matches,Old readline)
-	 fi
-	 ;;
-  "no" ) VTYSH="";;
-  *    ) ;;
-esac
+dnl 	 AC_CHECK_LIB(termcap, tputs, ,
+dnl 	 	AC_CHECK_LIB(tinfo, tputs, ,
+dnl 	 	AC_CHECK_LIB(curses, tputs, ,
+dnl 	 	AC_CHECK_LIB(ncurses, tputs))))
+dnl          AC_CHECK_LIB(readline, main)
+dnl          if test $ac_cv_lib_readline_main = no; then
+dnl            AC_MSG_ERROR([vtysh needs libreadline but was not found and usable on your system.])
+dnl          fi
+dnl 	 AC_CHECK_HEADER(readline/history.h)
+dnl 	 if test $ac_cv_header_readline_history_h = no;then
+dnl            AC_MSG_ERROR([readline is too old to have readline/history.h, please update to the latest readline library.])
+dnl 	 fi
+dnl 	 AC_CHECK_LIB(readline, rl_completion_matches)
+dnl          if test $ac_cv_lib_readline_rl_completion_matches = no; then
+dnl            AC_DEFINE(rl_completion_matches,completion_matches,Old readline)
+dnl 	 fi
+dnl 	 ;;
+dnl   "no" ) VTYSH="";;
+dnl   *    ) ;;
+dnl esac
 
 dnl ----------
 dnl PAM module
@@ -932,6 +976,7 @@ dnl ------------------
 dnl check SNMP library
 dnl ------------------
 if test "${enable_snmp}" = "yes";then
+if test "x$netsnmp_specified" != "xyes" ; then
 dnl  AC_CHECK_LIB(snmp, asn_parse_int, HAVE_SNMP=yes)
   if test "${HAVE_SNMP}" = ""; then
     old_libs="${LIBS}"
@@ -1022,6 +1067,39 @@ if test "${enable_snmp}" = "yes" -a "${HAVE_SNMP}" != "yes"; then
 fi
 
 AC_SUBST(SNMP_INCLUDES)
+
+else
+
+dnl -- netsnmp_specified = yes
+
+  snmpd_src_dir=$NETSNMP_DIR
+  old_libs="${LIBS}"
+  LIBS="-L${snmpd_src_dir}/snmplib/.libs"
+  AC_CHECK_LIB(snmp, asn_parse_int, HAVE_SNMP=yes,,)
+
+  if test "${HAVE_SNMP}" = ""; then
+    unset ac_cv_lib_snmp_asn_parse_int
+    AC_CHECK_LIB(crypto, main, [NEED_CRYPTO=yes ], )
+    if test "${NEED_CRYPTO}" = ""; then
+        AC_CHECK_LIB(snmp, asn_parse_int, [HAVE_SNMP=yes; NEED_CRYPTO=yes ],)
+    else
+        AC_CHECK_LIB(snmp, asn_parse_int, [HAVE_SNMP=yes; NEED_CRYPTO=yes;LIBS="$LIBS -lcrypto" ],,"-lcrypto")
+    fi
+  fi
+  LIBS="${old_libs}"
+  if test "${HAVE_SNMP}" = "yes"; then
+    dnl -- snmp case
+    if test -f $snmpd_src_dir/include/ucd-snmp/asn1.h  ; then
+      AC_DEFINE(HAVE_SNMP)
+      CFLAGS="${CFLAGS} -DUCD_COMPATIBLE -I$snmpd_src_dir/include -I$snmpd_src_dir/include/ucd-snmp"
+      LIBS="${LIBS} -L$snmpd_src_dir/snmplib/.libs -lsnmp"
+    fi
+    if test "${NEED_CRYPTO}" = "yes"; then
+      dnl -- XXX
+      LIBS="${LIBS} -lcrypto"
+    fi
+  fi
+fi
 
 dnl ----------------------------
 dnl check sa_len of sockaddr
@@ -1307,7 +1385,7 @@ AC_MSG_RESULT($ac_cv_htonl_works)
 
 AC_CONFIG_FILES([Makefile lib/Makefile zebra/Makefile ripd/Makefile 
 	  ripngd/Makefile bgpd/Makefile ospfd/Makefile watchquagga/Makefile
-	  ospf6d/Makefile isisd/Makefile vtysh/Makefile doc/Makefile 
+	  ospf6d/Makefile isisd/Makefile doc/Makefile 
 	  ospfclient/Makefile tests/Makefile m4/Makefile redhat/Makefile
 	  pkgsrc/Makefile
 	  redhat/quagga.spec 
@@ -1318,7 +1396,7 @@ AC_CONFIG_FILES([Makefile lib/Makefile zebra/Makefile ripd/Makefile
 	  pkgsrc/ripd.sh pkgsrc/ripngd.sh pkgsrc/zebra.sh])
 AC_CONFIG_FILES([solaris/Makefile])
 
-AC_CONFIG_FILES([vtysh/extract.pl],[chmod +x vtysh/extract.pl])
+dnl AC_CONFIG_FILES([vtysh/extract.pl],[chmod +x vtysh/extract.pl])
 ## Hack, but working solution to avoid rebuilding of quagga.info.
 ## It's already in CVS until texinfo 4.7 is more common.
 AC_CONFIG_COMMANDS([info-time],[touch doc/quagga.info])
@@ -1341,6 +1419,7 @@ user to run as		: ${enable_user}
 group to run as		: ${enable_group}
 group for vty sockets	: ${enable_vty_group}
 config file mask        : ${enable_configfile_mask}
+linker flags            : ${LDFLAGS} ${LIBS}
 log file mask           : ${enable_logfile_mask}
 
 The above user and group must have read/write access to the state file

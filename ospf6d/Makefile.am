@@ -2,6 +2,7 @@
 
 INCLUDES = @INCLUDES@ -I.. -I$(top_srcdir) -I$(top_srcdir)/lib @SNMP_INCLUDES@
 DEFS = @DEFS@ -DSYSCONFDIR=\"$(sysconfdir)/\"
+DEFS += -DOSPF6_MULTI_PATH_LIMIT=@MULTIPATH_NUM@
 INSTALL_SDATA=@INSTALL@ -m 600
 
 noinst_LIBRARIES = libospf6.a
@@ -12,6 +13,7 @@ libospf6_a_SOURCES = \
 	ospf6_top.c ospf6_area.c ospf6_interface.c ospf6_neighbor.c \
 	ospf6_flood.c ospf6_route.c ospf6_intra.c ospf6_zebra.c \
 	ospf6_spf.c ospf6_proto.c ospf6_asbr.c ospf6_abr.c ospf6_snmp.c \
+	ospf6_debug.c \
 	ospf6d.c
 
 noinst_HEADERS = \
@@ -19,6 +21,7 @@ noinst_HEADERS = \
 	ospf6_top.h ospf6_area.h ospf6_interface.h ospf6_neighbor.h \
 	ospf6_flood.h ospf6_route.h ospf6_intra.h ospf6_zebra.h \
 	ospf6_spf.h ospf6_proto.h ospf6_asbr.h ospf6_abr.h ospf6_snmp.h \
+	ospf6_debug.h \
 	ospf6d.h
 
 ospf6d_SOURCES = \

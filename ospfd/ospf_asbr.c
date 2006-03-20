@@ -140,6 +140,7 @@ ospf_external_info_add (u_char type, struct prefix_ipv4 p,
 {
   struct external_info *new;
   struct route_node *rn;
+  struct ospf *ospf;
 
   /* Initialize route table. */
   if (EXTERNAL_INFO (type) == NULL)
@@ -157,7 +158,20 @@ ospf_external_info_add (u_char type, struct prefix_ipv4 p,
 	/* XFREE (MTYPE_OSPF_TMP, rn->info); */
 	return rn->info;
       }
-
+  
+  ospf = ospf_lookup ();
+  /* Check to limit redistribution */
+  if (ospf_limit_redistribution (p))
+    {
+      zlog_warn ("can't redistribute more than maximum prefix routes %u",
+                                                    ospf->maximum_prefix);
+      return NULL;
+    }
+ 
+  /* Increment the count for added external routes (default routes are ignored) */
+  if (! is_prefix_default (&p)) 
+    ospf->redstr_count ++;
+ 
   /* Create new External info instance. */
   new = ospf_external_info_new (type);
   new->p = p;
@@ -178,6 +192,7 @@ void
 ospf_external_info_delete (u_char type, struct prefix_ipv4 p)
 {
   struct route_node *rn;
+  struct ospf *ospf;
 
   rn = route_node_lookup (EXTERNAL_INFO (type), (struct prefix *) &p);
   if (rn)
@@ -187,6 +202,10 @@ ospf_external_info_delete (u_char type, struct prefix_ipv4 p)
       route_unlock_node (rn);
       route_unlock_node (rn);
     }
+  ospf = ospf_lookup ();
+  /* Decrement the count for deleted external routes (default route is ignored) */
+  if (! is_prefix_default (&p))
+    ospf->redstr_count --;  
 }
 
 struct external_info *
@@ -291,3 +310,98 @@ ospf_redistribute_withdraw (u_char type)
 	    ospf_external_info_delete (type, ei->p);
 	  }
 }
+
+void
+ospf_log_warnings_cli (struct ospf *ospf)
+{
+  u_int32_t prefix_threshold;
+  
+  /* Get the threshold limit for maximum-prefix */
+  prefix_threshold = (ospf->maximum_prefix * ospf->max_prefix_threshold)/100;
+
+  /* Log warning message when threshold is already reached */
+  if (ospf->redstr_count >= prefix_threshold)
+    zlog_warn ("WARNING : redistributed prefixes reached the threshold value %u",
+                                                               prefix_threshold);
+  
+  /* Log warning message when maximum-prefix is already reached */
+  if (ospf->redstr_count >= ospf->maximum_prefix)
+    zlog_warn ("WARNING : redistributed prefixes reached the maximum-prefix value %u",
+                                                                 ospf->maximum_prefix);
+}
+
+void
+ospf_redistribute_max_prefix_set (const char *num_str, const char *threshold_str, int warning)
+{
+  struct ospf *ospf;
+  ospf = ospf_lookup ();
+
+  /* set the prefix limit */
+  ospf->maximum_prefix = strtol (num_str, NULL, 10);
+
+  /* set the threshold or deafault value (75%) is considered */
+  if (threshold_str)
+    ospf->max_prefix_threshold = strtol (threshold_str, NULL, 10);
+
+  /* warning-only enable/disable */
+  ospf->max_prefix_warning_only = warning;
+  
+  /* if already some prefixes are redistributed,check to log warnings */
+  if (ospf->redstr_count)
+    ospf_log_warnings_cli (ospf);
+}
+
+void
+ospf_redistribute_max_prefix_unset ()
+{
+  struct ospf *ospf;
+  ospf = ospf_lookup ();
+
+  /* Unset the prefix limit */
+  ospf->maximum_prefix = 0;
+  /* Reset the threshold to default */
+  ospf->max_prefix_threshold = OSPF_MAXIMUM_PREFIX_THRESHOLD_DEFAULT;
+  /* Unset Warning-Only */
+  ospf->max_prefix_warning_only = 0;
+}
+
+int
+ospf_limit_redistribution (struct prefix_ipv4 p)
+{
+  struct ospf *ospf;
+  u_int32_t prefix_threshold;
+ 
+  ospf = ospf_lookup ();
+ 
+  /* If the max-prefix is not set, redistribute all the prefixes */
+  if (!ospf->maximum_prefix)
+    return 0;
+  
+  /* Don't limit default routes (prefixes) */
+  if (is_prefix_default (&p))
+    return 0;
+
+  /* Get the threshold limit for maximum-prefix */
+  prefix_threshold = (ospf->maximum_prefix * ospf->max_prefix_threshold)/100;
+  
+  /* Log warning message when threshold is reached */
+  if ((ospf->redstr_count + 1) == prefix_threshold)
+    zlog_warn ("WARNING : redistributed prefixes reached the threshold value %u",
+                                                               prefix_threshold);
+  
+  /* Log warning message when maximum-prefix is reached */
+  if ((ospf->redstr_count + 1) == ospf->maximum_prefix)
+    zlog_warn ("WARNING : redistributed prefixes reached the maximum-prefix value %u",
+                                                                 ospf->maximum_prefix);
+  
+  /* If Warning-only is set, redistribute all the prefixes */
+  if (ospf->max_prefix_warning_only)
+    return 0;
+
+  /* Other wise, redistribute only the maximum-prefix no.of routes */
+  if (ospf->redstr_count >= ospf->maximum_prefix)
+    return 1;
+
+  return 0;
+}
+

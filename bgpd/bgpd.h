@@ -45,6 +45,12 @@ struct bgp_master
 #define BGP_OPT_NO_FIB                   (1 << 0)
 #define BGP_OPT_MULTIPLE_INSTANCE        (1 << 1)
 #define BGP_OPT_CONFIG_CISCO             (1 << 2)
+
+#ifdef HAVE_TCP_MD5
+  /* bgp receive socket. */
+  int sockv4;
+  int sockv6;
+#endif /* HAVE_TCP_MD5 */
 };
 
 /* BGP instance structure.  */
@@ -117,7 +123,11 @@ struct bgp
   struct bgp_table *rib[AFI_MAX][SAFI_MAX];
 
   /* BGP redistribute configuration. */
-  u_char redist[AFI_MAX][ZEBRA_ROUTE_MAX];
+  struct
+  {
+    u_char safi[SAFI_MAX];
+    int vrf_id;
+  }redist[AFI_MAX][ZEBRA_ROUTE_MAX];
 
   /* BGP redistribute metric configuration. */
   u_char redist_metric_flag[AFI_MAX][ZEBRA_ROUTE_MAX];
@@ -332,6 +342,7 @@ struct peer
 #define PEER_FLAG_DYNAMIC_CAPABILITY        (1 << 5) /* dynamic capability */
 #define PEER_FLAG_DISABLE_CONNECTED_CHECK   (1 << 6) /* disable-connected-check */
 #define PEER_FLAG_LOCAL_AS_NO_PREPEND       (1 << 7) /* local-as no-prepend */
+#define PEER_FLAG_PASSWORD                  (1 << 8) /* password */
 
   /* NSF mode (graceful restart) */
   u_char nsf[AFI_MAX][SAFI_MAX];
@@ -355,6 +366,9 @@ struct peer
 #define PEER_FLAG_MAX_PREFIX                (1 << 14) /* maximum prefix */
 #define PEER_FLAG_MAX_PREFIX_WARNING        (1 << 15) /* maximum prefix warning-only */
 #define PEER_FLAG_NEXTHOP_LOCAL_UNCHANGED   (1 << 16) /* leave link-local nexthop unchanged */ 
+
+  /* MD5 password */
+  char *password;
 
   /* default-originate route-map.  */
   struct
@@ -678,8 +692,8 @@ struct bgp_nlri
 #define BGP_DEFAULT_LOCAL_PREF                 100
 
 /* BGP graceful restart  */
-#define BGP_DEFAULT_RESTART_TIME               120
-#define BGP_DEFAULT_STALEPATH_TIME             360
+#define BGP_DEFAULT_RESTART_TIME               180
+#define BGP_DEFAULT_STALEPATH_TIME             300
 
 /* SAFI which used in open capability negotiation.  */
 #define BGP_SAFI_VPNV4                         128
@@ -763,6 +777,26 @@ enum bgp_clear_type
 #define BGP_ERR_LOCAL_AS_ALLOWED_ONLY_FOR_EBGP  -27
 #define BGP_ERR_CANNOT_HAVE_LOCAL_AS_SAME_AS    -28
 #define BGP_ERR_MAX                             -29
+
+/* help string */
+#define BGP_4_REDISTRIBUTE_HELPSTR \
+       "Redistribute information from another routing protocol\n" \
+       "Connected\n" \
+       "Kernel routes\n" \
+       "Open Shortest Path First (OSPF)\n" \
+       "Routing Information Protocol (RIP)\n" \
+       "Static routes\n" \
+       "DElegated Prefixes (DEP)\n"
+
+#define BGP_6_REDISTRIBUTE_HELPSTR \
+       "Redistribute information from another routing protocol\n" \
+       "Connected\n" \
+       "Kernel routes\n" \
+       OSPF6_STR \
+       "Routing Information Protocol (RIP) for IPv6\n" \
+       "Static routes\n" \
+       "DElegated Prefixes (DEP)\n" \
+       "Network Address Translation Protocol Translation (NAT-PT)\n"
 
 extern struct bgp_master *bm;
 
@@ -901,7 +935,14 @@ int peer_unsuppress_map_unset (struct peer *, afi_t, safi_t);
 int peer_maximum_prefix_set (struct peer *, afi_t, safi_t, u_int32_t, u_char, int, u_int16_t);
 int peer_maximum_prefix_unset (struct peer *, afi_t, safi_t);
 
+#ifdef HAVE_TCP_MD5
+int peer_password_set (struct peer *, const char *);
+int peer_password_unset (struct peer *);
+#endif /* HAVE_TCP_MD5 */
+
 int peer_clear (struct peer *);
 int peer_clear_soft (struct peer *, afi_t, safi_t, enum bgp_clear_type);
+
+void vpn_path_set (char *);
 
 void peer_nsf_stop (struct peer *);

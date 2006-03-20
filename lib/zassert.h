@@ -1,5 +1,5 @@
 /*
- * $Id: zassert.h,v 1.2 2004/12/03 18:01:04 ajs Exp $
+ * $Id: zassert.h,v 1.2 2005/08/30 12:22:08 vize Exp $
  */
 
 #ifndef _QUAGGA_ASSERT_H

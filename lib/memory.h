@@ -32,8 +32,24 @@ struct mlist {
   struct memory_list *list;
   const char *name;
 };
+
+/* Keep track of the memory usage */
+#define MEMORY_LOG
+#ifdef MEMORY_LOG
+  /* Core each time something gets wrong with the memory,
+   * only the free and realloc calls with a wrong type are
+   * possible.
+   */
+  #define MEMORY_LOG_ASSERT
+    /*
+     * Moreover the MALLOC_CHECK_ (Linux) or MALLOC_OPTIONS (BSD)
+     * envrionment variables can be used in order to debug the memory
+     * usage.
+     */
+  /* else display warning */
+#endif /* MEMORY_LOG */
  
-#include "lib/memtypes.h"
+#include "memtypes.h"
 
 extern struct mlist mlists[];
 
@@ -72,7 +88,6 @@ void *mtype_zmalloc (const char *file,
 void *mtype_zcalloc (const char *file,
 		     int line,
 		     int type,
-		     size_t num,
 		     size_t size);
 
 void *mtype_zrealloc (const char *file,
@@ -91,5 +106,8 @@ char *mtype_zstrdup (const char *file,
 		     int type,
 		     const char *str);
 void memory_init (void);
+
+void memory_debug(char);
+char is_memory_debug(void);
 
 #endif /* _ZEBRA_MEMORY_H */

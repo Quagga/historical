@@ -20,9 +20,19 @@
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
 #include <stdio.h>
 #include <zebra.h>
 
+
+
+
+#include "hash.h"
+#include "thread.h"
+#include "linklist.h"
 #include "getopt.h"
 #include "thread.h"
 #include "log.h"
@@ -35,6 +45,9 @@
 #include "privs.h"
 #include "sigevent.h"
 #include "filter.h"
+#include "plist.h"
+#include "routemap.h"
+#include "table.h"
 
 #include "isisd/dict.h"
 #include "include-netbsd/iso.h"
@@ -44,6 +57,23 @@
 #include "isisd/isis_circuit.h"
 #include "isisd/isisd.h"
 #include "isisd/isis_dynhn.h"
+#include "isisd/isis_routemap.h"
+#include "isisd/isis_csm.h"
+#include "isisd/isis_dr.h"
+#include "isisd/isis_tlv.h"
+#include "isisd/isis_misc.h"
+#include "isisd/isis_adjacency.h"
+#include "isisd/isis_pdu.h"
+#include "isisd/isis_events.h"
+#include "isisd/isis_lsp.h"
+#include "isisd/isis_route.h"
+#include "isisd/isis_zebra.h"
+
+
+
+
+
+
 
 /* Default configuration file name */
 #define ISISD_DEFAULT_CONFIG "isisd.conf"
@@ -143,9 +173,71 @@ reload ()
   execve (_progpath, _argv, _envp);
 }
 
+static void purge_pseudonode_lsp (struct isis_circuit *circuit, int level)
+{
+  extern struct isis *isis;
+  struct isis_lsp *lsp;
+  u_char id[ISIS_SYS_ID_LEN + 2];
+  memcpy (id, isis->sysid, ISIS_SYS_ID_LEN);
+  LSP_PSEUDO_ID (id) = circuit->circuit_id;
+  LSP_FRAGMENT (id) = 0;
+  lsp = lsp_purge_dr (id, circuit, level);
+  circuit->snd_stream->getp = lsp->pdu->getp;
+  circuit->snd_stream->endp = lsp->pdu->endp;
+  memcpy (circuit->snd_stream->data, lsp->pdu->data, lsp->pdu->endp);
+  circuit->tx (circuit, lsp->level);
+}
+
 static void
 terminate (int i)
-{
+{ 
+  extern struct isis *isis;
+  struct listnode *area_node , *ckt_node;
+  struct isis_area *area;
+  struct isis_circuit *circuit;
+  struct route_table *table;
+  struct route_node *rode;
+  struct isis_route_info *rinfo;
+
+#ifdef HAVE_IPV6
+  int v6done = 0;
+#endif  /*HAVE_IPV6*/
+  for (ALL_LIST_ELEMENTS_RO (isis->area_list, area_node, area))
+    {
+      for (ALL_LIST_ELEMENTS_RO (area->circuit_list, ckt_node, circuit))
+        {
+          if ((circuit->state != C_STATE_UP) || (circuit->circ_type == CIRCUIT_T_P2P))
+	       continue;
+	  if (circuit->u.bc.is_dr[0])
+	    {
+	      purge_pseudonode_lsp (circuit, ISIS_LEVEL1);
+	    }	  
+	  if (circuit->u.bc.is_dr[1])
+	    {
+              purge_pseudonode_lsp (circuit, ISIS_LEVEL2);
+	    }	  
+	}    
+      table = area->route_table;
+#ifdef HAVE_IPV6
+      again:
+#endif  /*HAVE_IPV6*/
+      for (rode = route_top (table); rode; rode = route_next (rode))
+	{
+	  if (rode->info == NULL)
+	      continue;	      
+	  rinfo = rode->info;
+	  UNSET_FLAG (rinfo->flag, ISIS_ROUTE_FLAG_ACTIVE);
+	  isis_zebra_route_update (&rode->p, rinfo);
+	}
+#ifdef HAVE_IPV6
+      if (!v6done)
+        {
+	  table = area->route_table6;
+	  v6done = 1;
+	  goto again;
+	}
+#endif  /*HAVE_IPV6*/
+    } 
   exit (i);
 }
 
@@ -218,7 +310,7 @@ main (int argc, char **argv, char **envp)
   /* Get the programname without the preceding path. */
   progname = ((p = strrchr (argv[0], '/')) ? ++p : argv[0]);
 
-  zlog_default = openzlog (progname, ZLOG_ISIS,
+  zlog_default = openzlog ("ISIS", ZLOG_ISIS,
 			   LOG_CONS | LOG_NDELAY | LOG_PID, LOG_DAEMON);
 
   /* for reload */

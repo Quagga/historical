@@ -23,6 +23,9 @@
 
 #ifdef HAVE_SNMP
 #ifdef HAVE_NETSNMP
+/* XXX
+ * it is ugly because net-snmp-config.h is conflicting with quagga's config.h
+ */
 #include <net-snmp/net-snmp-config.h>
 #endif
 #include <asn1.h>
@@ -322,7 +325,7 @@ smux_getresp_send (oid objid[], size_t objid_len, long reqid, long errstat,
   asn_build_sequence(h1,&length,(u_char)SMUX_GETRSP,ptr-h1e);
 
   if (debug_smux)
-    zlog_debug ("SMUX getresp send: %ld", (ptr - buf));
+    zlog_debug ("SMUX getresp send: %d", (ptr - buf));
   
   ret = send (smux_sock, buf, (ptr - buf), 0);
 }
@@ -339,14 +342,14 @@ smux_var (char *ptr, size_t len, oid objid[], size_t *objid_len,
   u_char *val;
 
   if (debug_smux)
-    zlog_debug ("SMUX var parse: len %ld", len);
+    zlog_debug ("SMUX var parse: len %d", len);
 
   /* Parse header. */
   ptr = asn_parse_header (ptr, &len, &type);
   
   if (debug_smux)
     {
-      zlog_debug ("SMUX var parse: type %d len %ld", type, len);
+      zlog_debug ("SMUX var parse: type %d len %d", type, len);
       zlog_debug ("SMUX var parse: type must be %d", 
 		 (ASN_SEQUENCE | ASN_CONSTRUCTOR));
     }
@@ -665,13 +668,13 @@ smux_parse_get_header (char *ptr, size_t *len, long *reqid)
   ptr = asn_parse_int (ptr, len, &type, &errstat, sizeof (errstat));
 
   if (debug_smux)
-    zlog_debug ("SMUX GET errstat %ld len: %ld", errstat, *len);
+    zlog_debug ("SMUX GET errstat %ld len: %d", errstat, *len);
 
   /* Error index. */
   ptr = asn_parse_int (ptr, len, &type, &errindex, sizeof (errindex));
 
   if (debug_smux)
-    zlog_debug ("SMUX GET errindex %ld len: %ld", errindex, *len);
+    zlog_debug ("SMUX GET errindex %ld len: %d", errindex, *len);
 
   return ptr;
 }
@@ -688,7 +691,7 @@ smux_parse_set (char *ptr, size_t len, int action)
   int ret;
 
   if (debug_smux)
-    zlog_debug ("SMUX SET(%s) message parse: len %ld",
+    zlog_debug ("SMUX SET(%s) message parse: len %d",
                (RESERVE1 == action) ? "RESERVE1" : ((FREE == action) ? "FREE" : "COMMIT"),
                len);
 
@@ -719,7 +722,7 @@ smux_parse_get (char *ptr, size_t len, int exact)
   int ret;
 
   if (debug_smux)
-    zlog_debug ("SMUX GET message parse: len %ld", len);
+    zlog_debug ("SMUX GET message parse: len %d", len);
   
   /* Parse GET message header. */
   ptr = smux_parse_get_header (ptr, &len, &reqid);
@@ -789,7 +792,7 @@ process_rest: /* see note below: YYY */
   ptr = asn_parse_header (ptr, &len, &type);
 
   if (debug_smux)
-    zlog_debug ("SMUX message received type: %d rest len: %ld", type, len);
+    zlog_debug ("SMUX message received type: %d rest len: %d", type, len);
 
   switch (type)
     {
@@ -1303,7 +1306,8 @@ smux_peer_oid (struct vty *vty, const char *oid_str, const char *passwd_str)
   ret = smux_str2oid (oid_str, oid, &oid_len);
   if (ret != 0)
     {
-      vty_out (vty, "object ID malformed%s", VTY_NEWLINE);
+      if (vty)
+        vty_out (vty, "object ID malformed%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 

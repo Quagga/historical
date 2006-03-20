@@ -142,9 +142,9 @@ int bgp_nlri_parse (struct peer *, struct attr *, struct bgp_nlri *);
 
 int bgp_maximum_prefix_overflow (struct peer *, afi_t, safi_t, int);
 
-void bgp_redistribute_add (struct prefix *, struct in_addr *, u_int32_t, u_char);
-void bgp_redistribute_delete (struct prefix *, u_char);
-void bgp_redistribute_withdraw (struct bgp *, afi_t, int);
+void bgp_redistribute_add (struct prefix *, struct in_addr *, u_int32_t, u_char, int, safi_t);
+void bgp_redistribute_delete (struct prefix *, u_char, int, safi_t);
+void bgp_redistribute_withdraw (struct bgp *, afi_t, int, int, safi_t);
 
 void bgp_static_delete (struct bgp *);
 void bgp_static_update (struct bgp *, struct prefix *, struct bgp_static *,
@@ -166,6 +166,7 @@ void bgp_aggregate_decrement (struct bgp *, struct prefix *, struct bgp_info *,
 			      afi_t, safi_t);
 
 u_char bgp_distance_apply (struct prefix *, struct bgp_info *, struct bgp *);
+u_char bgp_distance_apply_ipv6 (struct prefix *, struct bgp_info *, struct bgp *);
 
 afi_t bgp_node_afi (struct vty *);
 safi_t bgp_node_safi (struct vty *);

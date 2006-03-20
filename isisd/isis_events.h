@@ -19,9 +19,15 @@
  * with this program; if not, write to the Free Software Foundation, Inc., 
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
+
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
 #ifndef _ZEBRA_ISIS_EVENTS_H
 #define _ZEBRA_ISIS_EVENTS_H
 
+#include "isisd/isis_adjacency.h"
 /*
  * Events related to area
  */
@@ -39,7 +45,7 @@ void isis_event_circuit_type_change (struct isis_circuit *circuit,
  * Events related to adjacencies
  */
 void isis_event_adjacency_state_change (struct isis_adjacency *adj,
-					int newstate);
+             enum isis_adj_state newstate, const char *reason);
 
 int isis_event_dis_status_change (struct thread *thread);
 

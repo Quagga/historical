@@ -21,6 +21,10 @@
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
 #ifndef _ZEBRA_ISIS_LSP_H
 #define _ZEBRA_ISIS_LSP_H
 
@@ -44,7 +48,7 @@ struct isis_lsp
   } lspu;
   u_int32_t SRMflags[ISIS_MAX_CIRCUITS];
   u_int32_t SSNflags[ISIS_MAX_CIRCUITS];
-  u_int32_t rexmit_queue[ISIS_MAX_CIRCUITS];
+  u_int32_t in_queue[ISIS_MAX_CIRCUITS];
   int level;			/* L1 or L2? */
   int purged;			/* have purged this one */
   int scheduled;		/* scheduled for sending */
@@ -80,7 +84,7 @@ int isis_lsp_authinfo_check (struct stream *stream, struct isis_area *area,
 			     int pdulen, struct isis_passwd *passwd);
 struct isis_lsp *lsp_new (u_char * lsp_id, u_int16_t rem_lifetime,
 			  u_int32_t seq_num, u_int8_t lsp_bits,
-			  u_int16_t checksum, int level);
+			  u_int16_t checksum, int level, int lsp_mtu);
 struct isis_lsp *lsp_new_from_stream_ptr (struct stream *stream,
 					  u_int16_t pdu_len,
 					  struct isis_lsp *lsp0,
@@ -96,13 +100,16 @@ void lsp_build_list_ssn (struct isis_circuit *circuit, struct list *list,
 			 dict_t * lspdb);
 
 void lsp_search_and_destroy (u_char * id, dict_t * lspdb);
-void lsp_purge_dr (u_char * id, struct isis_circuit *circuit, int level);
+struct isis_lsp *lsp_purge_dr (u_char * id, struct isis_circuit *circuit, int level);
 void lsp_purge_non_exist (struct isis_link_state_hdr *lsp_hdr,
 			  struct isis_area *area);
 
 #define LSP_EQUAL 1
 #define LSP_NEWER 2
 #define LSP_OLDER 3
+
+#define SET_ATT_BIT    0x8
+#define RESET_ATT_BIT  0xf7
 
 #define LSP_PSEUDO_ID(I) ((I)[ISIS_SYS_ID_LEN])
 #define LSP_FRAGMENT(I) ((I)[ISIS_SYS_ID_LEN + 1])

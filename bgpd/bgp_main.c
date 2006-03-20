@@ -19,6 +19,7 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 02111-1307, USA.  */
 
 #include <zebra.h>
+#include <string.h>
 
 #include "vector.h"
 #include "vty.h"
@@ -32,9 +33,18 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "privs.h"
 #include "sigevent.h"
 
+#if defined(HAVE_SNMP) && defined(FORCE_SMUX)
+#include <asn1.h>
+#include "smux.h"
+#endif
+
 #include "bgpd/bgpd.h"
 #include "bgpd/bgp_attr.h"
 #include "bgpd/bgp_mplsvpn.h"
+
+/* bgp file name */
+static char bgp_vtysh_path[sizeof (BGP_VTYSH_PATH) + 20] = BGP_VTYSH_PATH; 
+
 
 /* bgpd options, we use GNU getopt library. */
 struct option longopts[] = 
@@ -47,6 +57,7 @@ struct option longopts[] =
   { "vty_port",    required_argument, NULL, 'P'},
   { "retain",      no_argument,       NULL, 'r'},
   { "no_kernel",   no_argument,       NULL, 'n'},
+  { "vpn",         required_argument, NULL, 'V'},
   { "user",        required_argument, NULL, 'u'},
   { "group",       required_argument, NULL, 'g'},
   { "version",     no_argument,       NULL, 'v'},
@@ -138,6 +149,7 @@ redistribution between different routing protocols.\n\n\
 -P, --vty_port     Set vty's port number\n\
 -r, --retain       When program terminates, retain added route by bgpd.\n\
 -n, --no_kernel    Do not install route to kernel.\n\
+-V, --vpn_id	   Number of the routing table\n\
 -u, --user         User to run as\n\
 -g, --group        Group to run as\n\
 -v, --version      Print program version\n\
@@ -164,8 +176,7 @@ sighup (void)
   vty_read_config (config_file, config_default);
 
   /* Create VTY's socket */
-  vty_serv_sock (vty_addr, vty_port, BGP_VTYSH_PATH);
-
+  vty_serv_sock (vty_addr, vty_port, bgp_vtysh_path);
   /* Try to return to normal operation. */
 }
 
@@ -194,7 +205,10 @@ int
 main (int argc, char **argv)
 {
   char *p;
+  char fnt[] = ".";
+  char *vpn_id_tmp = NULL;
   int opt;
+  int temp = 0;
   int daemon_mode = 0;
   char *progname;
   struct thread thread;
@@ -205,7 +219,7 @@ main (int argc, char **argv)
   /* Preserve name of myself. */
   progname = ((p = strrchr (argv[0], '/')) ? ++p : argv[0]);
 
-  zlog_default = openzlog (progname, ZLOG_BGP,
+  zlog_default = openzlog ("BGP", ZLOG_BGP,
 			   LOG_CONS|LOG_NDELAY|LOG_PID, LOG_DAEMON);
 
   /* BGP master init. */
@@ -214,7 +228,7 @@ main (int argc, char **argv)
   /* Command line argument treatment. */
   while (1) 
     {
-      opt = getopt_long (argc, argv, "df:i:hp:A:P:rnu:g:v", longopts, 0);
+      opt = getopt_long (argc, argv, "df:i:hp:A:P:V:rnu:g:v", longopts, 0);
     
       if (opt == EOF)
 	break;
@@ -249,6 +263,12 @@ main (int argc, char **argv)
           vty_port = atoi (optarg);
           vty_port = (vty_port ? vty_port : BGP_VTY_PORT);
 	  break;
+	case 'V':
+	  temp = atoi (optarg);
+	  vpn_id_tmp = optarg;
+	  vpn_id_set (temp);
+	  vpn_path_set (optarg);
+	  break;
 	case 'r':
 	  retain_mode = 1;
 	  break;
@@ -273,6 +293,12 @@ main (int argc, char **argv)
 	  break;
 	}
     }
+
+  if (temp)
+  {
+	strncat (bgp_vtysh_path, fnt, sizeof (bgp_vtysh_path));
+	strncat (bgp_vtysh_path, vpn_id_tmp, sizeof (bgp_vtysh_path));
+  }
 
   /* Make thread master. */
   master = bm->master;
@@ -302,11 +328,17 @@ main (int argc, char **argv)
   pid_output (pid_file);
 
   /* Make bgp vty socket. */
-  vty_serv_sock (vty_addr, vty_port, BGP_VTYSH_PATH);
+  vty_serv_sock (vty_addr, vty_port, bgp_vtysh_path);
 
   /* Print banner. */
   zlog_notice ("BGPd %s starting: vty@%d, bgp@%d", QUAGGA_VERSION,
 	       vty_port, bm->port);
+
+#if defined(HAVE_SNMP) && defined(FORCE_SMUX)
+  /* smux peer .1.3.6.1.4.1.3317.1.2.2 */
+  if (smux_peer_oid(NULL, ".1.3.6.1.4.1.3317.1.2.2", NULL) == 0)
+    smux_start();
+#endif /* HAVE_SNMP && FORCE_SMUX */
 
   /* Start finite state machine, here we go! */
   while (thread_fetch (master, &thread))

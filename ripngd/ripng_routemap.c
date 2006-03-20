@@ -107,8 +107,14 @@ ripng_route_set_add (struct vty *vty, struct route_map_index *index,
 	  return CMD_WARNING;
 	  break;
 	case RMAP_COMPILE_ERROR:
-	  vty_out (vty, "Argument is malformed.%s", VTY_NEWLINE);
-	  return CMD_WARNING;
+	  // rip, ripng and other protocols share the set metric command
+	  // but only values from 0 to 16 are valid for rip and ripng
+	  // if metric is out of range for rip and ripng, it is not for
+	  // other protocols. Do not return an error
+	  if (strcmp(command, "metric")) {
+	     vty_out (vty, "Argument is malformed.%s", VTY_NEWLINE);
+	     return CMD_WARNING;
+	  }
 	  break;
 	}
     }
@@ -424,7 +430,7 @@ route_set_ipv6_nexthop_local_compile (const char *arg)
   int ret;
   struct in6_addr *address;
 
-  address = XMALLOC (MTYPE_ROUTE_MAP_COMPILED, sizeof (struct in_addr));
+  address = XMALLOC (MTYPE_ROUTE_MAP_COMPILED, sizeof (struct in6_addr));
 
   ret = inet_pton (AF_INET6, arg, address);
 
@@ -489,7 +495,7 @@ route_set_tag_compile (const char *arg)
   return tag;
 }
 
-/* Free route map's compiled `ip nexthop' value. */
+/* Free route map's compiled `set tag' value. */
 void
 route_set_tag_free (void *rule)
 {
@@ -609,9 +615,16 @@ DEFUN (set_metric,
        "Set value\n"
        "Metric value for destination routing protocol\n"
        "Metric value\n")
-{
+{ 
   return ripng_route_set_add (vty, vty->index, "metric", argv[0]);
 }
+
+ALIAS (set_metric,
+       set_metric_addsub_cmd,
+       "set metric <+/-metric>",
+       SET_STR
+       "Metric value for destination routing protocol\n"
+       "Add or subtract metric\n")
 
 DEFUN (no_set_metric,
        no_set_metric_cmd,
@@ -633,6 +646,14 @@ ALIAS (no_set_metric,
        SET_STR
        "Metric value for destination routing protocol\n"
        "Metric value\n")
+
+ALIAS (no_set_metric,
+       no_set_metric_addsub_cmd,
+       "no set metric <+/-metric>",
+       NO_STR
+       SET_STR
+       "Metric value for destination routing protocol\n"
+       "Add or subtract metric\n")
 
 DEFUN (set_ipv6_nexthop_local,
        set_ipv6_nexthop_local_cmd,
@@ -744,8 +765,10 @@ ripng_route_map_init ()
   install_element (RMAP_NODE, &no_match_tag_val_cmd);
 
   install_element (RMAP_NODE, &set_metric_cmd);
+  install_element (RMAP_NODE, &set_metric_addsub_cmd);
   install_element (RMAP_NODE, &no_set_metric_cmd);
   install_element (RMAP_NODE, &no_set_metric_val_cmd);
+  install_element (RMAP_NODE, &no_set_metric_addsub_cmd);
   install_element (RMAP_NODE, &set_ipv6_nexthop_local_cmd);
   install_element (RMAP_NODE, &no_set_ipv6_nexthop_local_cmd);
   install_element (RMAP_NODE, &no_set_ipv6_nexthop_local_val_cmd);

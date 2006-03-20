@@ -27,6 +27,7 @@
 #include "command.h"
 #include "sockunion.h"
 #include "buffer.h"
+#include "log.h"
 
 struct filter_cisco
 {
@@ -59,6 +60,9 @@ struct filter
 
   /* Cisco access-list */
   int cisco;
+
+  /* sequence number. 0 means "no sequence number" */
+  u_long seq;
 
   union
     {
@@ -137,8 +141,8 @@ filter_free (struct filter *filter)
 }
 
 /* Return string of filter_type. */
-const static char *
-filter_type_str (struct filter *filter)
+static char *
+const filter_type_str (struct filter *filter)
 {
   switch (filter->type)
     {
@@ -264,8 +268,8 @@ access_list_delete (struct access_list *access)
   access_list_free (access);
 }
 
-/* Insert new access list to list of access_list.  Each acceess_list
-   is sorted by the name. */
+/* Insert new access list to list of access_list.  Each access_list
+   is sorted by its name. */
 struct access_list *
 access_list_insert (afi_t afi, const char *name)
 {
@@ -443,22 +447,47 @@ access_list_delete_hook (void (*func) (struct access_list *access))
 #endif /* HAVE_IPV6 */
 }
 
-/* Add new filter to the end of specified access_list. */
+/* Add new filter and sort by sequence number: filter is inserted
+ * after all filters whose sequence number are less or equal
+ * Filters with no sequence number are sorted as if seqnum was 0
+ */
 void
 access_list_filter_add (struct access_list *access, struct filter *filter)
 {
-  filter->next = NULL;
-  filter->prev = access->tail;
+	register struct filter *f;
 
-  if (access->tail)
-    access->tail->next = filter;
-  else
-    access->head = filter;
-  access->tail = filter;
+	filter->next = NULL;
 
-  /* Run hook function. */
-  if (access->master->add_hook)
-    (*access->master->add_hook) (access);
+	/* insert before first filter with greater sequence number */
+	for (f = access->head; f; f = f->next) {
+	  if (filter->seq < f->seq) {
+	    filter->next = f;
+	    filter->prev = f->prev;
+
+	    if (f->prev)
+	      f->prev->next = filter;
+	    else
+	      access->head = filter;
+
+	    f->prev = filter;
+
+	    goto _acl_filter_add_hook;
+	  }
+	}
+
+	filter->prev = access->tail;
+	if (access->tail)
+	  access->tail->next = filter;
+	else
+	  access->head = filter;
+
+	access->tail = filter;
+
+_acl_filter_add_hook:
+
+	/* Run hook function. */
+	if (access->master->add_hook)
+	  (*access->master->add_hook) (access);
 }
 
 /* If access_list has no filter then return 1. */
@@ -594,7 +623,7 @@ vty_access_list_remark_unset (struct vty *vty, afi_t afi, const char *name)
 }
 
 int
-filter_set_cisco (struct vty *vty, const char *name_str, const char *type_str,
+filter_set_cisco (struct vty *vty, const char *name_str, const char *seq, const char *type_str,
 		  const char *addr_str, const char *addr_mask_str,
 		  const char *mask_str, const char *mask_mask_str,
 		  int extended, int set)
@@ -663,6 +692,10 @@ filter_set_cisco (struct vty *vty, const char *name_str, const char *type_str,
   filter->addr.s_addr = addr.s_addr & ~addr_mask.s_addr;
   filter->addr_mask.s_addr = addr_mask.s_addr;
 
+  /* Sequence number */
+  if (seq)
+     mfilter->seq = strtoul (seq, (char **)NULL, 10);
+
   if (extended)
     {
       filter->mask.s_addr = mask.s_addr & ~mask_mask.s_addr;
@@ -696,7 +729,8 @@ filter_set_cisco (struct vty *vty, const char *name_str, const char *type_str,
 /* Standard access-list */
 DEFUN (access_list_standard,
        access_list_standard_cmd,
-       "access-list (<1-99>|<1300-1999>) (deny|permit) A.B.C.D A.B.C.D",
+       "ip access-list (<1-99>|<1300-1999>) (deny|permit) A.B.C.D A.B.C.D",
+       IP_STR
        "Add an access list entry\n"
        "IP standard access list\n"
        "IP standard access list (expanded range)\n"
@@ -705,13 +739,32 @@ DEFUN (access_list_standard,
        "Address to match\n"
        "Wildcard bits\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], argv[2], argv[3],
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], argv[2], argv[3],
+			   NULL, NULL, 0, 1);
+}
+
+DEFUN (access_list_standard_seq,
+       access_list_standard_seq_cmd,
+       "ip access-list (<1-99>|<1300-1999>) seq <1-4294967295> (deny|permit) A.B.C.D A.B.C.D",
+       IP_STR
+       "Add an access list entry\n"
+       "IP standard access list\n"
+       "IP standard access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Address to match\n"
+       "Wildcard bits\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], argv[3], argv[4], 
 			   NULL, NULL, 0, 1);
 }
 
 DEFUN (access_list_standard_nomask,
        access_list_standard_nomask_cmd,
-       "access-list (<1-99>|<1300-1999>) (deny|permit) A.B.C.D",
+       "ip access-list (<1-99>|<1300-1999>) (deny|permit) A.B.C.D",
+       IP_STR
        "Add an access list entry\n"
        "IP standard access list\n"
        "IP standard access list (expanded range)\n"
@@ -719,13 +772,31 @@ DEFUN (access_list_standard_nomask,
        "Specify packets to forward\n"
        "Address to match\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], argv[2], "0.0.0.0",
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], argv[2], "0.0.0.0",
+			   NULL, NULL, 0, 1);
+}
+
+DEFUN (access_list_standard_nomask_seq,
+       access_list_standard_nomask_seq_cmd,
+       "ip access-list (<1-99>|<1300-1999>) seq <1-4294967295> (deny|permit) A.B.C.D",
+       IP_STR
+       "Add an access list entry\n"
+       "IP standard access list\n"
+       "IP standard access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Address to match\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], argv[3], "0.0.0.0",
 			   NULL, NULL, 0, 1);
 }
 
 DEFUN (access_list_standard_host,
        access_list_standard_host_cmd,
-       "access-list (<1-99>|<1300-1999>) (deny|permit) host A.B.C.D",
+       "ip access-list (<1-99>|<1300-1999>) (deny|permit) host A.B.C.D",
+       IP_STR
        "Add an access list entry\n"
        "IP standard access list\n"
        "IP standard access list (expanded range)\n"
@@ -734,13 +805,32 @@ DEFUN (access_list_standard_host,
        "A single host address\n"
        "Address to match\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], argv[2], "0.0.0.0",
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], argv[2], "0.0.0.0",
+			   NULL, NULL, 0, 1);
+}
+
+DEFUN (access_list_standard_host_seq,
+       access_list_standard_host_seq_cmd,
+       "ip access-list (<1-99>|<1300-1999>) seq <1-4294967295> (deny|permit) host A.B.C.D",
+       IP_STR
+       "Add an access list entry\n"
+       "IP standard access list\n"
+       "IP standard access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "A single host address\n"
+       "Address to match\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], argv[3], "0.0.0.0",
 			   NULL, NULL, 0, 1);
 }
 
 DEFUN (access_list_standard_any,
        access_list_standard_any_cmd,
-       "access-list (<1-99>|<1300-1999>) (deny|permit) any",
+       "ip access-list (<1-99>|<1300-1999>) (deny|permit) any",
+       IP_STR
        "Add an access list entry\n"
        "IP standard access list\n"
        "IP standard access list (expanded range)\n"
@@ -748,14 +838,32 @@ DEFUN (access_list_standard_any,
        "Specify packets to forward\n"
        "Any source host\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], "0.0.0.0",
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], "0.0.0.0",
+			   "255.255.255.255", NULL, NULL, 0, 1);
+}
+
+DEFUN (access_list_standard_any_seq,
+       access_list_standard_any_seq_cmd,
+       "ip access-list (<1-99>|<1300-1999>) seq <1-4294967295> (deny|permit) any",
+       IP_STR
+       "Add an access list entry\n"
+       "IP standard access list\n"
+       "IP standard access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any source host\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], "0.0.0.0",
 			   "255.255.255.255", NULL, NULL, 0, 1);
 }
 
 DEFUN (no_access_list_standard,
        no_access_list_standard_cmd,
-       "no access-list (<1-99>|<1300-1999>) (deny|permit) A.B.C.D A.B.C.D",
+       "no ip access-list (<1-99>|<1300-1999>) (deny|permit) A.B.C.D A.B.C.D",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
        "IP standard access list\n"
        "IP standard access list (expanded range)\n"
@@ -764,14 +872,34 @@ DEFUN (no_access_list_standard,
        "Address to match\n"
        "Wildcard bits\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], argv[2], argv[3],
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], argv[2], argv[3],
+			   NULL, NULL, 0, 0);
+}
+
+DEFUN (no_access_list_standard_seq,
+       no_access_list_standard_seq_cmd,
+       "no ip access-list (<1-99>|<1300-1999>) seq <1-4294967295> (deny|permit) A.B.C.D A.B.C.D",
+       NO_STR
+       IP_STR
+       "Add an access list entry\n"
+       "IP standard access list\n"
+       "IP standard access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Address to match\n"
+       "Wildcard bits\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], argv[3], argv[4],
 			   NULL, NULL, 0, 0);
 }
 
 DEFUN (no_access_list_standard_nomask,
        no_access_list_standard_nomask_cmd,
-       "no access-list (<1-99>|<1300-1999>) (deny|permit) A.B.C.D",
+       "no ip access-list (<1-99>|<1300-1999>) (deny|permit) A.B.C.D",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
        "IP standard access list\n"
        "IP standard access list (expanded range)\n"
@@ -779,14 +907,33 @@ DEFUN (no_access_list_standard_nomask,
        "Specify packets to forward\n"
        "Address to match\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], argv[2], "0.0.0.0",
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], argv[2], "0.0.0.0",
+			   NULL, NULL, 0, 0);
+}
+
+DEFUN (no_access_list_standard_nomask_seq,
+       no_access_list_standard_nomask_seq_cmd,
+       "no ip access-list (<1-99>|<1300-1999>) seq <1-4294967295> (deny|permit) A.B.C.D",
+       NO_STR
+       IP_STR
+       "Add an access list entry\n"
+       "IP standard access list\n"
+       "IP standard access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Address to match\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], argv[3], "0.0.0.0",
 			   NULL, NULL, 0, 0);
 }
 
 DEFUN (no_access_list_standard_host,
        no_access_list_standard_host_cmd,
-       "no access-list (<1-99>|<1300-1999>) (deny|permit) host A.B.C.D",
+       "no ip access-list (<1-99>|<1300-1999>) (deny|permit) host A.B.C.D",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
        "IP standard access list\n"
        "IP standard access list (expanded range)\n"
@@ -795,14 +942,34 @@ DEFUN (no_access_list_standard_host,
        "A single host address\n"
        "Address to match\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], argv[2], "0.0.0.0",
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], argv[2], "0.0.0.0",
+			   NULL, NULL, 0, 0);
+}
+
+DEFUN (no_access_list_standard_host_seq,
+       no_access_list_standard_host_seq_cmd,
+       "no ip access-list (<1-99>|<1300-1999>) seq <1-4294967295> (deny|permit) host A.B.C.D",
+       NO_STR
+       IP_STR
+       "Add an access list entry\n"
+       "IP standard access list\n"
+       "IP standard access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "A single host address\n"
+       "Address to match\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], argv[3], "0.0.0.0",
 			   NULL, NULL, 0, 0);
 }
 
 DEFUN (no_access_list_standard_any,
        no_access_list_standard_any_cmd,
-       "no access-list (<1-99>|<1300-1999>) (deny|permit) any",
+       "no ip access-list (<1-99>|<1300-1999>) (deny|permit) any",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
        "IP standard access list\n"
        "IP standard access list (expanded range)\n"
@@ -810,14 +977,33 @@ DEFUN (no_access_list_standard_any,
        "Specify packets to forward\n"
        "Any source host\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], "0.0.0.0",
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], "0.0.0.0",
+			   "255.255.255.255", NULL, NULL, 0, 0);
+}
+
+DEFUN (no_access_list_standard_any_seq,
+       no_access_list_standard_any_seq_cmd,
+       "no ip access-list (<1-99>|<1300-1999>) seq <1-4294967295> (deny|permit) any",
+       NO_STR
+       IP_STR
+       "Add an access list entry\n"
+       "IP standard access list\n"
+       "IP standard access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any source host\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], "0.0.0.0",
 			   "255.255.255.255", NULL, NULL, 0, 0);
 }
 
 /* Extended access-list */
 DEFUN (access_list_extended,
        access_list_extended_cmd,
-       "access-list (<100-199>|<2000-2699>) (deny|permit) ip A.B.C.D A.B.C.D A.B.C.D A.B.C.D",
+       "ip access-list (<100-199>|<2000-2699>) (deny|permit) ip A.B.C.D A.B.C.D A.B.C.D A.B.C.D",
+       IP_STR
        "Add an access list entry\n"
        "IP extended access list\n"
        "IP extended access list (expanded range)\n"
@@ -829,13 +1015,35 @@ DEFUN (access_list_extended,
        "Destination address\n"
        "Destination Wildcard bits\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], argv[2],
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], argv[2],
 			   argv[3], argv[4], argv[5], 1 ,1);
+}
+
+DEFUN (access_list_extended_seq,
+       access_list_extended_seq_cmd,
+       "ip access-list (<100-199>|<2000-2699>) seq <1-4294967295> (deny|permit) ip A.B.C.D A.B.C.D A.B.C.D A.B.C.D",
+       IP_STR
+       "Add an access list entry\n"
+       "IP extended access list\n"
+       "IP extended access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any Internet Protocol\n"
+       "Source address\n"
+       "Source wildcard bits\n"
+       "Destination address\n"
+       "Destination Wildcard bits\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2],
+			   argv[3], argv[4], argv[5], argv[6], 1 ,1);
 }
 
 DEFUN (access_list_extended_mask_any,
        access_list_extended_mask_any_cmd,
-       "access-list (<100-199>|<2000-2699>) (deny|permit) ip A.B.C.D A.B.C.D any",
+       "ip access-list (<100-199>|<2000-2699>) (deny|permit) ip A.B.C.D A.B.C.D any",
+       IP_STR
        "Add an access list entry\n"
        "IP extended access list\n"
        "IP extended access list (expanded range)\n"
@@ -846,14 +1054,36 @@ DEFUN (access_list_extended_mask_any,
        "Source wildcard bits\n"
        "Any destination host\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], argv[2],
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], argv[2],
 			   argv[3], "0.0.0.0",
+			   "255.255.255.255", 1, 1);
+}
+
+DEFUN (access_list_extended_mask_any_seq,
+       access_list_extended_mask_any_seq_cmd,
+       "ip access-list (<100-199>|<2000-2699>) seq <1-4294967295> (deny|permit) ip A.B.C.D A.B.C.D any",
+       IP_STR
+       "Add an access list entry\n"
+       "IP extended access list\n"
+       "IP extended access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any Internet Protocol\n"
+       "Source address\n"
+       "Source wildcard bits\n"
+       "Any destination host\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2],
+			   argv[3], argv[4], "0.0.0.0",
 			   "255.255.255.255", 1, 1);
 }
 
 DEFUN (access_list_extended_any_mask,
        access_list_extended_any_mask_cmd,
-       "access-list (<100-199>|<2000-2699>) (deny|permit) ip any A.B.C.D A.B.C.D",
+       "ip access-list (<100-199>|<2000-2699>) (deny|permit) ip any A.B.C.D A.B.C.D",
+       IP_STR
        "Add an access list entry\n"
        "IP extended access list\n"
        "IP extended access list (expanded range)\n"
@@ -864,14 +1094,36 @@ DEFUN (access_list_extended_any_mask,
        "Destination address\n"
        "Destination Wildcard bits\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], "0.0.0.0",
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], "0.0.0.0",
 			   "255.255.255.255", argv[2],
 			   argv[3], 1, 1);
 }
 
+DEFUN (access_list_extended_any_mask_seq,
+       access_list_extended_any_mask_seq_cmd,
+       "ip access-list (<100-199>|<2000-2699>) seq <1-4294967295> (deny|permit) ip any A.B.C.D A.B.C.D",
+       IP_STR
+       "Add an access list entry\n"
+       "IP extended access list\n"
+       "IP extended access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+      "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any Internet Protocol\n"
+       "Any source host\n"
+       "Destination address\n"
+       "Destination Wildcard bits\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], "0.0.0.0",
+			   "255.255.255.255", argv[3],
+			   argv[4], 1, 1);
+}
+
 DEFUN (access_list_extended_any_any,
        access_list_extended_any_any_cmd,
-       "access-list (<100-199>|<2000-2699>) (deny|permit) ip any any",
+       "ip access-list (<100-199>|<2000-2699>) (deny|permit) ip any any",
+       IP_STR
        "Add an access list entry\n"
        "IP extended access list\n"
        "IP extended access list (expanded range)\n"
@@ -881,14 +1133,35 @@ DEFUN (access_list_extended_any_any,
        "Any source host\n"
        "Any destination host\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], "0.0.0.0",
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], "0.0.0.0",
+			   "255.255.255.255", "0.0.0.0",
+			   "255.255.255.255", 1, 1);
+}
+
+DEFUN (access_list_extended_any_any_seq,
+       access_list_extended_any_any_seq_cmd,
+       "ip access-list (<100-199>|<2000-2699>) seq <1-4294967295> (deny|permit) ip any any",
+       IP_STR
+       "Add an access list entry\n"
+       "IP extended access list\n"
+       "IP extended access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any Internet Protocol\n"
+       "Any source host\n"
+       "Any destination host\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], "0.0.0.0",
 			   "255.255.255.255", "0.0.0.0",
 			   "255.255.255.255", 1, 1);
 }
 
 DEFUN (access_list_extended_mask_host,
        access_list_extended_mask_host_cmd,
-       "access-list (<100-199>|<2000-2699>) (deny|permit) ip A.B.C.D A.B.C.D host A.B.C.D",
+       "ip access-list (<100-199>|<2000-2699>) (deny|permit) ip A.B.C.D A.B.C.D host A.B.C.D",
+       IP_STR
        "Add an access list entry\n"
        "IP extended access list\n"
        "IP extended access list (expanded range)\n"
@@ -900,14 +1173,37 @@ DEFUN (access_list_extended_mask_host,
        "A single destination host\n"
        "Destination address\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], argv[2],
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], argv[2],
 			   argv[3], argv[4],
+			   "0.0.0.0", 1, 1);
+}
+
+DEFUN (access_list_extended_mask_host_seq,
+       access_list_extended_mask_host_seq_cmd,
+       "ip access-list (<100-199>|<2000-2699>) seq <1-4294967295> (deny|permit) ip A.B.C.D A.B.C.D host A.B.C.D",
+       IP_STR
+       "Add an access list entry\n"
+       "IP extended access list\n"
+       "IP extended access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any Internet Protocol\n"
+       "Source address\n"
+       "Source wildcard bits\n"
+       "A single destination host\n"
+       "Destination address\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2],
+			   argv[3], argv[4], argv[5],
 			   "0.0.0.0", 1, 1);
 }
 
 DEFUN (access_list_extended_host_mask,
        access_list_extended_host_mask_cmd,
-       "access-list (<100-199>|<2000-2699>) (deny|permit) ip host A.B.C.D A.B.C.D A.B.C.D",
+       "ip access-list (<100-199>|<2000-2699>) (deny|permit) ip host A.B.C.D A.B.C.D A.B.C.D",
+       IP_STR
        "Add an access list entry\n"
        "IP extended access list\n"
        "IP extended access list (expanded range)\n"
@@ -919,14 +1215,37 @@ DEFUN (access_list_extended_host_mask,
        "Destination address\n"
        "Destination Wildcard bits\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], argv[2],
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], argv[2],
 			   "0.0.0.0", argv[3],
 			   argv[4], 1, 1);
 }
 
+DEFUN (access_list_extended_host_mask_seq,
+       access_list_extended_host_mask_seq_cmd,
+       "ip access-list (<100-199>|<2000-2699>) seq <1-4294967295> (deny|permit) ip host A.B.C.D A.B.C.D A.B.C.D",
+       IP_STR
+       "Add an access list entry\n"
+       "IP extended access list\n"
+       "IP extended access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any Internet Protocol\n"
+       "A single source host\n"
+       "Source address\n"
+       "Destination address\n"
+       "Destination Wildcard bits\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], argv[3],
+			   "0.0.0.0", argv[4],
+			   argv[5], 1, 1);
+}
+
 DEFUN (access_list_extended_host_host,
        access_list_extended_host_host_cmd,
-       "access-list (<100-199>|<2000-2699>) (deny|permit) ip host A.B.C.D host A.B.C.D",
+       "ip access-list (<100-199>|<2000-2699>) (deny|permit) ip host A.B.C.D host A.B.C.D",
+       IP_STR
        "Add an access list entry\n"
        "IP extended access list\n"
        "IP extended access list (expanded range)\n"
@@ -938,14 +1257,37 @@ DEFUN (access_list_extended_host_host,
        "A single destination host\n"
        "Destination address\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], argv[2],
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], argv[2],
 			   "0.0.0.0", argv[3],
+			   "0.0.0.0", 1, 1);
+}
+
+DEFUN (access_list_extended_host_host_seq,
+       access_list_extended_host_host_seq_cmd,
+       "ip access-list (<100-199>|<2000-2699>) seq <1-4294967295> (deny|permit) ip host A.B.C.D host A.B.C.D",
+       IP_STR
+       "Add an access list entry\n"
+       "IP extended access list\n"
+       "IP extended access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any Internet Protocol\n"
+       "A single source host\n"
+       "Source address\n"
+       "A single destination host\n"
+       "Destination address\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], argv[3],
+			   "0.0.0.0", argv[4],
 			   "0.0.0.0", 1, 1);
 }
 
 DEFUN (access_list_extended_any_host,
        access_list_extended_any_host_cmd,
-       "access-list (<100-199>|<2000-2699>) (deny|permit) ip any host A.B.C.D",
+       "ip access-list (<100-199>|<2000-2699>) (deny|permit) ip any host A.B.C.D",
+       IP_STR
        "Add an access list entry\n"
        "IP extended access list\n"
        "IP extended access list (expanded range)\n"
@@ -956,14 +1298,36 @@ DEFUN (access_list_extended_any_host,
        "A single destination host\n"
        "Destination address\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], "0.0.0.0",
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], "0.0.0.0",
 			   "255.255.255.255", argv[2],
+			   "0.0.0.0", 1, 1);
+}
+
+DEFUN (access_list_extended_any_host_seq,
+       access_list_extended_any_host_seq_cmd,
+       "ip access-list (<100-199>|<2000-2699>) seq <1-4294967295> (deny|permit) ip any host A.B.C.D",
+       IP_STR
+       "Add an access list entry\n"
+       "IP extended access list\n"
+       "IP extended access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any Internet Protocol\n"
+       "Any source host\n"
+       "A single destination host\n"
+       "Destination address\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], "0.0.0.0",
+			   "255.255.255.255", argv[3],
 			   "0.0.0.0", 1, 1);
 }
 
 DEFUN (access_list_extended_host_any,
        access_list_extended_host_any_cmd,
-       "access-list (<100-199>|<2000-2699>) (deny|permit) ip host A.B.C.D any",
+       "ip access-list (<100-199>|<2000-2699>) (deny|permit) ip host A.B.C.D any",
+       IP_STR
        "Add an access list entry\n"
        "IP extended access list\n"
        "IP extended access list (expanded range)\n"
@@ -974,15 +1338,37 @@ DEFUN (access_list_extended_host_any,
        "Source address\n"
        "Any destination host\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], argv[2],
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], argv[2],
+			   "0.0.0.0", "0.0.0.0",
+			   "255.255.255.255", 1, 1);
+}
+
+DEFUN (access_list_extended_host_any_seq,
+       access_list_extended_host_any_seq_cmd,
+       "ip access-list (<100-199>|<2000-2699>) seq <1-4294967295> (deny|permit) ip host A.B.C.D any",
+       IP_STR
+       "Add an access list entry\n"
+       "IP extended access list\n"
+       "IP extended access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any Internet Protocol\n"
+       "A single source host\n"
+       "Source address\n"
+       "Any destination host\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], argv[3],
 			   "0.0.0.0", "0.0.0.0",
 			   "255.255.255.255", 1, 1);
 }
 
 DEFUN (no_access_list_extended,
        no_access_list_extended_cmd,
-       "no access-list (<100-199>|<2000-2699>) (deny|permit) ip A.B.C.D A.B.C.D A.B.C.D A.B.C.D",
+       "no ip access-list (<100-199>|<2000-2699>) (deny|permit) ip A.B.C.D A.B.C.D A.B.C.D A.B.C.D",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
        "IP extended access list\n"
        "IP extended access list (expanded range)\n"
@@ -994,14 +1380,37 @@ DEFUN (no_access_list_extended,
        "Destination address\n"
        "Destination Wildcard bits\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], argv[2],
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], argv[2],
 			   argv[3], argv[4], argv[5], 1, 0);
+}
+
+DEFUN (no_access_list_extended_seq,
+       no_access_list_extended_seq_cmd,
+       "no ip access-list (<100-199>|<2000-2699>) seq <1-4294967295> (deny|permit) ip A.B.C.D A.B.C.D A.B.C.D A.B.C.D",
+       NO_STR
+       IP_STR
+       "Add an access list entry\n"
+       "IP extended access list\n"
+       "IP extended access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any Internet Protocol\n"
+       "Source address\n"
+       "Source wildcard bits\n"
+       "Destination address\n"
+       "Destination Wildcard bits\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2],
+			   argv[3], argv[4], argv[5], argv[6], 1, 0);
 }
 
 DEFUN (no_access_list_extended_mask_any,
        no_access_list_extended_mask_any_cmd,
-       "no access-list (<100-199>|<2000-2699>) (deny|permit) ip A.B.C.D A.B.C.D any",
+       "no ip access-list (<100-199>|<2000-2699>) (deny|permit) ip A.B.C.D A.B.C.D any",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
        "IP extended access list\n"
        "IP extended access list (expanded range)\n"
@@ -1012,15 +1421,38 @@ DEFUN (no_access_list_extended_mask_any,
        "Source wildcard bits\n"
        "Any destination host\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], argv[2],
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], argv[2],
 			   argv[3], "0.0.0.0",
+			   "255.255.255.255", 1, 0);
+}
+
+DEFUN (no_access_list_extended_mask_any_seq,
+       no_access_list_extended_mask_any_seq_cmd,
+       "no ip access-list (<100-199>|<2000-2699>) seq <1-4294967295> (deny|permit) ip A.B.C.D A.B.C.D any",
+       NO_STR
+       IP_STR
+       "Add an access list entry\n"
+       "IP extended access list\n"
+       "IP extended access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any Internet Protocol\n"
+       "Source address\n"
+       "Source wildcard bits\n"
+       "Any destination host\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2],
+			   argv[3], argv[4], "0.0.0.0",
 			   "255.255.255.255", 1, 0);
 }
 
 DEFUN (no_access_list_extended_any_mask,
        no_access_list_extended_any_mask_cmd,
-       "no access-list (<100-199>|<2000-2699>) (deny|permit) ip any A.B.C.D A.B.C.D",
+       "no ip access-list (<100-199>|<2000-2699>) (deny|permit) ip any A.B.C.D A.B.C.D",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
        "IP extended access list\n"
        "IP extended access list (expanded range)\n"
@@ -1031,15 +1463,38 @@ DEFUN (no_access_list_extended_any_mask,
        "Destination address\n"
        "Destination Wildcard bits\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], "0.0.0.0",
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], "0.0.0.0",
 			   "255.255.255.255", argv[2],
 			   argv[3], 1, 0);
 }
 
+DEFUN (no_access_list_extended_any_mask_seq,
+       no_access_list_extended_any_mask_seq_cmd,
+       "no ip access-list (<100-199>|<2000-2699>) seq <1-4294967295> (deny|permit) ip any A.B.C.D A.B.C.D",
+       NO_STR
+       IP_STR
+       "Add an access list entry\n"
+       "IP extended access list\n"
+       "IP extended access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any Internet Protocol\n"
+       "Any source host\n"
+       "Destination address\n"
+       "Destination Wildcard bits\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], "0.0.0.0",
+			   "255.255.255.255", argv[3],
+			   argv[4], 1, 0);
+}
+
 DEFUN (no_access_list_extended_any_any,
        no_access_list_extended_any_any_cmd,
-       "no access-list (<100-199>|<2000-2699>) (deny|permit) ip any any",
+       "no ip access-list (<100-199>|<2000-2699>) (deny|permit) ip any any",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
        "IP extended access list\n"
        "IP extended access list (expanded range)\n"
@@ -1049,15 +1504,37 @@ DEFUN (no_access_list_extended_any_any,
        "Any source host\n"
        "Any destination host\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], "0.0.0.0",
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], "0.0.0.0",
+			   "255.255.255.255", "0.0.0.0",
+			   "255.255.255.255", 1, 0);
+}
+
+DEFUN (no_access_list_extended_any_any_seq,
+       no_access_list_extended_any_any_seq_cmd,
+       "no ip access-list (<100-199>|<2000-2699>) seq <1-4294967295> (deny|permit) ip any any",
+       NO_STR
+       IP_STR
+       "Add an access list entry\n"
+       "IP extended access list\n"
+       "IP extended access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any Internet Protocol\n"
+       "Any source host\n"
+       "Any destination host\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], "0.0.0.0",
 			   "255.255.255.255", "0.0.0.0",
 			   "255.255.255.255", 1, 0);
 }
 
 DEFUN (no_access_list_extended_mask_host,
        no_access_list_extended_mask_host_cmd,
-       "no access-list (<100-199>|<2000-2699>) (deny|permit) ip A.B.C.D A.B.C.D host A.B.C.D",
+       "no ip access-list (<100-199>|<2000-2699>) (deny|permit) ip A.B.C.D A.B.C.D host A.B.C.D",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
        "IP extended access list\n"
        "IP extended access list (expanded range)\n"
@@ -1069,15 +1546,39 @@ DEFUN (no_access_list_extended_mask_host,
        "A single destination host\n"
        "Destination address\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], argv[2],
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], argv[2],
 			   argv[3], argv[4],
+			   "0.0.0.0", 1, 0);
+}
+
+DEFUN (no_access_list_extended_mask_host_seq,
+       no_access_list_extended_mask_host_seq_cmd,
+       "no ip access-list (<100-199>|<2000-2699>) seq <1-4294967295> (deny|permit) ip A.B.C.D A.B.C.D host A.B.C.D",
+       NO_STR
+       IP_STR
+       "Add an access list entry\n"
+       "IP extended access list\n"
+       "IP extended access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any Internet Protocol\n"
+       "Source address\n"
+       "Source wildcard bits\n"
+       "A single destination host\n"
+       "Destination address\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2],
+			   argv[3], argv[4], argv[5],
 			   "0.0.0.0", 1, 0);
 }
 
 DEFUN (no_access_list_extended_host_mask,
        no_access_list_extended_host_mask_cmd,
-       "no access-list (<100-199>|<2000-2699>) (deny|permit) ip host A.B.C.D A.B.C.D A.B.C.D",
+       "no ip access-list (<100-199>|<2000-2699>) (deny|permit) ip host A.B.C.D A.B.C.D A.B.C.D",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
        "IP extended access list\n"
        "IP extended access list (expanded range)\n"
@@ -1089,15 +1590,39 @@ DEFUN (no_access_list_extended_host_mask,
        "Destination address\n"
        "Destination Wildcard bits\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], argv[2],
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], argv[2],
 			   "0.0.0.0", argv[3],
 			   argv[4], 1, 0);
 }
 
+DEFUN (no_access_list_extended_host_mask_seq,
+       no_access_list_extended_host_mask_seq_cmd,
+       "no ip access-list (<100-199>|<2000-2699>) seq <1-4294967295> (deny|permit) ip host A.B.C.D A.B.C.D A.B.C.D",
+       NO_STR
+       IP_STR
+       "Add an access list entry\n"
+       "IP extended access list\n"
+       "IP extended access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any Internet Protocol\n"
+       "A single source host\n"
+       "Source address\n"
+       "Destination address\n"
+       "Destination Wildcard bits\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], argv[3], 
+			   "0.0.0.0", argv[4],
+			   argv[5], 1, 0);
+}
+
 DEFUN (no_access_list_extended_host_host,
        no_access_list_extended_host_host_cmd,
-       "no access-list (<100-199>|<2000-2699>) (deny|permit) ip host A.B.C.D host A.B.C.D",
+       "no ip access-list (<100-199>|<2000-2699>) (deny|permit) ip host A.B.C.D host A.B.C.D",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
        "IP extended access list\n"
        "IP extended access list (expanded range)\n"
@@ -1109,15 +1634,39 @@ DEFUN (no_access_list_extended_host_host,
        "A single destination host\n"
        "Destination address\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], argv[2],
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], argv[2],
 			   "0.0.0.0", argv[3],
+			   "0.0.0.0", 1, 0);
+}
+
+DEFUN (no_access_list_extended_host_host_seq,
+       no_access_list_extended_host_host_seq_cmd,
+       "no ip access-list (<100-199>|<2000-2699>) seq <1-4294967295> (deny|permit) ip host A.B.C.D host A.B.C.D",
+       NO_STR
+       IP_STR
+       "Add an access list entry\n"
+       "IP extended access list\n"
+       "IP extended access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any Internet Protocol\n"
+       "A single source host\n"
+       "Source address\n"
+       "A single destination host\n"
+       "Destination address\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], argv[3],
+			   "0.0.0.0", argv[4],
 			   "0.0.0.0", 1, 0);
 }
 
 DEFUN (no_access_list_extended_any_host,
        no_access_list_extended_any_host_cmd,
-       "no access-list (<100-199>|<2000-2699>) (deny|permit) ip any host A.B.C.D",
+       "no ip access-list (<100-199>|<2000-2699>) (deny|permit) ip any host A.B.C.D",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
        "IP extended access list\n"
        "IP extended access list (expanded range)\n"
@@ -1128,15 +1677,38 @@ DEFUN (no_access_list_extended_any_host,
        "A single destination host\n"
        "Destination address\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], "0.0.0.0",
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], "0.0.0.0",
 			   "255.255.255.255", argv[2],
+			   "0.0.0.0", 1, 0);
+}
+
+DEFUN (no_access_list_extended_any_host_seq,
+       no_access_list_extended_any_host_seq_cmd,
+       "no ip access-list (<100-199>|<2000-2699>) seq <1-4294967295> (deny|permit) ip any host A.B.C.D",
+       NO_STR
+       IP_STR
+       "Add an access list entry\n"
+       "IP extended access list\n"
+       "IP extended access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any Internet Protocol\n"
+       "Any source host\n"
+       "A single destination host\n"
+       "Destination address\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], "0.0.0.0",
+			   "255.255.255.255", argv[3],
 			   "0.0.0.0", 1, 0);
 }
 
 DEFUN (no_access_list_extended_host_any,
        no_access_list_extended_host_any_cmd,
-       "no access-list (<100-199>|<2000-2699>) (deny|permit) ip host A.B.C.D any",
+       "no ip access-list (<100-199>|<2000-2699>) (deny|permit) ip host A.B.C.D any",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
        "IP extended access list\n"
        "IP extended access list (expanded range)\n"
@@ -1147,13 +1719,35 @@ DEFUN (no_access_list_extended_host_any,
        "Source address\n"
        "Any destination host\n")
 {
-  return filter_set_cisco (vty, argv[0], argv[1], argv[2],
+  return filter_set_cisco (vty, argv[0], NULL, argv[1], argv[2],
+			   "0.0.0.0", "0.0.0.0",
+			   "255.255.255.255", 1, 0);
+}
+
+DEFUN (no_access_list_extended_host_any_seq,
+       no_access_list_extended_host_any_seq_cmd,
+       "no ip access-list (<100-199>|<2000-2699>) seq <1-4294967295> (deny|permit) ip host A.B.C.D any",
+       NO_STR
+       IP_STR
+       "Add an access list entry\n"
+       "IP extended access list\n"
+       "IP extended access list (expanded range)\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any Internet Protocol\n"
+       "A single source host\n"
+       "Source address\n"
+       "Any destination host\n")
+{
+  return filter_set_cisco (vty, argv[0], argv[1], argv[2], argv[3],
 			   "0.0.0.0", "0.0.0.0",
 			   "255.255.255.255", 1, 0);
 }
 
 int
-filter_set_zebra (struct vty *vty, const char *name_str, const char *type_str,
+filter_set_zebra (struct vty *vty, const char *name_str, const char *seq, const char *type_str,
 		  afi_t afi, const char *prefix_str, int exact, int set)
 {
   int ret;
@@ -1205,6 +1799,10 @@ filter_set_zebra (struct vty *vty, const char *name_str, const char *type_str,
   filter = &mfilter->u.zfilter;
   prefix_copy (&filter->prefix, &p);
 
+  /* Sequence number */
+  if (seq)
+     mfilter->seq = strtoul (seq, (char **)NULL, 10);
+
   /* "exact-match" */
   if (exact)
     filter->exact = 1;
@@ -1236,91 +1834,194 @@ filter_set_zebra (struct vty *vty, const char *name_str, const char *type_str,
 /* Zebra access-list */
 DEFUN (access_list,
        access_list_cmd,
-       "access-list WORD (deny|permit) A.B.C.D/M",
+       "ip access-list WORD (deny|permit) A.B.C.D/M",
+       IP_STR
        "Add an access list entry\n"
-       "IP zebra access-list name\n"
+       "IP named access-list name\n"
        "Specify packets to reject\n"
        "Specify packets to forward\n"
        "Prefix to match. e.g. 10.0.0.0/8\n")
 {
-  return filter_set_zebra (vty, argv[0], argv[1], AFI_IP, argv[2], 0, 1);
+  return filter_set_zebra (vty, argv[0], NULL, argv[1], AFI_IP, argv[2], 0, 1);
+}
+
+/* Zebra access-list with sequence number */
+DEFUN (access_list_seq,
+       access_list_seq_cmd,
+       "ip access-list WORD seq <1-4294967295> (deny|permit) A.B.C.D/M",
+       IP_STR
+       "Add an access list entry\n"
+       "IP named access-list name\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Prefix to match. e.g. 10.0.0.0/8\n")
+{
+  return filter_set_zebra (vty, argv[0], argv[1], argv[2], AFI_IP, argv[3], 0, 1);
 }
 
 DEFUN (access_list_exact,
        access_list_exact_cmd,
-       "access-list WORD (deny|permit) A.B.C.D/M exact-match",
+       "ip access-list WORD (deny|permit) A.B.C.D/M exact-match",
+       IP_STR
        "Add an access list entry\n"
-       "IP zebra access-list name\n"
+       "IP named access-list name\n"
        "Specify packets to reject\n"
        "Specify packets to forward\n"
        "Prefix to match. e.g. 10.0.0.0/8\n"
        "Exact match of the prefixes\n")
 {
-  return filter_set_zebra (vty, argv[0], argv[1], AFI_IP, argv[2], 1, 1);
+  return filter_set_zebra (vty, argv[0], NULL, argv[1], AFI_IP, argv[2], 1, 1);
+}
+
+DEFUN (access_list_exact_seq,
+       access_list_exact_seq_cmd,
+       "ip access-list WORD seq <1-4294967295> (deny|permit) A.B.C.D/M exact-match",
+       IP_STR
+       "Add an access list entry\n"
+       "IP named access-list name\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Prefix to match. e.g. 10.0.0.0/8\n"
+       "Exact match of the prefixes\n")
+{
+  return filter_set_zebra (vty, argv[0], argv[1], argv[2], AFI_IP, argv[3], 1, 1);
 }
 
 DEFUN (access_list_any,
        access_list_any_cmd,
-       "access-list WORD (deny|permit) any",
+       "ip access-list WORD (deny|permit) any",
+       IP_STR
        "Add an access list entry\n"
-       "IP zebra access-list name\n"
+       "IP named access-list name\n"
        "Specify packets to reject\n"
        "Specify packets to forward\n"
        "Prefix to match. e.g. 10.0.0.0/8\n")
 {
-  return filter_set_zebra (vty, argv[0], argv[1], AFI_IP, "0.0.0.0/0", 0, 1);
+  return filter_set_zebra (vty, argv[0], NULL, argv[1], AFI_IP, "0.0.0.0/0", 0, 1);
+}
+
+DEFUN (access_list_any_seq,
+       access_list_any_seq_cmd,
+       "ip access-list WORD seq <1-4294967295> (deny|permit) any",
+       IP_STR
+       "Add an access list entry\n"
+       "IP named access-list name\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Prefix to match. e.g. 10.0.0.0/8\n")
+{
+  return filter_set_zebra (vty, argv[0], argv[1], argv[2], AFI_IP, "0.0.0.0/0", 0, 1);
 }
 
 DEFUN (no_access_list,
        no_access_list_cmd,
-       "no access-list WORD (deny|permit) A.B.C.D/M",
+       "no ip access-list WORD (deny|permit) A.B.C.D/M",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
-       "IP zebra access-list name\n"
+       "IP named access-list name\n"
        "Specify packets to reject\n"
        "Specify packets to forward\n"
        "Prefix to match. e.g. 10.0.0.0/8\n")
 {
-  return filter_set_zebra (vty, argv[0], argv[1], AFI_IP, argv[2], 0, 0);
+  return filter_set_zebra (vty, argv[0], NULL, argv[1], AFI_IP, argv[2], 0, 0);
+}
+
+DEFUN (no_access_list_seq,
+       no_access_list_seq_cmd,
+       "no ip access-list WORD seq <1-4294967295> (deny|permit) A.B.C.D/M",
+       NO_STR
+       IP_STR
+       "Add an access list entry\n"
+       "IP named access-list name\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Prefix to match. e.g. 10.0.0.0/8\n")
+{
+  return filter_set_zebra (vty, argv[0], argv[1], argv[2], AFI_IP, argv[3], 0, 0);
 }
 
 DEFUN (no_access_list_exact,
        no_access_list_exact_cmd,
-       "no access-list WORD (deny|permit) A.B.C.D/M exact-match",
+       "no ip access-list WORD (deny|permit) A.B.C.D/M exact-match",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
-       "IP zebra access-list name\n"
+       "IP named access-list name\n"
        "Specify packets to reject\n"
        "Specify packets to forward\n"
        "Prefix to match. e.g. 10.0.0.0/8\n"
        "Exact match of the prefixes\n")
 {
-  return filter_set_zebra (vty, argv[0], argv[1], AFI_IP, argv[2], 1, 0);
+  return filter_set_zebra (vty, argv[0], NULL, argv[1], AFI_IP, argv[2], 1, 0);
+}
+
+DEFUN (no_access_list_exact_seq,
+       no_access_list_exact_seq_cmd,
+       "no ip access-list WORD seq <1-4294967295> (deny|permit) A.B.C.D/M exact-match",
+       NO_STR
+       IP_STR
+       "Add an access list entry\n"
+       "IP named access-list name\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Prefix to match. e.g. 10.0.0.0/8\n"
+       "Exact match of the prefixes\n")
+{
+  return filter_set_zebra (vty, argv[0], argv[1], argv[2], AFI_IP, argv[3], 1, 0);
 }
 
 DEFUN (no_access_list_any,
        no_access_list_any_cmd,
-       "no access-list WORD (deny|permit) any",
+       "no ip access-list WORD (deny|permit) any",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
-       "IP zebra access-list name\n"
+       "IP named access-list name\n"
        "Specify packets to reject\n"
        "Specify packets to forward\n"
        "Prefix to match. e.g. 10.0.0.0/8\n")
 {
-  return filter_set_zebra (vty, argv[0], argv[1], AFI_IP, "0.0.0.0/0", 0, 0);
+  return filter_set_zebra (vty, argv[0], NULL, argv[1], AFI_IP, "0.0.0.0/0", 0, 0);
+}
+
+DEFUN (no_access_list_any_seq,
+       no_access_list_any_seq_cmd,
+       "no ip access-list WORD seq <1-4294967295> (deny|permit) any",
+       NO_STR
+       IP_STR
+       "Add an access list entry\n"
+       "IP named access-list name\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Prefix to match. e.g. 10.0.0.0/8\n")
+{
+  return filter_set_zebra (vty, argv[0], argv[1], argv[2], AFI_IP, "0.0.0.0/0", 0, 0);
 }
 
 DEFUN (no_access_list_all,
        no_access_list_all_cmd,
-       "no access-list (<1-99>|<100-199>|<1300-1999>|<2000-2699>|WORD)",
+       "no ip access-list (<1-99>|<100-199>|<1300-1999>|<2000-2699>|WORD)",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
        "IP standard access list\n"
        "IP extended access list\n"
        "IP standard access list (expanded range)\n"
        "IP extended access list (expanded range)\n"
-       "IP zebra access-list name\n")
+       "IP named access-list name\n")
 {
   struct access_list *access;
   struct access_master *master;
@@ -1348,13 +2049,14 @@ DEFUN (no_access_list_all,
 
 DEFUN (access_list_remark,
        access_list_remark_cmd,
-       "access-list (<1-99>|<100-199>|<1300-1999>|<2000-2699>|WORD) remark .LINE",
+       "ip access-list (<1-99>|<100-199>|<1300-1999>|<2000-2699>|WORD) remark .LINE",
+       IP_STR
        "Add an access list entry\n"
        "IP standard access list\n"
        "IP extended access list\n"
        "IP standard access list (expanded range)\n"
        "IP extended access list (expanded range)\n"
-       "IP zebra access-list\n"
+       "IP named access-list\n"
        "Access list entry comment\n"
        "Comment up to 100 characters\n")
 {
@@ -1367,6 +2069,7 @@ DEFUN (access_list_remark,
       XFREE (MTYPE_TMP, access->remark);
       access->remark = NULL;
     }
+
   access->remark = argv_concat(argv, argc, 1);
 
   return CMD_SUCCESS;
@@ -1374,14 +2077,15 @@ DEFUN (access_list_remark,
 
 DEFUN (no_access_list_remark,
        no_access_list_remark_cmd,
-       "no access-list (<1-99>|<100-199>|<1300-1999>|<2000-2699>|WORD) remark",
+       "no ip access-list (<1-99>|<100-199>|<1300-1999>|<2000-2699>|WORD) remark",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
        "IP standard access list\n"
        "IP extended access list\n"
        "IP standard access list (expanded range)\n"
        "IP extended access list (expanded range)\n"
-       "IP zebra access-list\n"
+       "IP named access-list\n"
        "Access list entry comment\n")
 {
   return vty_access_list_remark_unset (vty, AFI_IP, argv[0]);
@@ -1389,14 +2093,15 @@ DEFUN (no_access_list_remark,
 	
 ALIAS (no_access_list_remark,
        no_access_list_remark_arg_cmd,
-       "no access-list (<1-99>|<100-199>|<1300-1999>|<2000-2699>|WORD) remark .LINE",
+       "no ip access-list (<1-99>|<100-199>|<1300-1999>|<2000-2699>|WORD) remark .LINE",
        NO_STR
+       IP_STR
        "Add an access list entry\n"
        "IP standard access list\n"
        "IP extended access list\n"
        "IP standard access list (expanded range)\n"
        "IP extended access list (expanded range)\n"
-       "IP zebra access-list\n"
+       "IP named access-list\n"
        "Access list entry comment\n"
        "Comment up to 100 characters\n")
 
@@ -1406,12 +2111,27 @@ DEFUN (ipv6_access_list,
        "ipv6 access-list WORD (deny|permit) X:X::X:X/M",
        IPV6_STR
        "Add an access list entry\n"
-       "IPv6 zebra access-list\n"
+       "IPv6 named access-list\n"
        "Specify packets to reject\n"
        "Specify packets to forward\n"
        "Prefix to match. e.g. 3ffe:506::/32\n")
 {
-  return filter_set_zebra (vty, argv[0], argv[1], AFI_IP6, argv[2], 0, 1);
+  return filter_set_zebra (vty, argv[0], NULL, argv[1], AFI_IP6, argv[2], 0, 1);
+}
+
+DEFUN (ipv6_access_list_seq,
+       ipv6_access_list_seq_cmd,
+       "ipv6 access-list WORD seq <1-4294967295> (deny|permit) X:X::X:X/M",
+       IPV6_STR
+       "Add an access list entry\n"
+       "IPv6 named access-list\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Prefix to match. e.g. 3ffe:506::/32\n")
+{
+  return filter_set_zebra (vty, argv[0], argv[1], argv[2], AFI_IP6, argv[3], 0, 1);
 }
 
 DEFUN (ipv6_access_list_exact,
@@ -1419,13 +2139,29 @@ DEFUN (ipv6_access_list_exact,
        "ipv6 access-list WORD (deny|permit) X:X::X:X/M exact-match",
        IPV6_STR
        "Add an access list entry\n"
-       "IPv6 zebra access-list\n"
+       "IPv6 named access-list\n"
        "Specify packets to reject\n"
        "Specify packets to forward\n"
        "Prefix to match. e.g. 3ffe:506::/32\n"
        "Exact match of the prefixes\n")
 {
-  return filter_set_zebra (vty, argv[0], argv[1], AFI_IP6, argv[2], 1, 1);
+  return filter_set_zebra (vty, argv[0], NULL, argv[1], AFI_IP6, argv[2], 1, 1);
+}
+
+DEFUN (ipv6_access_list_exact_seq,
+       ipv6_access_list_exact_seq_cmd,
+       "ipv6 access-list WORD seq <1-4294967295> (deny|permit) X:X::X:X/M exact-match",
+       IPV6_STR
+       "Add an access list entry\n"
+       "IPv6 named access-list\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Prefix to match. e.g. 3ffe:506::/32\n"
+       "Exact match of the prefixes\n")
+{
+  return filter_set_zebra (vty, argv[0], argv[1], argv[2], AFI_IP6, argv[3], 1, 1);
 }
 
 DEFUN (ipv6_access_list_any,
@@ -1433,12 +2169,27 @@ DEFUN (ipv6_access_list_any,
        "ipv6 access-list WORD (deny|permit) any",
        IPV6_STR
        "Add an access list entry\n"
-       "IPv6 zebra access-list\n"
+       "IPv6 named access-list\n"
        "Specify packets to reject\n"
        "Specify packets to forward\n"
-       "Any prefixi to match\n")
+       "Any prefix to match\n")
 {
-  return filter_set_zebra (vty, argv[0], argv[1], AFI_IP6, "::/0", 0, 1);
+  return filter_set_zebra (vty, argv[0], NULL, argv[1], AFI_IP6, "::/0", 0, 1);
+}
+
+DEFUN (ipv6_access_list_any_seq,
+       ipv6_access_list_any_seq_cmd,
+       "ipv6 access-list WORD seq <1-4294967295> (deny|permit) any",
+       IPV6_STR
+       "Add an access list entry\n"
+       "IPv6 named access-list\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any prefix to match\n")
+{
+  return filter_set_zebra (vty, argv[0], argv[1], argv[2], AFI_IP6, "::/0", 0, 1);
 }
 
 DEFUN (no_ipv6_access_list,
@@ -1447,12 +2198,28 @@ DEFUN (no_ipv6_access_list,
        NO_STR
        IPV6_STR
        "Add an access list entry\n"
-       "IPv6 zebra access-list\n"
+       "IPv6 named access-list\n"
        "Specify packets to reject\n"
        "Specify packets to forward\n"
        "Prefix to match. e.g. 3ffe:506::/32\n")
 {
-  return filter_set_zebra (vty, argv[0], argv[1], AFI_IP6, argv[2], 0, 0);
+  return filter_set_zebra (vty, argv[0], NULL, argv[1], AFI_IP6, argv[2], 0, 0);
+}
+
+DEFUN (no_ipv6_access_list_seq,
+       no_ipv6_access_list_seq_cmd,
+       "no ipv6 access-list WORD seq <1-4294967295> (deny|permit) X:X::X:X/M",
+       NO_STR
+       IPV6_STR
+       "Add an access list entry\n"
+       "IPv6 named access-list\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Prefix to match. e.g. 3ffe:506::/32\n")
+{
+  return filter_set_zebra (vty, argv[0], argv[1], argv[2], AFI_IP6, argv[3], 0, 0);
 }
 
 DEFUN (no_ipv6_access_list_exact,
@@ -1461,13 +2228,30 @@ DEFUN (no_ipv6_access_list_exact,
        NO_STR
        IPV6_STR
        "Add an access list entry\n"
-       "IPv6 zebra access-list\n"
+       "IPv6 named access-list\n"
        "Specify packets to reject\n"
        "Specify packets to forward\n"
        "Prefix to match. e.g. 3ffe:506::/32\n"
        "Exact match of the prefixes\n")
 {
-  return filter_set_zebra (vty, argv[0], argv[1], AFI_IP6, argv[2], 1, 0);
+  return filter_set_zebra (vty, argv[0], NULL, argv[1], AFI_IP6, argv[2], 1, 0);
+}
+
+DEFUN (no_ipv6_access_list_exact_seq,
+       no_ipv6_access_list_exact_seq_cmd,
+       "no ipv6 access-list WORD seq <1-4294967295> (deny|permit) X:X::X:X/M exact-match",
+       NO_STR
+       IPV6_STR
+       "Add an access list entry\n"
+       "IPv6 named access-list\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Prefix to match. e.g. 3ffe:506::/32\n"
+       "Exact match of the prefixes\n")
+{
+  return filter_set_zebra (vty, argv[0], argv[1], argv[2], AFI_IP6, argv[3], 1, 0);
 }
 
 DEFUN (no_ipv6_access_list_any,
@@ -1476,12 +2260,28 @@ DEFUN (no_ipv6_access_list_any,
        NO_STR
        IPV6_STR
        "Add an access list entry\n"
-       "IPv6 zebra access-list\n"
+       "IPv6 named access-list\n"
        "Specify packets to reject\n"
        "Specify packets to forward\n"
-       "Any prefixi to match\n")
+       "Any prefix to match\n")
 {
-  return filter_set_zebra (vty, argv[0], argv[1], AFI_IP6, "::/0", 0, 0);
+  return filter_set_zebra (vty, argv[0], NULL, argv[1], AFI_IP6, "::/0", 0, 0);
+}
+
+DEFUN (no_ipv6_access_list_any_seq,
+       no_ipv6_access_list_any_seq_cmd,
+       "no ipv6 access-list WORD seq <1-4294967295> (deny|permit) any",
+       NO_STR
+       IPV6_STR
+       "Add an access list entry\n"
+       "IPv6 named access-list\n"
+       "Sequence number of an entry\n"
+       "Sequence number\n"
+       "Specify packets to reject\n"
+       "Specify packets to forward\n"
+       "Any prefix to match\n")
+{
+  return filter_set_zebra (vty, argv[0], argv[1], argv[2], AFI_IP6, "::/0", 0, 0);
 }
 
 
@@ -1491,7 +2291,7 @@ DEFUN (no_ipv6_access_list_all,
        NO_STR
        IPV6_STR
        "Add an access list entry\n"
-       "IPv6 zebra access-list\n")
+       "IPv6 named access-list\n")
 {
   struct access_list *access;
   struct access_master *master;
@@ -1522,7 +2322,7 @@ DEFUN (ipv6_access_list_remark,
        "ipv6 access-list WORD remark .LINE",
        IPV6_STR
        "Add an access list entry\n"
-       "IPv6 zebra access-list\n"
+       "IPv6 named access-list\n"
        "Access list entry comment\n"
        "Comment up to 100 characters\n")
 {
@@ -1546,7 +2346,7 @@ DEFUN (no_ipv6_access_list_remark,
        NO_STR
        IPV6_STR
        "Add an access list entry\n"
-       "IPv6 zebra access-list\n"
+       "IPv6 named access-list\n"
        "Access list entry comment\n")
 {
   return vty_access_list_remark_unset (vty, AFI_IP6, argv[0]);
@@ -1558,7 +2358,7 @@ ALIAS (no_ipv6_access_list_remark,
        NO_STR
        IPV6_STR
        "Add an access list entry\n"
-       "IPv6 zebra access-list\n"
+       "IPv6 named access-list\n"
        "Access list entry comment\n"
        "Comment up to 100 characters\n")
 #endif /* HAVE_IPV6 */
@@ -1580,6 +2380,11 @@ filter_show (struct vty *vty, const char *name, afi_t afi)
   if (master == NULL)
     return 0;
 
+  /* Print the name of the protocol */
+  if (zlog_default)
+      vty_out (vty, "%s:%s",
+      zlog_proto_names[zlog_default->protocol], VTY_NEWLINE);
+
   for (access = master->num.head; access; access = access->next)
     {
       if (name && strcmp (access->name, name) != 0)
@@ -1595,14 +2400,19 @@ filter_show (struct vty *vty, const char *name, afi_t afi)
 	    {
 	      vty_out (vty, "%s IP%s access list %s%s",
 		       mfilter->cisco ? 
-		       (filter->extended ? "Extended" : "Standard") : "Zebra",
+		       (filter->extended ? "Extended" : "Standard") : "Named",
 		       afi == AFI_IP6 ? "v6" : "",
 		       access->name, VTY_NEWLINE);
 	      write = 0;
 	    }
 
-	  vty_out (vty, "    %s%s", filter_type_str (mfilter),
-		   mfilter->type == FILTER_DENY ? "  " : "");
+	  if (mfilter->seq) {
+	    vty_out (vty, "    seq %lu %s%s", mfilter->seq, filter_type_str (mfilter),
+		     mfilter->type == FILTER_DENY ? "  " : "");
+	  } else {
+	    vty_out (vty, "    %s%s", filter_type_str (mfilter),
+	         mfilter->type == FILTER_DENY ? "  " : "");
+	  }
 
 	  if (! mfilter->cisco)
 	    config_write_access_zebra (vty, mfilter);
@@ -1638,14 +2448,19 @@ filter_show (struct vty *vty, const char *name, afi_t afi)
 	    {
 	      vty_out (vty, "%s IP%s access list %s%s",
 		       mfilter->cisco ? 
-		       (filter->extended ? "Extended" : "Standard") : "Zebra",
+		       (filter->extended ? "Extended" : "Standard") : "Named",
 		       afi == AFI_IP6 ? "v6" : "",
 		       access->name, VTY_NEWLINE);
 	      write = 0;
 	    }
 
-	  vty_out (vty, "    %s%s", filter_type_str (mfilter),
-		   mfilter->type == FILTER_DENY ? "  " : "");
+	  if (mfilter->seq) {
+	    vty_out (vty, "    seq %lu %s%s", mfilter->seq, filter_type_str (mfilter),
+		     mfilter->type == FILTER_DENY ? "  " : "");
+	  } else {
+	    vty_out (vty, "    %s%s", filter_type_str (mfilter),
+	         mfilter->type == FILTER_DENY ? "  " : "");
+	  }
 
 	  if (! mfilter->cisco)
 	    config_write_access_zebra (vty, mfilter);
@@ -1688,7 +2503,7 @@ DEFUN (show_ip_access_list_name,
        "IP extended access list\n"
        "IP standard access list (expanded range)\n"
        "IP extended access list (expanded range)\n"
-       "IP zebra access-list\n")
+       "IP named access-list\n")
 {
   return filter_show (vty, argv[0], AFI_IP);
 }
@@ -1710,7 +2525,7 @@ DEFUN (show_ipv6_access_list_name,
        SHOW_STR
        IPV6_STR
        "List IPv6 access lists\n"
-       "IPv6 zebra access-list\n")
+       "IPv6 named access-list\n")
 {
   return filter_show (vty, argv[0], AFI_IP6);
 }
@@ -1799,7 +2614,7 @@ config_write_access (struct vty *vty, afi_t afi)
       if (access->remark)
 	{
 	  vty_out (vty, "%saccess-list %s remark %s%s",
-		   afi == AFI_IP ? "" : "ipv6 ",
+		   afi == AFI_IP ? "ip " : "ipv6 ",
 		   access->name, access->remark,
 		   VTY_NEWLINE);
 	  write++;
@@ -1807,10 +2622,18 @@ config_write_access (struct vty *vty, afi_t afi)
 
       for (mfilter = access->head; mfilter; mfilter = mfilter->next)
 	{
-	  vty_out (vty, "%saccess-list %s %s",
-	     afi == AFI_IP ? "" : "ipv6 ",
-	     access->name,
-	     filter_type_str (mfilter));
+	  if (mfilter->seq) {
+	    vty_out (vty, "%saccess-list %s seq %lu %s",
+	       afi == AFI_IP ? "ip " : "ipv6 ",
+	       access->name,
+	       mfilter->seq,
+	       filter_type_str (mfilter));
+	  } else {
+	    vty_out (vty, "%saccess-list %s %s",
+	       afi == AFI_IP ? "ip " : "ipv6 ",
+	       access->name,
+	       filter_type_str (mfilter));
+	  }
 
 	  if (mfilter->cisco)
 	    config_write_access_cisco (vty, mfilter);
@@ -1826,7 +2649,7 @@ config_write_access (struct vty *vty, afi_t afi)
       if (access->remark)
 	{
 	  vty_out (vty, "%saccess-list %s remark %s%s",
-		   afi == AFI_IP ? "" : "ipv6 ",
+		   afi == AFI_IP ? "ip " : "ipv6 ",
 		   access->name, access->remark,
 		   VTY_NEWLINE);
 	  write++;
@@ -1834,10 +2657,18 @@ config_write_access (struct vty *vty, afi_t afi)
 
       for (mfilter = access->head; mfilter; mfilter = mfilter->next)
 	{
-	  vty_out (vty, "%saccess-list %s %s",
-	     afi == AFI_IP ? "" : "ipv6 ",
-	     access->name,
-	     filter_type_str (mfilter));
+	  if (mfilter->seq) {
+	    vty_out (vty, "%saccess-list %s seq %lu %s",
+	       afi == AFI_IP ? "ip " : "ipv6 ",
+	       access->name,
+	       mfilter->seq,
+	       filter_type_str (mfilter));
+	  } else {
+	    vty_out (vty, "%saccess-list %s %s",
+	       afi == AFI_IP ? "ip " : "ipv6 ",
+	       access->name,
+	       filter_type_str (mfilter));
+	  }
 
 	  if (mfilter->cisco)
 	    config_write_access_cisco (vty, mfilter);
@@ -1904,41 +2735,73 @@ access_list_init_ipv4 ()
 
   /* Zebra access-list */
   install_element (CONFIG_NODE, &access_list_cmd);
+  install_element (CONFIG_NODE, &access_list_seq_cmd);
   install_element (CONFIG_NODE, &access_list_exact_cmd);
+  install_element (CONFIG_NODE, &access_list_exact_seq_cmd);
   install_element (CONFIG_NODE, &access_list_any_cmd);
+  install_element (CONFIG_NODE, &access_list_any_seq_cmd);
   install_element (CONFIG_NODE, &no_access_list_cmd);
+  install_element (CONFIG_NODE, &no_access_list_seq_cmd);
   install_element (CONFIG_NODE, &no_access_list_exact_cmd);
+  install_element (CONFIG_NODE, &no_access_list_exact_seq_cmd);
   install_element (CONFIG_NODE, &no_access_list_any_cmd);
+  install_element (CONFIG_NODE, &no_access_list_any_seq_cmd);
 
   /* Standard access-list */
   install_element (CONFIG_NODE, &access_list_standard_cmd);
+  install_element (CONFIG_NODE, &access_list_standard_seq_cmd);
   install_element (CONFIG_NODE, &access_list_standard_nomask_cmd);
+  install_element (CONFIG_NODE, &access_list_standard_nomask_seq_cmd);
   install_element (CONFIG_NODE, &access_list_standard_host_cmd);
+  install_element (CONFIG_NODE, &access_list_standard_host_seq_cmd);
   install_element (CONFIG_NODE, &access_list_standard_any_cmd);
+  install_element (CONFIG_NODE, &access_list_standard_any_seq_cmd);
   install_element (CONFIG_NODE, &no_access_list_standard_cmd);
+  install_element (CONFIG_NODE, &no_access_list_standard_seq_cmd);
   install_element (CONFIG_NODE, &no_access_list_standard_nomask_cmd);
+  install_element (CONFIG_NODE, &no_access_list_standard_nomask_seq_cmd);
   install_element (CONFIG_NODE, &no_access_list_standard_host_cmd);
+  install_element (CONFIG_NODE, &no_access_list_standard_host_seq_cmd);
   install_element (CONFIG_NODE, &no_access_list_standard_any_cmd);
+  install_element (CONFIG_NODE, &no_access_list_standard_any_seq_cmd);
 
   /* Extended access-list */
   install_element (CONFIG_NODE, &access_list_extended_cmd);
+  install_element (CONFIG_NODE, &access_list_extended_seq_cmd);
   install_element (CONFIG_NODE, &access_list_extended_any_mask_cmd);
+  install_element (CONFIG_NODE, &access_list_extended_any_mask_seq_cmd);
   install_element (CONFIG_NODE, &access_list_extended_mask_any_cmd);
+  install_element (CONFIG_NODE, &access_list_extended_mask_any_seq_cmd);
   install_element (CONFIG_NODE, &access_list_extended_any_any_cmd);
+  install_element (CONFIG_NODE, &access_list_extended_any_any_seq_cmd);
   install_element (CONFIG_NODE, &access_list_extended_host_mask_cmd);
+  install_element (CONFIG_NODE, &access_list_extended_host_mask_seq_cmd);
   install_element (CONFIG_NODE, &access_list_extended_mask_host_cmd);
+  install_element (CONFIG_NODE, &access_list_extended_mask_host_seq_cmd);
   install_element (CONFIG_NODE, &access_list_extended_host_host_cmd);
+  install_element (CONFIG_NODE, &access_list_extended_host_host_seq_cmd);
   install_element (CONFIG_NODE, &access_list_extended_any_host_cmd);
+  install_element (CONFIG_NODE, &access_list_extended_any_host_seq_cmd);
   install_element (CONFIG_NODE, &access_list_extended_host_any_cmd);
+  install_element (CONFIG_NODE, &access_list_extended_host_any_seq_cmd);
   install_element (CONFIG_NODE, &no_access_list_extended_cmd);
+  install_element (CONFIG_NODE, &no_access_list_extended_seq_cmd);
   install_element (CONFIG_NODE, &no_access_list_extended_any_mask_cmd);
+  install_element (CONFIG_NODE, &no_access_list_extended_any_mask_seq_cmd);
   install_element (CONFIG_NODE, &no_access_list_extended_mask_any_cmd);
+  install_element (CONFIG_NODE, &no_access_list_extended_mask_any_seq_cmd);
   install_element (CONFIG_NODE, &no_access_list_extended_any_any_cmd);
+  install_element (CONFIG_NODE, &no_access_list_extended_any_any_seq_cmd);
   install_element (CONFIG_NODE, &no_access_list_extended_host_mask_cmd);
+  install_element (CONFIG_NODE, &no_access_list_extended_host_mask_seq_cmd);
   install_element (CONFIG_NODE, &no_access_list_extended_mask_host_cmd);
+  install_element (CONFIG_NODE, &no_access_list_extended_mask_host_seq_cmd);
   install_element (CONFIG_NODE, &no_access_list_extended_host_host_cmd);
+  install_element (CONFIG_NODE, &no_access_list_extended_host_host_seq_cmd);
   install_element (CONFIG_NODE, &no_access_list_extended_any_host_cmd);
+  install_element (CONFIG_NODE, &no_access_list_extended_any_host_seq_cmd);
   install_element (CONFIG_NODE, &no_access_list_extended_host_any_cmd);
+  install_element (CONFIG_NODE, &no_access_list_extended_host_any_seq_cmd);
 
   install_element (CONFIG_NODE, &access_list_remark_cmd);
   install_element (CONFIG_NODE, &no_access_list_all_cmd);
@@ -1998,11 +2861,17 @@ access_list_init_ipv6 ()
   install_element (ENABLE_NODE, &show_ipv6_access_list_name_cmd);
 
   install_element (CONFIG_NODE, &ipv6_access_list_cmd);
+  install_element (CONFIG_NODE, &ipv6_access_list_seq_cmd);
   install_element (CONFIG_NODE, &ipv6_access_list_exact_cmd);
+  install_element (CONFIG_NODE, &ipv6_access_list_exact_seq_cmd);
   install_element (CONFIG_NODE, &ipv6_access_list_any_cmd);
+  install_element (CONFIG_NODE, &ipv6_access_list_any_seq_cmd);
   install_element (CONFIG_NODE, &no_ipv6_access_list_exact_cmd);
+  install_element (CONFIG_NODE, &no_ipv6_access_list_exact_seq_cmd);
   install_element (CONFIG_NODE, &no_ipv6_access_list_cmd);
+  install_element (CONFIG_NODE, &no_ipv6_access_list_seq_cmd);
   install_element (CONFIG_NODE, &no_ipv6_access_list_any_cmd);
+  install_element (CONFIG_NODE, &no_ipv6_access_list_any_seq_cmd);
 
   install_element (CONFIG_NODE, &no_ipv6_access_list_all_cmd);
   install_element (CONFIG_NODE, &ipv6_access_list_remark_cmd);

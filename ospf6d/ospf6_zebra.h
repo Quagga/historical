@@ -44,7 +44,7 @@ void ospf6_zebra_redistribute (int);
 void ospf6_zebra_no_redistribute (int);
 #define ospf6_zebra_is_redistribute(type) \
   (zclient->redist[type])
-void ospf6_zebra_init ();
+void ospf6_zebra_init (void);
 
 int config_write_ospf6_debug_zebra (struct vty *vty);
 void install_element_ospf6_debug_zebra ();

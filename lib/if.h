@@ -149,6 +149,7 @@ struct connected
   /* Flags for connected address. */
   u_char flags;
 #define ZEBRA_IFA_SECONDARY   (1 << 0)
+#define ZEBRA_IFA_DELETING    (1 << 1)
 
   /* Address of connected network. */
   struct prefix *address;

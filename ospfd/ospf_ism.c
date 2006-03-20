@@ -126,13 +126,13 @@ ospf_elect_bdr (struct ospf_interface *oi, struct list *el_list)
     {
       /* neighbor declared to be DR. */
       if (NBR_IS_DR (nbr))
-	continue;
+        continue;
 
       /* neighbor declared to be BDR. */
       if (NBR_IS_BDR (nbr))
-	listnode_add (bdr_list, nbr);
-
-      listnode_add (no_dr_list, nbr);
+        listnode_add (bdr_list, nbr);
+      else
+        listnode_add (no_dr_list, nbr);
     }
 
   /* Elect Backup Designated Router. */
@@ -224,22 +224,22 @@ ospf_dr_election (struct ospf_interface *oi)
   bdr = ospf_elect_bdr (oi, el_list);
   dr = ospf_elect_dr (oi, el_list);
 
+  if (IPV4_ADDR_SAME (&DR (oi), &BDR (oi)))
+    {
+      /* re-elect bdr from eligible routers */
+      if (listcount (el_list) > 1)
+        {
+          listnode_delete (el_list, dr);
+          ospf_elect_bdr (oi, el_list);
+        }
+      else
+        BDR (oi).s_addr = 0;
+    }
+
   new_state = ospf_ism_state (oi);
 
-  zlog_info ("DR-Election[1st]: Backup %s", inet_ntoa (BDR (oi)));
-  zlog_info ("DR-Election[1st]: DR     %s", inet_ntoa (DR (oi)));
-
-  if (new_state != old_state &&
-      !(new_state == ISM_DROther && old_state < ISM_DROther))
-    {
-      ospf_elect_bdr (oi, el_list);
-      ospf_elect_dr (oi, el_list); 
-
-      new_state = ospf_ism_state (oi);
-
-      zlog_info ("DR-Election[2nd]: Backup %s", inet_ntoa (BDR (oi)));
-      zlog_info ("DR-Election[2nd]: DR     %s", inet_ntoa (DR (oi)));
-    }
+  zlog_info ("DR-Election: Backup %s", inet_ntoa (BDR (oi)));
+  zlog_info ("DR-Election: DR     %s", inet_ntoa (DR (oi)));
 
   list_delete (el_list);
 
@@ -251,7 +251,6 @@ ospf_dr_election (struct ospf_interface *oi)
   return new_state;
 }
 
-
 int
 ospf_hello_timer (struct thread *thread)
 {
@@ -466,7 +465,7 @@ struct {
     { ism_ignore,          ISM_Down },          /* NeighborChange */
     { ism_loop_ind,        ISM_Loopback },      /* LoopInd        */
     { ism_ignore,          ISM_Down },          /* UnloopInd      */
-    { ism_interface_down,  ISM_Down },          /* InterfaceDown  */
+    { ism_ignore,          ISM_Down },          /* InterfaceDown  */
   },
   {
     /* Loopback: */
@@ -579,7 +578,10 @@ ism_change_state (struct ospf_interface *oi, int state)
 	    oi->area->act_ints--;
 	}
       else if (old_state == ISM_Down)
-	oi->area->act_ints++;
+        {
+          oi->area->act_ints++;
+          ospf_nbr_self (oi);
+        }
 
       /* schedule router-LSA originate. */
       ospf_router_lsa_timer_add (oi->area);

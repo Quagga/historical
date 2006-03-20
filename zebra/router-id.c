@@ -41,7 +41,18 @@
 
 static struct list rid_all_sorted_list;
 static struct list rid_lo_sorted_list;
+static struct list rid6_all_sorted_list;
 static struct prefix rid_user_assigned;
+struct prefix current_router_id =
+{
+  .u.prefix4.s_addr = 0,
+  .family = AF_INET,
+  .prefixlen = 32,
+};
+
+int router_id_cmp (void *a, void *b);
+int router_id6_cmp (void *a, void *b);
+
 
 /* master zebra server structure */
 extern struct zebra_t zebrad;
@@ -65,14 +76,20 @@ router_id_bad_address (struct connected *ifc)
   struct prefix n;
 
   if (ifc->address->family != AF_INET)
-    return 1;
+  {
+    /* Only linklocal is taken into account */
+    if (!IN6_IS_ADDR_LINKLOCAL(&ifc->address->u.prefix6))
+      return 1;
+  }
+  else
+  {
+    n.u.prefix4.s_addr = htonl (INADDR_LOOPBACK);
+    n.prefixlen = 8;
+    n.family = AF_INET;
 
-  n.u.prefix4.s_addr = htonl (INADDR_LOOPBACK);
-  n.prefixlen = 8;
-  n.family = AF_INET;
-
-  if (prefix_match (&n, ifc->address))
-    return 1;
+    if (prefix_match (&n, ifc->address))
+      return 1;
+  }
 
   return 0;
 }
@@ -87,20 +104,33 @@ router_id_get (struct prefix *p)
   p->family = AF_INET;
   p->prefixlen = 32;
 
+  /* loopback is prior to IP address and IPv4 is prior to IPv6 */ 
   if (rid_user_assigned.u.prefix4.s_addr)
+  {
     p->u.prefix4.s_addr = rid_user_assigned.u.prefix4.s_addr;
+    zlog_info ("%s: get router-id from assigned one",__func__);
+  }
   else if (!list_isempty (&rid_lo_sorted_list))
-    {
-      node = listtail (&rid_lo_sorted_list);
-      c = listgetdata (node);
-      p->u.prefix4.s_addr = c->address->u.prefix4.s_addr;
-    }
+  {
+    node = listtail (&rid_lo_sorted_list);
+    c = listgetdata (node);
+    p->u.prefix4.s_addr = c->address->u.prefix4.s_addr;
+    zlog_info ("%s: get router-id from loopback interface",__func__);
+  }
   else if (!list_isempty (&rid_all_sorted_list))
-    {
-      node = listtail (&rid_all_sorted_list);
-      c = listgetdata (node);
-      p->u.prefix4.s_addr = c->address->u.prefix4.s_addr;
-    }
+  {
+    node = listtail (&rid_all_sorted_list);
+    c = listgetdata (node);
+    p->u.prefix4.s_addr = c->address->u.prefix4.s_addr;
+    zlog_info ("%s: get router-id from ipv4 address",__func__);
+  }
+  else if (!list_isempty (&rid6_all_sorted_list))
+  {
+    node = listtail (&rid6_all_sorted_list);
+    c = listgetdata (node);
+    p->u.prefix4.s_addr = c->address->u.prefix6.s6_addr32[3];
+    zlog_info ("%s: get router-id from ipv6 linklocal address",__func__);
+  }
 }
 
 static void
@@ -123,31 +153,60 @@ router_id_add_address (struct connected *ifc)
 {
   struct list *l = NULL;
   struct listnode *node;
+#if 0
   struct prefix before;
+#endif
   struct prefix after;
   struct zserv *client;
 
-  if (router_id_bad_address (ifc))
+#if 0
+  memset (&before, 0, sizeof (struct prefix));
+#endif
+  memset (&after, 0, sizeof (struct prefix));
+
+ if (router_id_bad_address (ifc))
     return;
 
+#if 0
   router_id_get (&before);
+#endif
 
-  if (!strncmp (ifc->ifp->name, "lo", 2)
-      || !strncmp (ifc->ifp->name, "dummy", 5))
-    l = &rid_lo_sorted_list;
+  if (ifc->address->family == AF_INET)
+  {
+    if (!strncmp (ifc->ifp->name, "lo", 2)
+        || !strncmp (ifc->ifp->name, "dummy", 5))
+      l = &rid_lo_sorted_list;
+    else
+      l = &rid_all_sorted_list;
+  }
   else
-    l = &rid_all_sorted_list;
+      l = &rid6_all_sorted_list;
   
   if (!router_id_find_node (l, ifc))
-    listnode_add (l, ifc);
+    {
+      if (ifc->address->family == AF_INET)
+        l->cmp = router_id_cmp;
+      else
+        l->cmp = router_id6_cmp;
+      listnode_add_sort (l, ifc);
+    }
 
-  router_id_get (&after);
-
-  if (prefix_same (&before, &after))
+#if 0
+  if(before.u.prefix4.s_addr)
     return;
-
-  for (ALL_LIST_ELEMENTS_RO (zebrad.client_list, node, client))
-    zsend_router_id_update (client, &after);
+  else
+#endif
+  {
+    router_id_get (&after);
+    memcpy(&current_router_id,&after,sizeof(struct prefix));
+ 
+    for (ALL_LIST_ELEMENTS_RO (zebrad.client_list, node, client))
+    {
+      char buf[BUFSIZ];
+      zlog_info ("%s: distribute router-id (%s) to all the clients",__func__, inet_ntop(AF_INET, &current_router_id.u.prefix4, buf, BUFSIZ));
+      zsend_router_id_update (client, &current_router_id);
+    }
+  }
 }
 
 void
@@ -156,31 +215,42 @@ router_id_del_address (struct connected *ifc)
   struct connected *c;
   struct list *l;
   struct prefix after;
-  struct prefix before;
   struct listnode *node;
   struct zserv *client;
 
   if (router_id_bad_address (ifc))
     return;
 
-  router_id_get (&before);
-
-  if (!strncmp (ifc->ifp->name, "lo", 2)
-      || !strncmp (ifc->ifp->name, "dummy", 5))
-    l = &rid_lo_sorted_list;
+  if (ifc->address->family == AF_INET)
+  {
+    if (!strncmp (ifc->ifp->name, "lo", 2)
+        || !strncmp (ifc->ifp->name, "dummy", 5))
+      l = &rid_lo_sorted_list;
+    else
+      l = &rid_all_sorted_list;
+  }
   else
-    l = &rid_all_sorted_list;
+      l = &rid6_all_sorted_list;
 
   if ((c = router_id_find_node (l, ifc)))
     listnode_delete (l, c);
 
-  router_id_get (&after);
+   if ((ifc->address->family == AF_INET && 
+	ifc->address->u.prefix4.s_addr == current_router_id.u.prefix4.s_addr) ||
+       (ifc->address->family == AF_INET6 &&
+	ifc->address->u.prefix6.s6_addr32[3] == current_router_id.u.prefix4.s_addr))
+   {
+     memset (&after, 0, sizeof (struct prefix));
+     router_id_get (&after);
+     memcpy(&current_router_id,&after,sizeof(struct prefix));
 
-  if (prefix_same (&before, &after))
-    return;
-
-  for (ALL_LIST_ELEMENTS_RO (zebrad.client_list, node, client))
-    zsend_router_id_update (client, &after);
+     for (ALL_LIST_ELEMENTS_RO (zebrad.client_list, node, client))
+     {
+       char buf[BUFSIZ];
+       zlog_info ("%s: distribute router-id (%s) to all the clients",__func__, inet_ntop(AF_INET, &current_router_id.u.prefix4, buf, BUFSIZ));
+       zsend_router_id_update (client, &current_router_id);
+     }
+   }
 }
 
 void
@@ -243,6 +313,21 @@ router_id_cmp (void *a, void *b)
   return 0;
 }
 
+int
+router_id6_cmp (void *a, void *b)
+{
+  unsigned int A, B;
+
+  A = ((struct connected *) a)->address->u.prefix6.s6_addr32[3];
+  B = ((struct connected *) b)->address->u.prefix6.s6_addr32[3];
+
+  if (A > B)
+    return 1;
+  else if (A < B)
+    return -1;
+  return 0;
+}
+
 void
 router_id_init (void)
 {
@@ -251,10 +336,12 @@ router_id_init (void)
 
   memset (&rid_all_sorted_list, 0, sizeof (rid_all_sorted_list));
   memset (&rid_lo_sorted_list, 0, sizeof (rid_lo_sorted_list));
+  memset (&rid6_all_sorted_list, 0, sizeof (rid6_all_sorted_list));
   memset (&rid_user_assigned, 0, sizeof (rid_user_assigned));
 
   rid_all_sorted_list.cmp = router_id_cmp;
   rid_lo_sorted_list.cmp = router_id_cmp;
+  rid6_all_sorted_list.cmp = router_id6_cmp;
 
   rid_user_assigned.family = AF_INET;
   rid_user_assigned.prefixlen = 32;

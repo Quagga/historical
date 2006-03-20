@@ -24,7 +24,7 @@ struct capability_mp
   u_int16_t afi;
   u_char reserved;
   u_char safi;
-};
+} ;
 
 /* BGP open message capability. */
 struct capability
@@ -32,7 +32,11 @@ struct capability
   u_char code;
   u_char length;
   struct capability_mp mpc;
+#ifdef __linux__
+} __attribute__ ((packed)) ;
+#else
 };
+#endif
 
 struct graceful_restart_af
 {
@@ -49,13 +53,14 @@ struct graceful_restart_af
 #define CAPABILITY_CODE_4BYTE_AS       65 /* 4-octet AS number Capability */
 #define CAPABILITY_CODE_DYNAMIC        66 /* Dynamic Capability */
 #define CAPABILITY_CODE_REFRESH_OLD   128 /* Route Refresh Capability(cisco) */
+#define CAPABILITY_CODE_RESTART_FWS   128 /* Graceful Restart - Forwarding State */
 #define CAPABILITY_CODE_ORF_OLD       130 /* Cooperative Route Filtering Capability(cisco) */
 
 /* Capability Length */
 #define CAPABILITY_CODE_MP_LEN          4
 #define CAPABILITY_CODE_REFRESH_LEN     0
 #define CAPABILITY_CODE_DYNAMIC_LEN     0
-#define CAPABILITY_CODE_RESTART_LEN     2 /* Receiving only case */
+#define CAPABILITY_CODE_RESTART_LEN     6 /* Receiving only case */
 
 /* Cooperative Route Filtering Capability.  */
 

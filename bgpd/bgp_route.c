@@ -18,6 +18,10 @@ along with GNU Zebra; see the file COPYING.  If not, write to the Free
 Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 02111-1307, USA.  */
 
+/*
+ * Copyright (C) 2005 6WIND  
+ */
+
 #include <zebra.h>
 
 #include "prefix.h"
@@ -1236,7 +1240,7 @@ bgp_process_main (struct bgp *bgp, struct bgp_node *rn, afi_t afi, safi_t safi)
       if (! CHECK_FLAG (old_select->flags, BGP_INFO_ATTR_CHANGED))
        {
          if (CHECK_FLAG (old_select->flags, BGP_INFO_IGP_CHANGED))
-           bgp_zebra_announce (p, old_select, bgp);
+           bgp_zebra_announce (p, old_select, bgp, safi);
          return 0;
        }
     }
@@ -1263,14 +1267,14 @@ bgp_process_main (struct bgp *bgp, struct bgp_node *rn, afi_t afi, safi_t safi)
       if (new_select 
 	  && new_select->type == ZEBRA_ROUTE_BGP 
 	  && new_select->sub_type == BGP_ROUTE_NORMAL)
-	bgp_zebra_announce (p, new_select, bgp);
+	bgp_zebra_announce (p, new_select, bgp, safi);
       else
 	{
 	  /* Withdraw the route from the kernel. */
 	  if (old_select 
 	      && old_select->type == ZEBRA_ROUTE_BGP
 	      && old_select->sub_type == BGP_ROUTE_NORMAL)
-	    bgp_zebra_withdraw (p, old_select);
+	    bgp_zebra_withdraw (p, old_select, safi);
 	}
     }
   return 0;
@@ -1870,7 +1874,7 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
 
       /* Nexthop reachability check. */
       if ((afi == AFI_IP || afi == AFI_IP6)
-	  && safi == SAFI_UNICAST 
+	  && (safi == SAFI_UNICAST || safi == SAFI_MULTICAST) 
 	  && (peer_sort (peer) == BGP_PEER_IBGP
 	      || (peer_sort (peer) == BGP_PEER_EBGP && peer->ttl != 1)
 	      || CHECK_FLAG (peer->flags, PEER_FLAG_DISABLE_CONNECTED_CHECK)))
@@ -1917,7 +1921,7 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
 
   /* Nexthop reachability check. */
   if ((afi == AFI_IP || afi == AFI_IP6)
-      && safi == SAFI_UNICAST
+      && (safi == SAFI_UNICAST || safi == SAFI_MULTICAST)
       && (peer_sort (peer) == BGP_PEER_IBGP
 	  || (peer_sort (peer) == BGP_PEER_EBGP && peer->ttl != 1)
 	  || CHECK_FLAG (peer->flags, PEER_FLAG_DISABLE_CONNECTED_CHECK)))
@@ -2419,7 +2423,7 @@ bgp_cleanup_routes ()
 	  if (CHECK_FLAG (ri->flags, BGP_INFO_SELECTED)
 	      && ri->type == ZEBRA_ROUTE_BGP 
 	      && ri->sub_type == BGP_ROUTE_NORMAL)
-	    bgp_zebra_withdraw (&rn->p, ri);
+	    bgp_zebra_withdraw (&rn->p, ri, SAFI_UNICAST);
 
       table = bgp->rib[AFI_IP6][SAFI_UNICAST];
 
@@ -2428,7 +2432,26 @@ bgp_cleanup_routes ()
 	  if (CHECK_FLAG (ri->flags, BGP_INFO_SELECTED)
 	      && ri->type == ZEBRA_ROUTE_BGP 
 	      && ri->sub_type == BGP_ROUTE_NORMAL)
-	    bgp_zebra_withdraw (&rn->p, ri);
+	    bgp_zebra_withdraw (&rn->p, ri, SAFI_UNICAST);
+
+      table = bgp->rib[AFI_IP6][SAFI_MULTICAST];
+
+      for (rn = bgp_table_top (table); rn; rn = bgp_route_next (rn))
+	for (ri = rn->info; ri; ri = ri->next)
+	  if (CHECK_FLAG (ri->flags, BGP_INFO_SELECTED)
+	      && ri->type == ZEBRA_ROUTE_BGP 
+	      && ri->sub_type == BGP_ROUTE_NORMAL)
+	    bgp_zebra_withdraw (&rn->p, ri, SAFI_MULTICAST);
+
+       table = bgp->rib[AFI_IP][SAFI_MULTICAST];
+
+      for (rn = bgp_table_top (table); rn; rn = bgp_route_next (rn))
+	for (ri = rn->info; ri; ri = ri->next)
+	  if (CHECK_FLAG (ri->flags, BGP_INFO_SELECTED)
+	      && ri->type == ZEBRA_ROUTE_BGP 
+	      && ri->sub_type == BGP_ROUTE_NORMAL)
+	    bgp_zebra_withdraw (&rn->p, ri, SAFI_MULTICAST);
+
     }
 }
 
@@ -3621,7 +3644,7 @@ DEFUN (ipv6_bgp_network,
        "Specify a network to announce via BGP\n"
        "IPv6 prefix <network>/<length>\n")
 {
-  return bgp_static_set (vty, vty->index, argv[0], AFI_IP6, SAFI_UNICAST, NULL, 0);
+  return bgp_static_set (vty, vty->index, argv[0], AFI_IP6, bgp_node_safi (vty), NULL, 0);
 }
 
 DEFUN (ipv6_bgp_network_route_map,
@@ -3636,6 +3659,16 @@ DEFUN (ipv6_bgp_network_route_map,
 			 bgp_node_safi (vty), argv[1], 0);
 }
 
+DEFUN (ipv6_bgp_network_backdoor,
+       ipv6_bgp_network_backdoor_cmd,
+       "network X:X::X:X/M backdoor",
+       "Specify a network to announce via BGP\n"
+       "IPv6 network <network>/<length> e.g fe80::/16\n"
+       "Specify a BGP backdoor route\n")
+{
+  return bgp_static_set (vty, vty->index, argv[0], AFI_IP6, SAFI_UNICAST, NULL, 1);
+}
+
 DEFUN (no_ipv6_bgp_network,
        no_ipv6_bgp_network_cmd,
        "no network X:X::X:X/M",
@@ -3643,8 +3676,17 @@ DEFUN (no_ipv6_bgp_network,
        "Specify a network to announce via BGP\n"
        "IPv6 prefix <network>/<length>\n")
 {
-  return bgp_static_unset (vty, vty->index, argv[0], AFI_IP6, SAFI_UNICAST);
+  return bgp_static_unset (vty, vty->index, argv[0], AFI_IP6, bgp_node_safi (vty));
 }
+
+
+ALIAS (no_ipv6_bgp_network,
+       no_ipv6_bgp_network_backdoor_cmd,
+       "no network X:X::X:X/M backdoor",
+       NO_STR
+       "Specify a network to announce via BGP\n"
+       "IP prefix <network>/<length>\n"
+       "Specify a BGP backdoor route\n")
 
 ALIAS (no_ipv6_bgp_network,
        no_ipv6_bgp_network_route_map_cmd,
@@ -4496,7 +4538,7 @@ DEFUN (ipv6_aggregate_address,
        "Configure BGP aggregate entries\n"
        "Aggregate prefix\n")
 {
-  return bgp_aggregate_set (vty, argv[0], AFI_IP6, SAFI_UNICAST, 0, 0);
+  return bgp_aggregate_set (vty, argv[0], AFI_IP6, bgp_node_safi (vty), 0, 0);
 }
 
 DEFUN (ipv6_aggregate_address_summary_only,
@@ -4506,8 +4548,43 @@ DEFUN (ipv6_aggregate_address_summary_only,
        "Aggregate prefix\n"
        "Filter more specific routes from updates\n")
 {
-  return bgp_aggregate_set (vty, argv[0], AFI_IP6, SAFI_UNICAST, 
+  return bgp_aggregate_set (vty, argv[0], AFI_IP6, bgp_node_safi (vty), 
 			    AGGREGATE_SUMMARY_ONLY, 0);
+}
+
+DEFUN (ipv6_aggregate_address_as_set,
+       ipv6_aggregate_address_as_set_cmd,
+       "aggregate-address X:X::X:X/M as-set",
+       "Configure BGP aggregate entries\n"
+       "Aggregate prefix\n"
+       "Generate AS set path information\n")
+{
+  return bgp_aggregate_set (vty, argv[0], AFI_IP6, bgp_node_safi (vty), 
+			    0, AGGREGATE_AS_SET);
+}
+
+DEFUN (ipv6_aggregate_address_as_set_summary,
+       ipv6_aggregate_address_as_set_summary_cmd,
+       "aggregate-address X:X::X:X/M as-set summary-only",
+       "Configure BGP aggregate entries\n"
+       "Aggregate prefix\n"
+       "Generate AS set path information\n"
+       "Filter more specific routes from updates\n")
+{
+  return bgp_aggregate_set (vty, argv[0], AFI_IP6, bgp_node_safi (vty), 
+			    AGGREGATE_SUMMARY_ONLY, AGGREGATE_AS_SET);
+}
+
+DEFUN (ipv6_aggregate_address_summary_as_set,
+       ipv6_aggregate_address_summary_as_set_cmd,
+       "aggregate-address X:X::X:X/M summary-only as-set",
+       "Configure BGP aggregate entries\n"
+       "Aggregate prefix\n"
+       "Filter more specific routes from updates\n"
+       "Generate AS set path information\n")
+{
+  return bgp_aggregate_set (vty, argv[0], AFI_IP6, bgp_node_safi (vty), 
+			    AGGREGATE_SUMMARY_ONLY, AGGREGATE_AS_SET);
 }
 
 DEFUN (no_ipv6_aggregate_address,
@@ -4517,7 +4594,7 @@ DEFUN (no_ipv6_aggregate_address,
        "Configure BGP aggregate entries\n"
        "Aggregate prefix\n")
 {
-  return bgp_aggregate_unset (vty, argv[0], AFI_IP6, SAFI_UNICAST);
+  return bgp_aggregate_unset (vty, argv[0], AFI_IP6, bgp_node_safi (vty));
 }
 
 DEFUN (no_ipv6_aggregate_address_summary_only,
@@ -4530,6 +4607,32 @@ DEFUN (no_ipv6_aggregate_address_summary_only,
 {
   return bgp_aggregate_unset (vty, argv[0], AFI_IP6, SAFI_UNICAST);
 }
+
+ALIAS (no_ipv6_aggregate_address,
+       no_ipv6_aggregate_address_as_set_cmd,
+       "no aggregate-address X:X::X:X/M as-set",
+       NO_STR
+       "Configure BGP aggregate entries\n"
+       "Aggregate prefix\n"
+       "Generate AS set path information\n")
+
+ALIAS (no_ipv6_aggregate_address,
+       no_ipv6_aggregate_address_as_set_summary_cmd,
+       "no aggregate-address X:X::X:X/M as-set summary-only",
+       NO_STR
+       "Configure BGP aggregate entries\n"
+       "Aggregate prefix\n"
+       "Generate AS set path information\n"
+       "Filter more specific routes from updates\n")
+
+ALIAS (no_ipv6_aggregate_address_summary_only,
+       no_ipv6_aggregate_address_summary_as_set_cmd,
+       "no aggregate-address X:X::X:X/M summary-only as-set",
+       NO_STR
+       "Configure BGP aggregate entries\n"
+       "Aggregate prefix\n"
+       "Filter more specific routes from updates\n"
+       "Generate AS set path information\n")
 
 ALIAS (ipv6_aggregate_address,
        old_ipv6_aggregate_address_cmd,
@@ -4571,7 +4674,7 @@ ALIAS (no_ipv6_aggregate_address_summary_only,
 /* Redistribute route treatment. */
 void
 bgp_redistribute_add (struct prefix *p, struct in_addr *nexthop,
-		      u_int32_t metric, u_char type)
+		      u_int32_t metric, u_char type, int vrf_id, safi_t safi)
 {
   struct bgp *bgp;
   struct listnode *node, *nnode;
@@ -4597,7 +4700,7 @@ bgp_redistribute_add (struct prefix *p, struct in_addr *nexthop,
     {
       afi = family2afi (p->family);
 
-      if (bgp->redist[afi][type])
+      if (bgp->redist[afi][type].safi[safi])
 	{
 	  /* Copy attribute for modification. */
 	  attr_new = attr;
@@ -4625,12 +4728,12 @@ bgp_redistribute_add (struct prefix *p, struct in_addr *nexthop,
 
 		  /* Unintern original. */
 		  aspath_unintern (attr.aspath);
-		  bgp_redistribute_delete (p, type);
+		  bgp_redistribute_delete (p, type, vrf_id, safi);
 		  return;
 		}
 	    }
 
-         bn = bgp_afi_node_get (bgp->rib[afi][SAFI_UNICAST], afi, SAFI_UNICAST, p, NULL);
+         bn = bgp_afi_node_get (bgp->rib[afi][safi], afi, safi, p, NULL);
 	  new_attr = bgp_attr_intern (&attr_new);
  
  	  for (bi = bn->info; bi; bi = bi->next)
@@ -4653,14 +4756,14 @@ bgp_redistribute_add (struct prefix *p, struct in_addr *nexthop,
  		  SET_FLAG (bi->flags, BGP_INFO_ATTR_CHANGED);
  
  		  /* Rewrite BGP route information. */
- 		  bgp_aggregate_decrement (bgp, p, bi, afi, SAFI_UNICAST);
+ 		  bgp_aggregate_decrement (bgp, p, bi, afi, safi);
  		  bgp_attr_unintern (bi->attr);
  		  bi->attr = new_attr;
  		  bi->uptime = time (NULL);
  
  		  /* Process change. */
- 		  bgp_aggregate_increment (bgp, p, bi, afi, SAFI_UNICAST);
- 		  bgp_process (bgp, bn, afi, SAFI_UNICAST);
+ 		  bgp_aggregate_increment (bgp, p, bi, afi, safi);
+ 		  bgp_process (bgp, bn, afi, safi);
  		  bgp_unlock_node (bn);
  		  aspath_unintern (attr.aspath);
  		  return;
@@ -4675,9 +4778,9 @@ bgp_redistribute_add (struct prefix *p, struct in_addr *nexthop,
 	  new->attr = new_attr;
 	  new->uptime = time (NULL);
 
-	  bgp_aggregate_increment (bgp, p, new, afi, SAFI_UNICAST);
+	  bgp_aggregate_increment (bgp, p, new, afi, safi);
 	  bgp_info_add (bn, new);
-	  bgp_process (bgp, bn, afi, SAFI_UNICAST);
+	  bgp_process (bgp, bn, afi, safi);
 	}
     }
 
@@ -4686,7 +4789,7 @@ bgp_redistribute_add (struct prefix *p, struct in_addr *nexthop,
 }
 
 void
-bgp_redistribute_delete (struct prefix *p, u_char type)
+bgp_redistribute_delete (struct prefix *p, u_char type, int vrf_id, safi_t safi)
 {
   struct bgp *bgp;
   struct listnode *node, *nnode;
@@ -4698,9 +4801,9 @@ bgp_redistribute_delete (struct prefix *p, u_char type)
     {
       afi = family2afi (p->family);
 
-      if (bgp->redist[afi][type])
+      if (bgp->redist[afi][type].safi[safi])
 	{
-         rn = bgp_afi_node_get (bgp->rib[afi][SAFI_UNICAST], afi, SAFI_UNICAST, p, NULL);
+         rn = bgp_afi_node_get (bgp->rib[afi][safi], afi, safi, p, NULL);
 
 	  for (ri = rn->info; ri; ri = ri->next)
 	    if (ri->peer == bgp->peer_self
@@ -4709,9 +4812,9 @@ bgp_redistribute_delete (struct prefix *p, u_char type)
 
 	  if (ri)
 	    {
-	      bgp_aggregate_decrement (bgp, p, ri, afi, SAFI_UNICAST);
+	      bgp_aggregate_decrement (bgp, p, ri, afi, safi);
 	      UNSET_FLAG (ri->flags, BGP_INFO_VALID);
-	      bgp_process (bgp, rn, afi, SAFI_UNICAST);
+	      bgp_process (bgp, rn, afi, safi);
 	      bgp_info_delete (rn, ri);
 	      bgp_info_free (ri);
 	      bgp_unlock_node (rn);
@@ -4723,13 +4826,13 @@ bgp_redistribute_delete (struct prefix *p, u_char type)
 
 /* Withdraw specified route type's route. */
 void
-bgp_redistribute_withdraw (struct bgp *bgp, afi_t afi, int type)
+bgp_redistribute_withdraw (struct bgp *bgp, afi_t afi, int type, int vrf_id, safi_t safi)
 {
   struct bgp_node *rn;
   struct bgp_info *ri;
   struct bgp_table *table;
 
-  table = bgp->rib[afi][SAFI_UNICAST];
+  table = bgp->rib[afi][safi];
 
   for (rn = bgp_table_top (table); rn; rn = bgp_route_next (rn))
     {
@@ -4740,9 +4843,9 @@ bgp_redistribute_withdraw (struct bgp *bgp, afi_t afi, int type)
 
       if (ri)
 	{
-	  bgp_aggregate_decrement (bgp, &rn->p, ri, afi, SAFI_UNICAST);
+	  bgp_aggregate_decrement (bgp, &rn->p, ri, afi, safi);
 	  UNSET_FLAG (ri->flags, BGP_INFO_VALID);
-	  bgp_process (bgp, rn, afi, SAFI_UNICAST);
+	  bgp_process (bgp, rn, afi, safi);
 	  bgp_info_delete (rn, ri);
 	  bgp_info_free (ri);
 	  bgp_unlock_node (rn);
@@ -5827,6 +5930,16 @@ DEFUN (show_ip_bgp_ipv4,
                      NULL);
  
   return bgp_show (vty, NULL, AFI_IP, SAFI_UNICAST, bgp_show_type_normal, NULL);
+}
+
+DEFUN (show_ip_mbgp,
+       show_ip_mbgp_cmd,
+       "show ip mbgp",
+       SHOW_STR
+       IP_STR
+       MBGP_STR)
+{
+  return bgp_show (vty, NULL, AFI_IP, SAFI_MULTICAST, bgp_show_type_normal, NULL);
 }
 
 DEFUN (show_ip_bgp_route,
@@ -7892,7 +8005,7 @@ ALIAS (show_bgp_community_list,
        "Address family\n"
        "Display routes matching the community-list\n"
        "community-list number\n"
-       "community-list name\n");
+       "community-list name\n")
 
 /* old command */
 DEFUN (show_ipv6_bgp_community_list,
@@ -9665,6 +9778,82 @@ bgp_distance_apply (struct prefix *p, struct bgp_info *rinfo, struct bgp *bgp)
     }
 }
 
+#ifdef HAVE_IPV6
+/* Apply BGP information to distance method for IPv6 */
+u_char
+bgp_distance_apply_ipv6 (struct prefix *p, struct bgp_info *rinfo, struct bgp *bgp)
+{
+  struct bgp_node *rn;
+  struct prefix_ipv6 q;
+  struct peer *peer;
+  struct bgp_distance *bdistance;
+  struct access_list *alist;
+  struct bgp_static *bgp_static;
+
+  if (! bgp)
+    return 0;
+
+  if (p->family != AF_INET6)
+    return 0;
+
+  peer = rinfo->peer;
+
+  if (peer->su.sa.sa_family != AF_INET6)
+    return 0;
+
+  memset (&q, 0, sizeof (struct prefix_ipv6));
+  q.family = AF_INET6;
+  q.prefix = peer->su.sin6.sin6_addr;
+  q.prefixlen = IPV6_MAX_BITLEN;
+
+  /* Check source address. */
+  rn = bgp_node_match (bgp_distance_table, (struct prefix *) &q);
+  if (rn)
+    {
+      bdistance = rn->info;
+      bgp_unlock_node (rn);
+
+      if (bdistance->access_list)
+	{
+	  alist = access_list_lookup (AFI_IP6, bdistance->access_list);
+	  if (alist && access_list_apply (alist, p) == FILTER_PERMIT)
+	    return bdistance->distance;
+	}
+      else
+	return bdistance->distance;
+    }
+
+  /* Backdoor check. */
+  rn = bgp_node_lookup (bgp->route[AFI_IP6][SAFI_UNICAST], p);
+  if (rn)
+    {
+      bgp_static = rn->info;
+      bgp_unlock_node (rn);
+
+      if (bgp_static->backdoor)
+	{
+	  if (bgp->distance_local)
+	    return bgp->distance_local;
+	  else
+	    return ZEBRA_IBGP_DISTANCE_DEFAULT;
+	}
+    }
+
+  if (peer_sort (peer) == BGP_PEER_EBGP)
+    {
+      if (bgp->distance_ebgp)
+	return bgp->distance_ebgp;
+      return ZEBRA_EBGP_DISTANCE_DEFAULT;
+    }
+  else
+    {
+      if (bgp->distance_ibgp)
+	return bgp->distance_ibgp;
+      return ZEBRA_IBGP_DISTANCE_DEFAULT;
+    }
+}
+#endif /* HAVE_IPV6 */
+
 DEFUN (bgp_distance,
        bgp_distance_cmd,
        "distance bgp <1-255> <1-255> <1-255>",
@@ -10293,6 +10482,7 @@ bgp_route_init ()
 
   install_element (VIEW_NODE, &show_ip_bgp_cmd);
   install_element (VIEW_NODE, &show_ip_bgp_ipv4_cmd);
+  install_element (VIEW_NODE, &show_ip_mbgp_cmd);
   install_element (VIEW_NODE, &show_ip_bgp_route_cmd);
   install_element (VIEW_NODE, &show_ip_bgp_ipv4_route_cmd);
   install_element (VIEW_NODE, &show_ip_bgp_vpnv4_all_route_cmd);
@@ -10367,6 +10557,7 @@ bgp_route_init ()
 
   install_element (ENABLE_NODE, &show_ip_bgp_cmd);
   install_element (ENABLE_NODE, &show_ip_bgp_ipv4_cmd);
+  install_element (ENABLE_NODE, &show_ip_mbgp_cmd);
   install_element (ENABLE_NODE, &show_ip_bgp_route_cmd);
   install_element (ENABLE_NODE, &show_ip_bgp_ipv4_route_cmd);
   install_element (ENABLE_NODE, &show_ip_bgp_vpnv4_all_route_cmd);
@@ -10454,9 +10645,33 @@ bgp_route_init ()
 
   install_element (BGP_IPV6_NODE, &ipv6_aggregate_address_cmd);
   install_element (BGP_IPV6_NODE, &ipv6_aggregate_address_summary_only_cmd);
+  install_element (BGP_IPV6_NODE, &ipv6_aggregate_address_as_set_cmd);
+  install_element (BGP_IPV6_NODE, &ipv6_aggregate_address_as_set_summary_cmd);
+  install_element (BGP_IPV6_NODE, &ipv6_aggregate_address_summary_as_set_cmd);
   install_element (BGP_IPV6_NODE, &no_ipv6_aggregate_address_cmd);
   install_element (BGP_IPV6_NODE, &no_ipv6_aggregate_address_summary_only_cmd);
+  install_element (BGP_IPV6_NODE, &no_ipv6_aggregate_address_as_set_cmd);
+  install_element (BGP_IPV6_NODE, &no_ipv6_aggregate_address_as_set_summary_cmd);
+  install_element (BGP_IPV6_NODE, &no_ipv6_aggregate_address_summary_as_set_cmd);
 
+  install_element (BGP_IPV6M_NODE, &ipv6_bgp_network_cmd);
+  install_element (BGP_IPV6M_NODE, &ipv6_bgp_network_route_map_cmd);
+  install_element (BGP_IPV6M_NODE, &no_ipv6_bgp_network_cmd);
+  install_element (BGP_IPV6M_NODE, &no_ipv6_bgp_network_route_map_cmd);
+
+  install_element (BGP_IPV6M_NODE, &ipv6_aggregate_address_cmd);
+  install_element (BGP_IPV6M_NODE, &ipv6_aggregate_address_summary_only_cmd);
+  install_element (BGP_IPV6M_NODE, &ipv6_aggregate_address_as_set_cmd);
+  install_element (BGP_IPV6M_NODE, &ipv6_aggregate_address_as_set_summary_cmd);
+  install_element (BGP_IPV6M_NODE, &ipv6_aggregate_address_summary_as_set_cmd);
+  install_element (BGP_IPV6M_NODE, &no_ipv6_aggregate_address_cmd);
+  install_element (BGP_IPV6M_NODE, &no_ipv6_aggregate_address_summary_only_cmd);
+  install_element (BGP_IPV6M_NODE, &no_ipv6_aggregate_address_as_set_cmd);
+  install_element (BGP_IPV6M_NODE, &no_ipv6_aggregate_address_as_set_summary_cmd);
+  install_element (BGP_IPV6M_NODE, &no_ipv6_aggregate_address_summary_as_set_cmd);
+
+  install_element (BGP_IPV6_NODE, &ipv6_bgp_network_backdoor_cmd);
+  install_element (BGP_IPV6_NODE, &no_ipv6_bgp_network_backdoor_cmd);
   /* Old config IPv6 BGP commands.  */
   install_element (BGP_NODE, &old_ipv6_bgp_network_cmd);
   install_element (BGP_NODE, &old_no_ipv6_bgp_network_cmd);

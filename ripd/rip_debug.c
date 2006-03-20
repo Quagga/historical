@@ -21,7 +21,9 @@
 
 #include <zebra.h>
 #include "command.h"
+#include "memory.h"
 #include "ripd/rip_debug.h"
+#include "thread.h"
 
 /* For debug statement. */
 unsigned long rip_debug_event = 0;
@@ -63,6 +65,9 @@ DEFUN (show_debugging_rip,
 
   if (IS_RIP_DEBUG_ZEBRA)
     vty_out (vty, "  RIP zebra debugging is on%s", VTY_NEWLINE);
+
+  if (is_memory_debug())
+    vty_out (vty, "  RIP memory debugging is on%s", VTY_NEWLINE);
 
   return CMD_SUCCESS;
 }
@@ -202,6 +207,29 @@ DEFUN (no_debug_rip_zebra,
   return CMD_WARNING;
 }
 
+DEFUN (debug_rip_memory,
+       debug_rip_memory_cmd,
+       "debug rip memory",
+       DEBUG_STR
+       RIP_STR
+       "RIP memory usages\n")
+{
+  memory_debug(1);
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_debug_rip_memory,
+       no_debug_rip_memory_cmd,
+       "no debug rip memory",
+       NO_STR
+       DEBUG_STR
+       RIP_STR
+       "RIP memory usages\n")
+{
+  memory_debug(0);
+  return CMD_SUCCESS;
+}
+
 /* Debug node. */
 struct cmd_node debug_node =
 {
@@ -247,6 +275,10 @@ config_write_debug (struct vty *vty)
       vty_out (vty, "debug rip zebra%s", VTY_NEWLINE);
       write++;
     }
+  if (is_memory_debug()) {
+      vty_out (vty, "debug rip memory%s", VTY_NEWLINE);
+      write++;
+  }
   return write;
 }
 
@@ -256,6 +288,17 @@ rip_debug_reset ()
   rip_debug_event = 0;
   rip_debug_packet = 0;
   rip_debug_zebra = 0;
+}
+
+DEFUN(show_cpu_rip,
+      show_cpu_rip_cmd,
+      "show cpu rip (|[RWTEX])",
+      SHOW_STR
+      "Thread CPU usage\n"
+      RIP_STR
+      "Display filter (Read, Write, Timer, Event, eXecute)\n")
+{
+  return thread_dumps(vty, argc, argv);
 }
 
 void
@@ -273,18 +316,24 @@ rip_debug_init ()
   install_element (ENABLE_NODE, &debug_rip_packet_direct_cmd);
   install_element (ENABLE_NODE, &debug_rip_packet_detail_cmd);
   install_element (ENABLE_NODE, &debug_rip_zebra_cmd);
+  install_element (ENABLE_NODE, &debug_rip_memory_cmd);
   install_element (ENABLE_NODE, &no_debug_rip_events_cmd);
   install_element (ENABLE_NODE, &no_debug_rip_packet_cmd);
   install_element (ENABLE_NODE, &no_debug_rip_packet_direct_cmd);
   install_element (ENABLE_NODE, &no_debug_rip_zebra_cmd);
+  install_element (ENABLE_NODE, &no_debug_rip_memory_cmd);
 
   install_element (CONFIG_NODE, &debug_rip_events_cmd);
   install_element (CONFIG_NODE, &debug_rip_packet_cmd);
   install_element (CONFIG_NODE, &debug_rip_packet_direct_cmd);
   install_element (CONFIG_NODE, &debug_rip_packet_detail_cmd);
   install_element (CONFIG_NODE, &debug_rip_zebra_cmd);
+  install_element (CONFIG_NODE, &debug_rip_memory_cmd);
   install_element (CONFIG_NODE, &no_debug_rip_events_cmd);
   install_element (CONFIG_NODE, &no_debug_rip_packet_cmd);
   install_element (CONFIG_NODE, &no_debug_rip_packet_direct_cmd);
   install_element (CONFIG_NODE, &no_debug_rip_zebra_cmd);
+  install_element (CONFIG_NODE, &no_debug_rip_memory_cmd);
+
+  install_element (ENABLE_NODE, &show_cpu_rip_cmd);
 }

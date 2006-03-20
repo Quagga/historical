@@ -155,5 +155,6 @@ int oid_compare (oid *, int, oid *, int);
 void oid2in_addr (oid [], int, struct in_addr *);
 void *oid_copy (void *, void *, size_t);
 void oid_copy_addr (oid [], struct in_addr *, int);
+int smux_peer_oid (struct vty *, const char *oid_str, const char *passwd_str);
 
 #endif /* _ZEBRA_SNMP_H */

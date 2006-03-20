@@ -170,8 +170,8 @@ ospf6_lsdb_add (struct ospf6_lsa *lsa, struct ospf6_lsdb *lsdb)
             {
               if (lsdb->hook_remove)
                 {
-                  (*lsdb->hook_remove) (old);
                   (*lsdb->hook_remove) (lsa);
+                  (*lsdb->hook_remove) (old);
                 }
             }
           else if (OSPF6_LSA_IS_MAXAGE (old))

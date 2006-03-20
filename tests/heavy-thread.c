@@ -1,5 +1,5 @@
 /*
- * $Id: heavy-thread.c,v 1.2 2005/04/25 16:42:24 paul Exp $
+ * $Id: heavy-thread.c,v 1.2 2005/09/30 12:09:59 vize Exp $
  *
  * This file is part of Quagga.
  *

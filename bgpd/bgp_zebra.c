@@ -18,6 +18,10 @@ along with GNU Zebra; see the file COPYING.  If not, write to the
 Free Software Foundation, Inc., 59 Temple Place - Suite 330,
 Boston, MA 02111-1307, USA.  */
 
+/*
+ * Copyright (C) 2005 6WIND  
+ */
+
 #include <zebra.h>
 
 #include "command.h"
@@ -32,6 +36,7 @@ Boston, MA 02111-1307, USA.  */
 
 #include "bgpd/bgpd.h"
 #include "bgpd/bgp_route.h"
+#include "bgpd/bgp_debug.h"
 #include "bgpd/bgp_attr.h"
 #include "bgpd/bgp_nexthop.h"
 #include "bgpd/bgp_zebra.h"
@@ -198,6 +203,8 @@ zebra_read_ipv4 (int command, struct zclient *zclient, zebra_size_t length)
   unsigned long ifindex;
   struct in_addr nexthop;
   struct prefix_ipv4 p;
+  int vrf_id=0;
+  safi_t safi = SAFI_UNICAST;
 
   s = zclient->ibuf;
   ifindex = 0;
@@ -231,11 +238,16 @@ zebra_read_ipv4 (int command, struct zclient *zclient, zebra_size_t length)
     api.metric = stream_getl (s);
   else
     api.metric = 0;
+  if (CHECK_FLAG (api.message, ZAPI_MESSAGE_MULTICAST))
+    {
+      vrf_id = stream_getw (s);
+      safi = stream_getw (s);
+    }
 
   if (command == ZEBRA_IPV4_ROUTE_ADD)
-    bgp_redistribute_add ((struct prefix *)&p, &nexthop, api.metric, api.type);
+    bgp_redistribute_add ((struct prefix *)&p, &nexthop, api.metric, api.type, vrf_id, safi);
   else
-    bgp_redistribute_delete ((struct prefix *)&p, api.type);
+    bgp_redistribute_delete ((struct prefix *)&p, api.type, vrf_id, safi);
 
   return 0;
 }
@@ -250,6 +262,8 @@ zebra_read_ipv6 (int command, struct zclient *zclient, zebra_size_t length)
   unsigned long ifindex;
   struct in6_addr nexthop;
   struct prefix_ipv6 p;
+  int vrf_id = 0;
+  safi_t safi = SAFI_UNICAST;
 
   s = zclient->ibuf;
   ifindex = 0;
@@ -285,15 +299,30 @@ zebra_read_ipv6 (int command, struct zclient *zclient, zebra_size_t length)
     api.metric = stream_getl (s);
   else
     api.metric = 0;
+  if (CHECK_FLAG (api.message, ZAPI_MESSAGE_MULTICAST))
+    {
+      vrf_id = stream_getw (s);
+      safi = stream_getw (s);
+    }
 
   /* Simply ignore link-local address. */
   if (IN6_IS_ADDR_LINKLOCAL (&p.prefix))
     return 0;
 
+#if defined (MUSICA) || defined (LINUX)
+  /* XXX As long as the BGP redistribution is applied to all the connected
+   *     routes, one needs to filter the ::/96 prefixes.
+   *     However it could be a wanted case, it will be removed soon.
+   */
+  if ((IN6_IS_ADDR_V4COMPAT(&p.prefix)) ||
+      (IN6_IS_ADDR_UNSPECIFIED (&p.prefix) && (p.prefixlen == 96)))
+    return 0;
+#endif /* MUSICA or LINUX */
+
   if (command == ZEBRA_IPV6_ROUTE_ADD)
-    bgp_redistribute_add ((struct prefix *)&p, NULL, api.metric, api.type);
+    bgp_redistribute_add ((struct prefix *)&p, NULL, api.metric, api.type, vrf_id, safi);
   else
-    bgp_redistribute_delete ((struct prefix *) &p, api.type);
+    bgp_redistribute_delete ((struct prefix *) &p, api.type, vrf_id, safi);
   
   return 0;
 }
@@ -591,7 +620,8 @@ bgp_ifindex_by_nexthop (struct in6_addr *addr)
 #endif /* HAVE_IPV6 */
 
 void
-bgp_zebra_announce (struct prefix *p, struct bgp_info *info, struct bgp *bgp)
+bgp_zebra_announce (struct prefix *p, struct bgp_info *info, 
+		     struct bgp *bgp, safi_t safi)
 {
   int flags;
   u_char distance;
@@ -632,7 +662,9 @@ bgp_zebra_announce (struct prefix *p, struct bgp_info *info, struct bgp *bgp)
       api.ifindex_num = 0;
       SET_FLAG (api.message, ZAPI_MESSAGE_METRIC);
       api.metric = info->attr->med;
-
+      SET_FLAG (api.message, ZAPI_MESSAGE_MULTICAST);
+      api.vrf_id = 0;
+      api.safi = safi;
       distance = bgp_distance_apply (p, info, bgp);
 
       if (distance)
@@ -640,6 +672,10 @@ bgp_zebra_announce (struct prefix *p, struct bgp_info *info, struct bgp *bgp)
 	  SET_FLAG (api.message, ZAPI_MESSAGE_DISTANCE);
 	  api.distance = distance;
 	}
+
+      if (BGP_DEBUG (normal, NORMAL))
+        zlog_debug ("Replacing the IGP route with preferred BGP route");
+
       zapi_ipv4_route (ZEBRA_IPV4_ROUTE_ADD, zclient, 
                        (struct prefix_ipv4 *) p, &api);
     }
@@ -695,6 +731,22 @@ bgp_zebra_announce (struct prefix *p, struct bgp_info *info, struct bgp *bgp)
       api.ifindex = &ifindex;
       SET_FLAG (api.message, ZAPI_MESSAGE_METRIC);
       api.metric = info->attr->med;
+      SET_FLAG (api.message, ZAPI_MESSAGE_MULTICAST);
+      api.vrf_id = 0;
+      api.safi = safi; 
+
+      /* BGP4+ (IPv6) backdoor feature */
+      distance = bgp_distance_apply_ipv6 (p, info, bgp);
+
+      if (distance == ZEBRA_IBGP_DISTANCE_DEFAULT)
+	{
+      	  SET_FLAG (api.flags, ZEBRA_FLAG_IBGP);
+	  SET_FLAG (api.message, ZAPI_MESSAGE_DISTANCE);
+	  api.distance = distance;
+	}
+
+      if (BGP_DEBUG (normal, NORMAL))
+        zlog_debug ("Replacing the IGP route with preferred BGP route");
 
       zapi_ipv6_route (ZEBRA_IPV6_ROUTE_ADD, zclient, 
                        (struct prefix_ipv6 *) p, &api);
@@ -703,7 +755,7 @@ bgp_zebra_announce (struct prefix *p, struct bgp_info *info, struct bgp *bgp)
 }
 
 void
-bgp_zebra_withdraw (struct prefix *p, struct bgp_info *info)
+bgp_zebra_withdraw (struct prefix *p, struct bgp_info *info, safi_t safi)
 {
   int flags;
   struct peer *peer;
@@ -743,6 +795,9 @@ bgp_zebra_withdraw (struct prefix *p, struct bgp_info *info)
       api.ifindex_num = 0;
       SET_FLAG (api.message, ZAPI_MESSAGE_METRIC);
       api.metric = info->attr->med;
+      SET_FLAG (api.message, ZAPI_MESSAGE_MULTICAST);
+      api.vrf_id = 0;
+      api.safi = safi; 
 
       zapi_ipv4_route (ZEBRA_IPV4_ROUTE_DELETE, zclient, 
                        (struct prefix_ipv4 *) p, &api);
@@ -788,6 +843,9 @@ bgp_zebra_withdraw (struct prefix *p, struct bgp_info *info)
       api.ifindex = &ifindex;
       SET_FLAG (api.message, ZAPI_MESSAGE_METRIC);
       api.metric = info->attr->med;
+      SET_FLAG (api.message, ZAPI_MESSAGE_MULTICAST);
+      api.vrf_id = 0;
+      api.safi = safi; 
 
       zapi_ipv6_route (ZEBRA_IPV6_ROUTE_DELETE, zclient, 
                        (struct prefix_ipv6 *) p, &api);
@@ -797,21 +855,17 @@ bgp_zebra_withdraw (struct prefix *p, struct bgp_info *info)
 
 /* Other routes redistribution into BGP. */
 int
-bgp_redistribute_set (struct bgp *bgp, afi_t afi, int type)
+bgp_redistribute_set (struct bgp *bgp, afi_t afi, int type, int vrf_id, safi_t safi)
 {
   /* Set flag to BGP instance. */
-  bgp->redist[afi][type] = 1;
-
-  /* Return if already redistribute flag is set. */
-  if (zclient->redist[type])
-    return CMD_WARNING;
+  bgp->redist[afi][type].safi[safi] = 1;
 
   zclient->redist[type] = 1;
 
   /* Return if zebra connection is not established. */
   if (zclient->sock < 0)
     return CMD_WARNING;
-    
+
   /* Send distribute add message to zebra. */
   zebra_redistribute_send (ZEBRA_REDISTRIBUTE_ADD, zclient, type);
 
@@ -820,8 +874,7 @@ bgp_redistribute_set (struct bgp *bgp, afi_t afi, int type)
 
 /* Redistribute with route-map specification.  */
 int
-bgp_redistribute_rmap_set (struct bgp *bgp, afi_t afi, int type, 
-                           const char *name)
+bgp_redistribute_rmap_set (struct bgp *bgp, afi_t afi, int type, const char *name)
 {
   if (bgp->rmap[afi][type].name
       && (strcmp (bgp->rmap[afi][type].name, name) == 0))
@@ -852,10 +905,10 @@ bgp_redistribute_metric_set (struct bgp *bgp, afi_t afi, int type,
 
 /* Unset redistribution.  */
 int
-bgp_redistribute_unset (struct bgp *bgp, afi_t afi, int type)
+bgp_redistribute_unset (struct bgp *bgp, afi_t afi, int type, int vrf_id, safi_t safi)
 {
   /* Unset flag from BGP instance. */
-  bgp->redist[afi][type] = 0;
+  bgp->redist[afi][type].safi[safi] = 0;
 
   /* Unset route-map. */
   if (bgp->rmap[afi][type].name)
@@ -867,19 +920,18 @@ bgp_redistribute_unset (struct bgp *bgp, afi_t afi, int type)
   bgp->redist_metric_flag[afi][type] = 0;
   bgp->redist_metric[afi][type] = 0;
 
-  /* Return if zebra connection is disabled. */
-  if (! zclient->redist[type])
-    return CMD_WARNING;
   zclient->redist[type] = 0;
 
-  if (bgp->redist[AFI_IP][type] == 0 
-      && bgp->redist[AFI_IP6][type] == 0 
+  if (bgp->redist[AFI_IP][type].safi[SAFI_UNICAST] == 0 
+      && bgp->redist[AFI_IP][type].safi[SAFI_MULTICAST] == 0 
+      && bgp->redist[AFI_IP6][type].safi[SAFI_UNICAST] == 0 
+      && bgp->redist[AFI_IP6][type].safi[SAFI_MULTICAST] == 0 
       && zclient->sock >= 0)
     /* Send distribute delete message to zebra. */
     zebra_redistribute_send (ZEBRA_REDISTRIBUTE_DELETE, zclient, type);
   
   /* Withdraw redistributed routes from current BGP's routing table. */
-  bgp_redistribute_withdraw (bgp, afi, type);
+  bgp_redistribute_withdraw (bgp, afi, type, vrf_id, safi);
 
   return CMD_SUCCESS;
 }

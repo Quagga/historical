@@ -20,6 +20,10 @@
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
 #include <zebra.h>
 
 #include "thread.h"
@@ -33,14 +37,21 @@
 #include "stream.h"
 #include "linklist.h"
 
+#include "isisd/dict.h"
+#include "isisd/include-netbsd/iso.h"
 #include "isisd/isis_constants.h"
 #include "isisd/isis_common.h"
 #include "isisd/isis_circuit.h"
+#include "isisd/isis_flags.h"
+#include "isisd/isisd.h"
 #include "isisd/isis_csm.h"
 #include "isisd/isis_route.h"
 #include "isisd/isis_zebra.h"
+#include "isisd/isis_redistribute.h"
+#define VNL VTY_NEWLINE
 
 struct zclient *zclient = NULL;
+extern struct isis * isis;
 
 extern struct thread_master *master;
 struct in_addr router_id_zebra;
@@ -58,6 +69,52 @@ isis_router_id_update_zebra (int command, struct zclient *zclient,
   /* FIXME: Do we react somehow? */
   return 0;
 }
+
+
+/* Redistribute Function. */
+int
+isis_zebra_redistribute (afi_t afi, int type)
+{
+  /* Set flag for ISIS family/type instance. */
+  isis->redist[afi][type] = 1;
+
+  if (zclient->redist[type])
+    return CMD_WARNING;
+
+  zclient->redist[type] = 1;
+
+  if (zclient->sock > 0)
+    {
+      zebra_redistribute_send (ZEBRA_REDISTRIBUTE_ADD, zclient, type);
+      return CMD_SUCCESS;
+    }
+  
+  else 
+    return CMD_WARNING;
+}
+
+int
+isis_zebra_no_redistribute (afi_t afi, int type)
+{
+  /* Unset flag for ISIS family/type instance. */
+  isis->redist[afi][type] = 0;  
+
+  if (! zclient->redist[type])
+    return CMD_WARNING;
+  
+  zclient->redist[type] = 0;
+ 
+  if (zclient->sock > 0)
+    {
+      zebra_redistribute_send (ZEBRA_REDISTRIBUTE_DELETE, zclient, type);
+      return CMD_SUCCESS;
+    }
+   else 
+     return CMD_WARNING;
+}
+
+
+
 
 static int
 isis_zebra_if_add (int command, struct zclient *zclient, zebra_size_t length)
@@ -519,6 +576,11 @@ isis_zebra_route_update (struct prefix *prefix,
   return;
 }
 
+const char *zebra_route_name[ZEBRA_ROUTE_MAX] =
+  { "System", "Kernel", "Connect", "Static", "RIP", "RIPng", "OSPF",
+    "OSPF6", "ISIS", "BGP" };
+
+
 static int
 isis_zebra_read_ipv4 (int command, struct zclient *zclient,
 		      zebra_size_t length)
@@ -570,8 +632,141 @@ static int
 isis_zebra_read_ipv6 (int command, struct zclient *zclient,
 		      zebra_size_t length)
 {
+  
+  struct stream *stream;
+  struct zapi_ipv6 api;
+  struct prefix_ipv6 p;
+  unsigned long ifindex;
+  struct in6_addr nexthop;
+  struct prefix *p6 = NULL;
+
+  stream = zclient->ibuf;
+  memset (&p, 0, sizeof (struct prefix_ipv6));
+  ifindex = 0;
+ 
+  api.type = stream_getc (stream);
+  api.flags = stream_getc (stream);
+  api.message = stream_getc (stream);
+  
+  p.family = AF_INET6;
+  p.prefixlen = stream_getc (stream);
+  stream_get (&p.prefix, stream, PSIZE (p.prefixlen));
+
+  if (CHECK_FLAG (api.message, ZAPI_MESSAGE_NEXTHOP))
+    {
+      api.nexthop_num = stream_getc (stream);
+      stream_get (&nexthop, stream, 16); 
+    }
+  if (CHECK_FLAG (api.message, ZAPI_MESSAGE_IFINDEX))
+    {
+      api.ifindex_num = stream_getc (stream);
+      ifindex = stream_getl (stream);
+    }
+  if (CHECK_FLAG (api.message, ZAPI_MESSAGE_DISTANCE))
+    api.distance = stream_getc (stream);
+  else 
+    api.distance = 0;
+
+  if (CHECK_FLAG (api.message, ZAPI_MESSAGE_METRIC))
+    api.metric = stream_getl (stream);
+  else
+    api.metric = 0;
+  
+  p6 = (struct prefix *) &p;
+  if (command == ZEBRA_IPV6_ROUTE_ADD)
+    {
+      isis_redistribute_add (api.type, api.ifindex_num, p6, api.nexthop_num,
+                             api.metric);
+      zlog_debug ("IPv6 route add from zebra.");
+    }
+  else 
+    {
+      isis_redistribute_remove (api.type, api.ifindex_num, p6);
+      zlog_debug ("IPv6 route delete from zebra.");
+    }
   return 0;
 }
+
+/* ########################## */
+
+DEFUN (show_zebra,
+       show_zebra_cmd,
+       "show zebra" ,
+       SHOW_STR
+       "Zebra information\n")
+{
+  int i;
+  if (zclient == NULL)
+    {
+      vty_out (vty, "Not connected to zebra %s",VNL);
+      return CMD_SUCCESS;
+    }
+  vty_out (vty, "Zebra Information%s", VNL);
+  vty_out (vty, " enable: %d fail: %d%s",
+           zclient->enable, zclient->fail, VNL);
+  vty_out (vty, " redistribute default: %d%s", zclient->redist_default,
+           VNL);
+  vty_out (vty, " redistribute:");
+  for (i=0; i < ZEBRA_ROUTE_MAX; i++)
+    {
+      if (zclient->redist[i])
+        vty_out (vty, " %s", zebra_route_name[i]);
+    }
+  vty_out (vty, "%s", VNL);
+  return CMD_SUCCESS;
+}
+
+DEFUN (router_zebra,
+       router_zebra_cmd,
+       "router_zebra" ,
+       "Enabling a routing process\n"
+       "Make connection to zebra daemon\n")
+{
+  vty->node = ZEBRA_NODE;
+  zclient->enable = 1;
+  zclient_start (zclient);
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_router_zebra,
+       no_router_zebra_cmd,
+       "no router zebra",
+       NO_STR
+       "Configure routing process\n"
+       "Close connection to zebra daemon\n")
+{
+  zclient->enable = 0;
+  zclient_stop (zclient);
+  return CMD_SUCCESS;
+}
+
+/* ISIS-Zebra configuration write function. */
+int
+config_write_isis_zebra (struct vty *vty)
+{
+  if (! zclient->enable)
+    {
+      vty_out (vty, "no router zebra%s", VNL);
+      vty_out (vty, "!%s", VNL);
+    }
+  else if (! zclient->redist[ZEBRA_ROUTE_OSPF6])
+    {
+      vty_out (vty, "router zebra%s", VNL);
+      vty_out (vty, "no redistribute isis%s", VNL);
+      vty_out (vty, "!%s", VNL);
+    }
+  return 0;
+}
+
+/* Zebra node structure. */
+struct cmd_node zebra_node =
+{
+  ZEBRA_NODE,
+  "%s(config-zebra)# ",
+};
+
+
+
 
 #define ISIS_TYPE_IS_REDISTRIBUTED(T) \
 T == ZEBRA_ROUTE_MAX ? zclient->default_information : zclient->redist[type]
@@ -612,3 +807,16 @@ isis_zebra_init ()
 
   return;
 }
+
+
+void
+isis_zebra_finish ()
+{
+  zclient_stop (zclient);
+
+/*zlient is not freed, ref ../lib/zclient.c
+  zclient_free (zclient);*/
+  zclient = (struct zclient *) NULL;
+  return;
+}
+

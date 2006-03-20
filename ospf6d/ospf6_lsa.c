@@ -19,6 +19,10 @@
  * Boston, MA 02111-1307, USA.  
  */
 
+/*
+ * Copyright (C) 2005 6WIND  
+ */
+
 #include <zebra.h>
 
 /* Include other stuffs */
@@ -37,7 +41,10 @@
 
 #include "ospf6_top.h"
 #include "ospf6_area.h"
+#include "ospf6_route.h"
+#include "ospf6_asbr.h"
 #include "ospf6_interface.h"
+#include "ospf6_intra.h"
 #include "ospf6_neighbor.h"
 
 #include "ospf6_flood.h"
@@ -75,7 +82,9 @@ struct ospf6_lsa_handler unknown_handler =
   OSPF6_LSTYPE_UNKNOWN,
   "Unknown",
   ospf6_unknown_lsa_show,
+#ifdef DEBUG
   OSPF6_LSA_DEBUG,
+#endif
 };
 
 void
@@ -240,7 +249,7 @@ ospf6_lsa_premature_aging (struct ospf6_lsa *lsa)
   THREAD_OFF (lsa->refresh);
 
   memset (&lsa->birth, 0, sizeof (struct timeval));
-  thread_execute (master, ospf6_lsa_expire, lsa, 0);
+  lsa->expire = thread_execute (master, ospf6_lsa_expire, lsa, 0);
 }
 
 /* check which is more recent. if a is more recent, return -1;
@@ -994,6 +1003,37 @@ config_write_ospf6_debug_lsa (struct vty *vty)
         vty_out (vty, "debug ospf6 lsa %s flooding%s",
                  ospf6_lsa_handler_name (handler), VNL);
     }
+
+  return 0;
+}
+
+int ospf6_default_originate_timer (struct thread *thread)
+{
+  struct ospf6_dio *dio;
+  struct prefix p;
+  struct ospf6_route *route;
+  struct ospf6_area *oa;
+  struct listnode *lnode, *lnnode;
+
+  /* Get originate flags */
+  dio = THREAD_ARG (thread);
+
+  dio->dio_timer = NULL;
+
+  memset(&p, 0, sizeof(struct prefix));
+  p.family = AF_INET6;
+  inet_pton (AF_INET6, "::", (struct in6_addr *)&p.u.prefix6);
+  p.prefixlen = 0;
+
+  if (dio->default_originate == DEFAULT_ORIGINATE_ALWAYS)
+    ospf6_asbr_external_info_add(DEFAULT_ROUTE, &p);
+
+  if ((route = ospf6_asbr_default_external_info (&p, dio)))
+    ospf6_as_external_lsa_originate (route);
+
+  /* Router-Bit (ASBR Flag) may have to be updated */
+  for (ALL_LIST_ELEMENTS (ospf6->area_list, lnode, lnnode, oa))
+     OSPF6_ROUTER_LSA_SCHEDULE (oa);
 
   return 0;
 }

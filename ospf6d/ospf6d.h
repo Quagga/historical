@@ -98,18 +98,38 @@ extern struct thread_master *master;
 
 /* for commands */
 #define OSPF6_AREA_STR      "Area information\n"
-#define OSPF6_AREA_ID_STR   "Area ID (as an IPv4 notation)\n"
 #define OSPF6_SPF_STR       "Shortest Path First tree information\n"
 #define OSPF6_ROUTER_ID_STR "Specify Router-ID\n"
 #define OSPF6_LS_ID_STR     "Specify Link State ID\n"
+#define OSPF6_AREA_ID_STR \
+       "OSPF6 area ID in IPv4 address notation\n"\
+       "OSPF6 area ID in decimal format\n"
+#define VLINK_HELPSTR_IPADDR \
+       "OSPF area parameters\n" \
+       OSPF6_AREA_ID_STR \
+       "Configure a Virtual Link\n" \
+       "Specify Router ID of the remote ABR\n"
+#define VLINK_HELPSTR_TIME_PARAM_NOSECS \
+       "Time between HELLO packets\n" \
+       "Time between retransmitting lost link state advertisements\n" \
+       "Link state transmit delay\n" \
+       "Interval after which a neighbor is declared dead\n"
+#define VLINK_HELPSTR_TIME_PARAM \
+        VLINK_HELPSTR_TIME_PARAM_NOSECS \
+        "Seconds\n"
 
 #define VNL VTY_NEWLINE
 #define OSPF6_CMD_CHECK_RUNNING() \
   if (ospf6 == NULL) \
     { \
-      vty_out (vty, "OSPFv3 is not running%s", VTY_NEWLINE); \
+      vty_out (vty, " OSPFv3 is not running%s", VTY_NEWLINE); \
       return CMD_SUCCESS; \
     }
+
+/* Default Information Originate */
+#define DEFAULT_ORIGINATE_NONE          0
+#define DEFAULT_ORIGINATE_ZEBRA         1
+#define DEFAULT_ORIGINATE_ALWAYS        2
 
 
 /* Function Prototypes */

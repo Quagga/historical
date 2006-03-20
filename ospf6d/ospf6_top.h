@@ -24,6 +24,15 @@
 
 #include "routemap.h"
 
+/* defined for DIO functionality */
+struct ospf6_dio 
+{
+  int default_originate;
+  int dmetric_type;
+  int dmetric_value;
+  struct thread *dio_timer;
+};
+
 /* OSPFv3 top level data structure */
 struct ospf6
 {
@@ -39,6 +48,9 @@ struct ospf6
   /* list of areas */
   struct list *area_list;
 
+  /* list of interfaces where ospf6 is enabled */
+  struct list *interfaces;
+
   /* AS scope link state database */
   struct ospf6_lsdb *lsdb;
   struct ospf6_lsdb *lsdb_self;
@@ -50,6 +62,19 @@ struct ospf6
   struct route_table *external_id_table;
   u_int32_t external_id;
 
+  struct ospf6_route_table *stale_table;
+
+  /* for DIO originates */
+  struct ospf6_dio dio;
+  
+  /* Redistribute max prefix */
+  u_int32_t maximum_prefix;
+  u_int8_t  max_prefix_threshold;
+  u_int8_t  max_prefix_warning_only;
+
+  /* Reference Bandwidth (Kbps) */
+  u_int32_t ref_bandwidth;
+
   /* redistribute route-map */
   struct
   {
@@ -57,20 +82,31 @@ struct ospf6
     struct route_map *map;
   } rmap[ZEBRA_ROUTE_MAX];
 
+#define ROUTEMAP_NAME(O,T)   (O)->rmap[T].name
+
   u_char flag;
 
   struct thread *maxage_remover;
 };
 
+#define DEFAULT_ROUTE               ZEBRA_ROUTE_MAX
 #define OSPF6_DISABLED    0x01
+#define OSPF6_MAXIMUM_PREFIX_THRESHOLD_DEFAULT 75
+
+#define OSPF6_DEFAULT_BANDWIDTH          100000  /* Kbps */
+#define OSPF6_DEFAULT_REF_BANDWIDTH      100000 /* Kbps */
 
 /* global pointer for OSPF top data structure */
 extern struct ospf6 *ospf6;
 
 /* prototypes */
-void ospf6_top_init ();
+void ospf6_top_init (void);
 
 void ospf6_maxage_remove (struct ospf6 *o);
+
+int ospf6_str2area_id (const char *name,  u_int32_t *area_id, int *ai_format);
+
+void ospf6_router_id_update (struct ospf6 *);
 
 #endif /* OSPF6_TOP_H */
 

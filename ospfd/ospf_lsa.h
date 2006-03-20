@@ -323,9 +323,13 @@ int metric_type (struct ospf *, u_char);
 int metric_value (struct ospf *, u_char);
 
 struct in_addr ospf_get_nssa_ip (struct ospf_area *);
-int ospf_translated_nssa_compare (struct ospf_lsa *, struct ospf_lsa *);
-struct ospf_lsa *ospf_translated_nssa_refresh (struct ospf *, struct ospf_lsa *,
-                                   struct ospf_lsa *);
+struct ospf_lsa *ospf_translated_nssa_refresh (struct ospf *, struct ospf_lsa *);
 struct ospf_lsa *ospf_translated_nssa_originate (struct ospf *, struct ospf_lsa *);
+ 
+struct ospf_lsa *ospf_external_lsa_new (struct ospf *, struct external_info *, 
+                        struct in_addr *);
+
+struct ospf_lsa *ospf_nssa_default_lsa_originate (struct ospf_area *);
+struct ospf_lsa *ospf_nssa_default_lsa_refresh (struct ospf_area *, struct ospf_lsa *);
 
 #endif /* _ZEBRA_OSPF_LSA_H */

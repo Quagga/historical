@@ -152,6 +152,14 @@ ripng_peer_bad_packet (struct sockaddr_in6 *from)
   peer->recv_badpackets++;
 }
 
+void 
+ripng_peer_received_packet (struct sockaddr_in6 *from)
+{
+  struct ripng_peer *peer;
+  peer = ripng_peer_get (&from->sin6_addr);
+  peer->recv_receivedpackets++;
+}
+
 /* Display peer uptime. */
 char *
 ripng_peer_uptime (struct ripng_peer *peer, char *buf, size_t len)
@@ -197,11 +205,11 @@ ripng_peer_display (struct vty *vty)
 
   for (ALL_LIST_ELEMENTS (peer_list, node, nnode, peer))
     {
-      vty_out (vty, "    %s %s%14s %10d %10d %10d      %s%s", inet6_ntoa (peer->addr),
+      vty_out (vty, "    %s %s%14s %10d %10d %10d %10d      %s%s", inet6_ntoa (peer->addr),
                VTY_NEWLINE, " ",
-	       peer->recv_badpackets, peer->recv_badroutes,
+	       peer->recv_receivedpackets, peer->recv_badpackets, peer->recv_badroutes,
 	       ZEBRA_RIPNG_DISTANCE_DEFAULT,
-	       ripng_peer_uptime (peer, timebuf, RIPNG_UPTIME_LEN),
+	       (const char*)ripng_peer_uptime (peer, timebuf, RIPNG_UPTIME_LEN),
 	       VTY_NEWLINE);
     }
 }

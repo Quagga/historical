@@ -314,7 +314,7 @@ sockunion_log (union sockunion *su)
       snprintf (buf, SU_ADDRSTRLEN, "af_unknown %d ", su->sa.sa_family);
       break;
     }
-  return (strdup (buf));
+  return buf;
 }
 
 /* sockunion_connect returns

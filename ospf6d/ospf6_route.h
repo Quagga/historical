@@ -22,7 +22,10 @@
 #ifndef OSPF6_ROUTE_H
 #define OSPF6_ROUTE_H
 
+#ifndef OSPF6_MULTI_PATH_LIMIT
+/* this value should be defined in Makefile */
 #define OSPF6_MULTI_PATH_LIMIT    4
+#endif /* OSPF6_MULTI_PATH_LIMIT */
 
 /* Debug option */
 extern unsigned char conf_debug_ospf6_route;
@@ -46,8 +49,10 @@ struct ospf6_nexthop
   struct in6_addr address;
 };
 
+#if 0
 #define ospf6_nexthop_is_set(x)                                \
   ((x)->ifindex || ! IN6_IS_ADDR_UNSPECIFIED (&(x)->address))
+#endif
 #define ospf6_nexthop_is_same(a,b)                             \
   ((a)->ifindex == (b)->ifindex &&                            \
    IN6_ARE_ADDR_EQUAL (&(a)->address, &(b)->address))
@@ -156,7 +161,7 @@ struct ospf6_route
 #define OSPF6_ROUTE_ADD              0x02
 #define OSPF6_ROUTE_REMOVE           0x04
 #define OSPF6_ROUTE_BEST             0x08
-#define OSPF6_ROUTE_ACTIVE_SUMMARY   0x10
+#define OSPF6_ROUTE_ACTIVE_RANGE     0x10
 #define OSPF6_ROUTE_DO_NOT_ADVERTISE 0x20
 #define OSPF6_ROUTE_WAS_REMOVED      0x40
 
@@ -226,6 +231,8 @@ void ospf6_linkstate_prefix (u_int32_t adv_router, u_int32_t id,
                              struct prefix *prefix);
 void ospf6_linkstate_prefix2str (struct prefix *prefix, char *buf, int size);
 
+void ospf6_nexthop_update (struct ospf6_route *ra, struct ospf6_route *rb);
+
 struct ospf6_route *ospf6_route_create ();
 void ospf6_route_delete (struct ospf6_route *);
 struct ospf6_route *ospf6_route_copy (struct ospf6_route *route);
@@ -233,6 +240,8 @@ struct ospf6_route *ospf6_route_copy (struct ospf6_route *route);
 void ospf6_route_lock (struct ospf6_route *route);
 void ospf6_route_unlock (struct ospf6_route *route);
 
+int ospf6_route_path_type_cost_cmp (struct ospf6_route *ra,
+                                    struct ospf6_route *rb);
 struct ospf6_route *
 ospf6_route_lookup (struct prefix *prefix,
                     struct ospf6_route_table *table);
@@ -276,7 +285,8 @@ void ospf6_brouter_show (struct vty *vty, struct ospf6_route *route);
 
 int config_write_ospf6_debug_route (struct vty *vty);
 void install_element_ospf6_debug_route ();
-void ospf6_route_init ();
+//void ospf6_route_init (void);
 
+int ospf6_nexthop_is_set(struct ospf6_nexthop *);
 #endif /* OSPF6_ROUTE_H */
 

@@ -2,6 +2,7 @@
 
 INCLUDES = @INCLUDES@ -I.. -I$(top_srcdir) -I$(top_srcdir)/lib @SNMP_INCLUDES@
 DEFS = @DEFS@ -DSYSCONFDIR=\"$(sysconfdir)/\"
+DEFS += -DRIP_MULTI_PATH_LIMIT=@MULTIPATH_NUM@
 INSTALL_SDATA=@INSTALL@ -m 600
 
 noinst_LIBRARIES = librip.a

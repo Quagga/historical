@@ -44,15 +44,20 @@ struct ospf_if_params
   DECLARE_IF_PARAM (u_int32_t, transmit_delay); /* Interface Transmisson Delay */
   DECLARE_IF_PARAM (u_int32_t, output_cost_cmd);/* Command Interface Output Cost */
   DECLARE_IF_PARAM (u_int32_t, retransmit_interval); /* Retransmission Interval */
+  DECLARE_IF_PARAM (u_int32_t, static_mtu);     /* MTU advertised by OSPF */
   DECLARE_IF_PARAM (u_char, passive_interface);      /* OSPF Interface is passive: no sending or receiving (no need to join multicast groups) */
   DECLARE_IF_PARAM (u_char, priority);               /* OSPF Interface priority */
   DECLARE_IF_PARAM (u_char, type);                   /* type of interface */
 #define OSPF_IF_ACTIVE                  0
 #define OSPF_IF_PASSIVE		        1
-  
+
   DECLARE_IF_PARAM (u_int32_t, v_hello);             /* Hello Interval */
   DECLARE_IF_PARAM (u_int32_t, v_wait);              /* Router Dead Interval */
 
+  /* MTU mismatch check (see RFC2328, chap 10.6) */
+  u_char mtu_ignore:1;        /* if set, do not check neighbors' MTUs */
+  u_char mtu_ignore__config:1;
+  
   /* Authentication data. */
   u_char auth_simple[OSPF_AUTH_SIMPLE_SIZE + 1];       /* Simple password. */
   u_char auth_simple__config:1;
@@ -61,11 +66,17 @@ struct ospf_if_params
   DECLARE_IF_PARAM (int, auth_type);               /* OSPF authentication type */
 };
 
+#define OSPF_MTU(oi) (OSPF_IF_PARAM(oi, static_mtu) ? OSPF_IF_PARAM(oi, static_mtu) : (oi)->ifp->mtu)
+
 struct ospf_if_info
 {
   struct ospf_if_params *def_params;
   struct route_table *params;
   struct route_table *oifs;
+  int ipv4_addr_count;   /*
+                          * Number of ospf-valid IPv4 addresses on interface
+                          * Used to determine if interface is unnumbered.
+                          */
 };
 
 struct ospf_interface;
@@ -91,7 +102,7 @@ struct crypt_key
 {
   u_char key_id;
   u_char auth_key[OSPF_AUTH_MD5_SIZE + 1];
-};
+} __attribute__((packed));
 
 /* OSPF interface structure. */
 struct ospf_interface
@@ -131,10 +142,10 @@ struct ospf_interface
   struct prefix *address;		/* Interface prefix */
   struct connected *connected;          /* Pointer to connected */ 
 
-  /* Configured varables. */
+  /* Configured variables. */
   struct ospf_if_params *params;
   u_int32_t crypt_seqnum;		/* Cryptographic Sequence Number */ 
-  u_int32_t output_cost;	        /* Acutual Interface Output Cost */
+  u_int32_t output_cost;		/* Actual Interface Output Cost */
 
   /* Neighbor information. */
   struct route_table *nbrs;             /* OSPF Neighbor List */
@@ -216,6 +227,7 @@ struct ospf_interface *ospf_if_lookup_by_prefix (struct ospf *,
 struct ospf_interface *ospf_if_addr_local (struct in_addr);
 struct ospf_interface *ospf_if_lookup_recv_if (struct ospf *, struct in_addr);
 struct ospf_interface *ospf_if_is_configured (struct ospf *, struct in_addr *);
+struct ospf_interface *ospf_get_unnumbered_if(struct ospf *, unsigned int);
 
 struct ospf_if_params *ospf_lookup_if_params (struct interface *,
 					      struct in_addr);
@@ -236,7 +248,7 @@ void ospf_if_recalculate_output_cost (struct interface *);
 /* Simulate down/up on the interface. */
 extern void ospf_if_reset (struct interface *);
 
-struct ospf_interface *ospf_vl_new (struct ospf *, struct ospf_vl_data *);
+struct ospf_interface *ospf_vl_new (struct ospf *, struct ospf_vl_data *, int);
 struct ospf_vl_data *ospf_vl_data_new (struct ospf_area *, struct in_addr);
 struct ospf_vl_data *ospf_vl_lookup (struct ospf_area *, struct in_addr);
 void ospf_vl_data_free (struct ospf_vl_data *);

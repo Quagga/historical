@@ -21,7 +21,9 @@
  */
 
 #include <zebra.h>
+#include "thread.h"
 #include "command.h"
+#include "memory.h"
 #include "ripngd/ripng_debug.h"
 
 /* For debug statement. */
@@ -64,6 +66,9 @@ DEFUN (show_debugging_ripng,
 
   if (IS_RIPNG_DEBUG_ZEBRA)
     vty_out (vty, "  RIPng zebra debugging is on%s", VTY_NEWLINE);
+
+  if (is_memory_debug())
+    vty_out (vty, "  RIPng memory debugging is on%s", VTY_NEWLINE);
 
   return CMD_SUCCESS;
 }
@@ -118,7 +123,7 @@ DEFUN (debug_ripng_packet_detail,
        "Debug option set for ripng packet\n"
        "Debug option set for receive packet\n"
        "Debug option set for send packet\n"
-       "Debug option set detaied information\n")
+       "Debug option set detailed information\n")
 {
   ripng_debug_packet |= RIPNG_DEBUG_PACKET;
   if (strncmp ("send", argv[0], strlen (argv[0])) == 0)
@@ -203,6 +208,29 @@ DEFUN (no_debug_ripng_zebra,
   return CMD_WARNING;
 }
 
+DEFUN (debug_ripng_memory,
+       debug_ripng_memory_cmd,
+       "debug ripng memory",
+       DEBUG_STR
+       "RIPng configuration\n"
+       "RIPng memory usages\n")
+{
+  memory_debug(1);
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_debug_ripng_memory,
+       no_debug_ripng_memory_cmd,
+       "no debug ripng memory",
+       NO_STR
+       DEBUG_STR
+       "RIPng configuration\n"
+       "RIPng memory usages\n")
+{
+  memory_debug(0);
+  return CMD_SUCCESS;
+}
+
 /* Debug node. */
 struct cmd_node debug_node =
 {
@@ -248,6 +276,11 @@ config_write_debug (struct vty *vty)
       vty_out (vty, "debug ripng zebra%s", VTY_NEWLINE);
       write++;
     }
+  if (is_memory_debug())
+    {
+      vty_out (vty, "debug ripng memory%s", VTY_NEWLINE);
+      write++;
+    }
   return write;
 }
 
@@ -257,6 +290,17 @@ ripng_debug_reset ()
   ripng_debug_event = 0;
   ripng_debug_packet = 0;
   ripng_debug_zebra = 0;
+}
+
+DEFUN(show_cpu_ripng,
+      show_cpu_ripng_cmd,
+      "show cpu ripng (|[RWTEX])",
+      SHOW_STR
+      "Thread CPU usage\n"
+      "RIPng information\n"
+      "Display filter (Read, Write, Timer, Event, eXecute)\n")
+{
+  return thread_dumps(vty, argc, argv);
 }
 
 void
@@ -276,18 +320,24 @@ ripng_debug_init ()
   install_element (ENABLE_NODE, &debug_ripng_packet_direct_cmd);
   install_element (ENABLE_NODE, &debug_ripng_packet_detail_cmd);
   install_element (ENABLE_NODE, &debug_ripng_zebra_cmd);
+  install_element (ENABLE_NODE, &debug_ripng_memory_cmd);
   install_element (ENABLE_NODE, &no_debug_ripng_events_cmd);
   install_element (ENABLE_NODE, &no_debug_ripng_packet_cmd);
   install_element (ENABLE_NODE, &no_debug_ripng_packet_direct_cmd);
   install_element (ENABLE_NODE, &no_debug_ripng_zebra_cmd);
+  install_element (ENABLE_NODE, &no_debug_ripng_memory_cmd);
 
   install_element (CONFIG_NODE, &debug_ripng_events_cmd);
   install_element (CONFIG_NODE, &debug_ripng_packet_cmd);
   install_element (CONFIG_NODE, &debug_ripng_packet_direct_cmd);
   install_element (CONFIG_NODE, &debug_ripng_packet_detail_cmd);
   install_element (CONFIG_NODE, &debug_ripng_zebra_cmd);
+  install_element (CONFIG_NODE, &debug_ripng_memory_cmd);
   install_element (CONFIG_NODE, &no_debug_ripng_events_cmd);
   install_element (CONFIG_NODE, &no_debug_ripng_packet_cmd);
   install_element (CONFIG_NODE, &no_debug_ripng_packet_direct_cmd);
   install_element (CONFIG_NODE, &no_debug_ripng_zebra_cmd);
+  install_element (CONFIG_NODE, &no_debug_ripng_memory_cmd);
+
+  install_element (ENABLE_NODE, &show_cpu_ripng_cmd);
 }

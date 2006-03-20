@@ -20,6 +20,10 @@
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <errno.h>
@@ -95,31 +99,34 @@ static char sock_buff[8192];
  * FIXME: and the p2p multicast being ???
  */
 #ifdef GNU_LINUX
-static int
-isis_multicast_join (int fd, int registerto, int if_num)
+void
+get_multicast_address(struct packet_mreq *mreq, int registerto, int if_num)
 {
-  struct packet_mreq mreq;
-
-  memset (&mreq, 0, sizeof (mreq));
-  mreq.mr_ifindex = if_num;
+  memset (mreq, 0, sizeof (struct packet_mreq));
+  mreq->mr_ifindex = if_num;
   if (registerto)
     {
-      mreq.mr_type = PACKET_MR_MULTICAST;
-      mreq.mr_alen = ETH_ALEN;
+      mreq->mr_type = PACKET_MR_MULTICAST;
+      mreq->mr_alen = ETH_ALEN;
       if (registerto == 1)
-	memcpy (&mreq.mr_address, ALL_L1_ISS, ETH_ALEN);
+	memcpy (&mreq->mr_address, ALL_L1_ISS, ETH_ALEN);
       else if (registerto == 2)
-	memcpy (&mreq.mr_address, ALL_L2_ISS, ETH_ALEN);
+	memcpy (&mreq->mr_address, ALL_L2_ISS, ETH_ALEN);
       else if (registerto == 3)
-	memcpy (&mreq.mr_address, ALL_ISS, ETH_ALEN);
+	memcpy (&mreq->mr_address, ALL_ISS, ETH_ALEN);
       else
-	memcpy (&mreq.mr_address, ALL_ESS, ETH_ALEN);
-
+	memcpy (&mreq->mr_address, ALL_ESS, ETH_ALEN);
     }
   else
     {
-      mreq.mr_type = PACKET_MR_ALLMULTI;
-    }
+      mreq->mr_type = PACKET_MR_ALLMULTI;
+    }    
+}
+int
+isis_multicast_join (int fd, int registerto, int if_num)
+{
+  struct packet_mreq mreq;
+  get_multicast_address(&mreq, registerto, if_num);
 #ifdef EXTREME_DEBUG
   zlog_debug ("isis_multicast_join(): fd=%d, reg_to=%d, if_num=%d, "
 	      "address = %02x:%02x:%02x:%02x:%02x:%02x",
@@ -136,6 +143,29 @@ isis_multicast_join (int fd, int registerto, int if_num)
 
   return ISIS_OK;
 }
+
+int
+isis_multicast_unjoin (int fd, int registerto, int if_num)
+{
+  struct packet_mreq mreq;
+  get_multicast_address(&mreq, registerto, if_num);
+#ifdef EXTREME_DEBUG
+  zlog_debug ("isis_multicast_unjoin(): fd=%d, reg_to=%d, if_num=%d, "
+	      "address = %02x:%02x:%02x:%02x:%02x:%02x",
+	      fd, registerto, if_num, mreq.mr_address[0], mreq.mr_address[1],
+	      mreq.mr_address[2], mreq.mr_address[3], mreq.mr_address[4],
+	      mreq.mr_address[5]);
+#endif /* EXTREME_DEBUG */
+  if (setsockopt (fd, SOL_PACKET, PACKET_DROP_MEMBERSHIP, &mreq,
+		  sizeof (struct packet_mreq)))
+    {
+      zlog_warn ("isis_multicast_unjoin(): setsockopt(): %s", safe_strerror (errno));
+      return ISIS_WARNING;
+    }
+
+  return ISIS_OK;
+}
+
 
 static int
 open_packet_socket (struct isis_circuit *circuit)

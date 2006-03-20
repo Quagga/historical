@@ -1,4 +1,4 @@
-# $Id: memtypes.awk,v 1.2 2005/04/16 15:51:05 paul Exp $
+# $Id: memtypes.awk,v 1.2 2005/09/29 15:48:36 vize Exp $
 #
 # Scan a file of memory definitions (see eg memtypes.c) and generate
 # a corresponding header file with an enum of the MTYPE's and declarations

@@ -1,5 +1,5 @@
 /*
- * $Id: log.c,v 1.25 2005/02/03 19:22:05 ajs Exp $
+ * $Id: log.c,v 1.9 2005/08/30 12:22:07 vize Exp $
  *
  * Logging of zebra
  * Copyright (C) 1997, 1998, 1999 Kunihiro Ishiguro
@@ -39,7 +39,7 @@ const char *zlog_proto_names[] =
 {
   "NONE",
   "DEFAULT",
-  "ZEBRA",
+  "FIB",
   "RIP",
   "BGP",
   "OSPF",
@@ -556,7 +556,9 @@ openzlog (const char *progname, zlog_proto_t protocol,
   /* Set default logging levels. */
   for (i = 0; i < sizeof(zl->maxlvl)/sizeof(zl->maxlvl[0]); i++)
     zl->maxlvl[i] = ZLOG_DISABLED;
+  /* Enable default logs for monitoing and syslog */
   zl->maxlvl[ZLOG_DEST_MONITOR] = LOG_DEBUG;
+  zl->maxlvl[ZLOG_DEST_SYSLOG]  = LOG_DEBUG;
   zl->default_lvl = LOG_DEBUG;
 
   openlog (progname, syslog_flags, zl->facility);

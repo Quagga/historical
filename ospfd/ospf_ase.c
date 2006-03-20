@@ -45,6 +45,7 @@
 #include "ospfd/ospf_ase.h"
 #include "ospfd/ospf_zebra.h"
 #include "ospfd/ospf_dump.h"
+#include "ospfd/ospf_abr.h"
 
 #define DEBUG
 
@@ -658,6 +659,12 @@ ospf_ase_calculate_timer (struct thread *t)
       /* kevinm: And add the NSSA routes in ospf_top */
       LSDB_LOOP (NSSA_LSDB (ospf),rn,lsa)
       		ospf_ase_calculate_route(ospf,lsa);
+
+      /* calculate the new cost and type of the type7 aggregate, if
+       * any route is added based on type7 lsa by scheduling
+       * the abr task
+       */
+      ospf_schedule_abr_task (ospf);
 
       /* Compare old and new external routing table and install the
 	 difference info zebra/kernel */

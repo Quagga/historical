@@ -81,6 +81,7 @@ enum node_type
   BGP_IPV4_NODE,		/* BGP IPv4 unicast address family.  */
   BGP_IPV4M_NODE,		/* BGP IPv4 multicast address family.  */
   BGP_IPV6_NODE,		/* BGP IPv6 address family */
+  BGP_IPV6M_NODE,		/* BGP IPv6 multicast address family.  */
   OSPF_NODE,			/* OSPF protocol mode */
   OSPF6_NODE,			/* OSPF protocol for IPv6 mode */
   ISIS_NODE,			/* ISIS protocol mode */
@@ -97,7 +98,8 @@ enum node_type
   SMUX_NODE,			/* SNMP configuration node. */
   DUMP_NODE,			/* Packet dump node. */
   FORWARDING_NODE,		/* IP forwarding node. */
-  VTY_NODE			/* Vty node. */
+  VTY_NODE,			/* Vty node. */
+  SIXOS_SHOW_NODE		/* see vtysh, cli show mode */
 };
 
 /* Node which has some commands and prompt string and configuration
@@ -178,10 +180,10 @@ struct desc
   };
 
 #define DEFUN_CMD_FUNC_DECL(funcname) \
-  static int funcname (struct cmd_element *, struct vty *, int, const char *[]); \
+  int funcname (struct cmd_element *, struct vty *, int, const char *[]); \
 
 #define DEFUN_CMD_FUNC_TEXT(funcname) \
-  static int funcname \
+  int funcname \
     (struct cmd_element *self, struct vty *vty, int argc, const char *argv[])
 
 /* DEFUN for vty command interafce. Little bit hacky ;-). */
@@ -284,7 +286,7 @@ struct desc
 #define V4NOTATION_STR "specify by IPv4 address notation(e.g. 0.0.0.0)\n"
 #define OSPF6_NUMBER_STR "Specify by number\n"
 #define INTERFACE_STR "Interface infomation\n"
-#define IFNAME_STR "Interface name(e.g. ep0)\n"
+#define IFNAME_STR "Interface's name\n"
 #define IP6_STR "IPv6 Information\n"
 #define OSPF6_STR "Open Shortest Path First (OSPF) for IPv6\n"
 #define OSPF6_ROUTER_STR "Enable a routing process\n"

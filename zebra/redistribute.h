@@ -32,8 +32,8 @@ void zebra_redistribute_delete (int, struct zserv *, int);
 void zebra_redistribute_default_add (int, struct zserv *, int);
 void zebra_redistribute_default_delete (int, struct zserv *, int);
 
-void redistribute_add (struct prefix *, struct rib *);
-void redistribute_delete (struct prefix *, struct rib *);
+void redistribute_add (struct prefix *, struct rib *, int, safi_t);
+void redistribute_delete (struct prefix *, struct rib *, int, safi_t);
 
 void zebra_interface_up_update (struct interface *);
 void zebra_interface_down_update (struct interface *);

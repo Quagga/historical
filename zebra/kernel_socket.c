@@ -31,6 +31,8 @@
 #include "str.h"
 #include "table.h"
 #include "rib.h"
+/* VPN */
+#include "vpn.h"
 #include "privs.h"
 
 #include "zebra/interface.h"
@@ -152,8 +154,14 @@ struct message rtm_flag_str[] =
   {0,             NULL}
 };
 
+struct table_descriptor 
+{
+  int vrf_id;
+  safi_t safi;
+};
+
 /* Kernel routing update socket. */
-int routing_sock = -1;
+int routing_sock[VRF_TABLE_MAX];
 
 /* Yes I'm checking ugly routing socket behavior. */
 /* #define DEBUG */
@@ -171,7 +179,9 @@ af_check (int family)
   return 0;
 }
 
-/* Dump routing table flag for debug purpose. */
+/* Dump routing table flag for debug purpose.
+ * used to dump rtm->rtm_flags and ifam->ifam_flags
+ */
 static void
 rtm_flag_dump (int flag)
 {
@@ -189,6 +199,44 @@ rtm_flag_dump (int flag)
     }
   zlog_debug ("Kernel: %s", buf);
 }
+
+int 
+kernel_table (int vrf_id, safi_t safi)
+{
+  int vrf_table;
+
+  /* Set the id of the kernel routing table */ 
+  vrf_table = 2*vrf_id;
+  if (safi == SAFI_MULTICAST) 
+    { 
+      vrf_table += 1;
+    }
+  if(vrf_table > VRF_TABLE_MAX)
+    {
+      zlog (NULL, LOG_ERR, "table id error. vrf_table = %d", vrf_table);
+      exit (1);
+    }
+  return vrf_table;
+}
+
+void 
+routing_sock_put (int vrf_id, safi_t safi, int sock)
+{
+  int vrf_table;
+  
+  vrf_table = kernel_table (vrf_id, safi);
+  routing_sock[vrf_table] = sock;;
+}
+
+int
+routing_sock_get (int vrf_id, safi_t safi)
+{
+  int vrf_table;
+
+  vrf_table = kernel_table (vrf_id, safi);
+  return routing_sock[vrf_table];
+}
+
 
 #ifdef RTM_IFANNOUNCE
 /* Interface adding function */
@@ -375,6 +423,10 @@ ifm_read (struct if_msghdr *ifm)
      * but apparently do not trigger action.)
      */
     {
+      /* Fetch hardware address. */
+      if (sdl->sdl_family == AF_LINK)
+	    memcpy (&ifp->sdl, sdl, sizeof (struct sockaddr_dl));
+
       if (if_is_up (ifp))
 	{
 	  ifp->flags = ifm->ifm_flags;
@@ -455,6 +507,9 @@ ifam_read (struct ifa_msghdr *ifam)
   struct interface *ifp;
   union sockunion addr, mask, gate;
 
+  if (IS_ZEBRA_DEBUG_KERNEL)
+    rtm_flag_dump (ifam->ifam_flags);
+
   /* Check does this interface exist or not. */
   ifp = if_lookup_by_index (ifam->ifam_index);
   if (ifp == NULL) 
@@ -488,6 +543,8 @@ ifam_read (struct ifa_msghdr *ifam)
 	 is KAME. */
       if (IN6_IS_ADDR_LINKLOCAL (&addr.sin6.sin6_addr))
 	SET_IN6_LINKLOCAL_IFINDEX (addr.sin6.sin6_addr, 0);
+      if (IN6_IS_ADDR_LINKLOCAL (&gate.sin6.sin6_addr))
+	SET_IN6_LINKLOCAL_IFINDEX (gate.sin6.sin6_addr, 0);
 
       if (ifam->ifam_type == RTM_NEWADDR)
 	connected_add_ipv6 (ifp,
@@ -507,6 +564,43 @@ ifam_read (struct ifa_msghdr *ifam)
     }
   return 0;
 }
+
+#if defined(RTM_NEWMADDR) && defined(RTM_DELMADDR)
+/* Interface function for reading kernel multicast routing table information. */
+void
+ifma_read (struct ifma_msghdr *ifma)
+{
+  int err = 0;
+
+  if (ifma->ifmam_version != RTM_VERSION)
+    zlog_warn("Routing message version %d should be %d", ifma->ifmam_version, RTM_VERSION);
+
+  switch (ifma->ifmam_type) {
+    case RTM_NEWMADDR:
+      if (IS_ZEBRA_DEBUG_KERNEL)
+        zlog_debug("Kernel: New Multicast Address");
+      break;
+    case RTM_DELMADDR:
+      if (IS_ZEBRA_DEBUG_KERNEL)
+        zlog_debug("Kernel: Delete Multicast Address");
+      break;
+    default:
+      zlog_warn("Unknown multicast message 0x%x", ifma->ifmam_type);
+      err = 1;
+  }
+  if (IS_ZEBRA_DEBUG_KERNEL) {
+    zlog_debug("  Fields: 0x%x Flags: 0x%x Interface: %d",
+      ifma->ifmam_addrs,
+      ifma->ifmam_flags,
+      ifma->ifmam_index);
+  }
+  if (err)
+    return;
+
+  /* TODO: Add here the multicast support */
+  return ;
+}
+#endif /* RTM_NEWMADDR && RTM_DELMADDR */
 
 /* Interface function for reading kernel routing table information. */
 int
@@ -572,7 +666,7 @@ rtm_read_mesg (struct rt_msghdr *rtm,
 }
 
 void
-rtm_read (struct rt_msghdr *rtm)
+rtm_read (struct rt_msghdr *rtm, int vrf_id, safi_t safi)
 {
   int flags;
   u_char zebra_flags;
@@ -631,10 +725,10 @@ rtm_read (struct rt_msghdr *rtm)
 
       if (rtm->rtm_type == RTM_GET || rtm->rtm_type == RTM_ADD)
 	rib_add_ipv4 (ZEBRA_ROUTE_KERNEL, zebra_flags, 
-		      &p, &gate.sin.sin_addr, 0, 0, 0, 0);
+		      &p, &gate.sin.sin_addr, 0, 0, 0, vrf_id, safi);
       else
 	rib_delete_ipv4 (ZEBRA_ROUTE_KERNEL, zebra_flags, 
-		      &p, &gate.sin.sin_addr, 0, 0);
+		      &p, &gate.sin.sin_addr, 0, vrf_id, safi);
     }
 #ifdef HAVE_IPV6
   if (dest.sa.sa_family == AF_INET6)
@@ -659,10 +753,10 @@ rtm_read (struct rt_msghdr *rtm)
 
       if (rtm->rtm_type == RTM_GET || rtm->rtm_type == RTM_ADD)
 	rib_add_ipv6 (ZEBRA_ROUTE_KERNEL, zebra_flags,
-		      &p, &gate.sin6.sin6_addr, ifindex, 0);
+		      &p, &gate.sin6.sin6_addr, ifindex, 0, 0, vrf_id, safi);
       else
 	rib_delete_ipv6 (ZEBRA_ROUTE_KERNEL, zebra_flags,
-			 &p, &gate.sin6.sin6_addr, ifindex, 0);
+			 &p, &gate.sin6.sin6_addr, ifindex, vrf_id, safi);
     }
 #endif /* HAVE_IPV6 */
 }
@@ -676,7 +770,9 @@ rtm_write (int message,
 	   union sockunion *gate,
 	   unsigned int index,
 	   int zebra_flags,
-	   int metric)
+	   int metric,
+	   int vrf_id,
+	   safi_t safi)
 {
   int ret;
   caddr_t pnt;
@@ -710,7 +806,7 @@ rtm_write (int message,
 #endif /* SIN6_LEN */
 #endif /* HAVE_IPV6 */
 
-  if (routing_sock < 0)
+  if (routing_sock_get(vrf_id, safi) < 0)
     return ZEBRA_ERR_EPERM;
 
   /* Clear and set rt_msghdr values */
@@ -764,7 +860,6 @@ rtm_write (int message,
   if (zebra_flags & ZEBRA_FLAG_REJECT)
     msg.rtm.rtm_flags |= RTF_REJECT;
 
-
 #ifdef HAVE_SIN_LEN
 #define SOCKADDRSET(X,R) \
   if (msg.rtm.rtm_addrs & (R)) \
@@ -792,7 +887,8 @@ rtm_write (int message,
 
   msg.rtm.rtm_msglen = pnt - (caddr_t) &msg;
 
-  ret = write (routing_sock, &msg, msg.rtm.rtm_msglen);
+
+  ret = write (routing_sock_get(vrf_id, safi), &msg, msg.rtm.rtm_msglen);
 
   if (ret != msg.rtm.rtm_msglen) 
     {
@@ -826,6 +922,22 @@ rtmsg_debug (struct rt_msghdr *rtm)
       }
 
   zlog_debug ("Kernel: Len: %d Type: %s", rtm->rtm_msglen, type);
+
+  /* Dump the RTF_* flags, seq and pid only for the following messages */
+  switch (rtm->rtm_type) {
+    case RTM_ADD:
+    case RTM_DELETE:
+    case RTM_CHANGE:
+    case RTM_GET:
+    case RTM_LOSING:
+    case RTM_REDIRECT:
+    case RTM_MISS:
+    case RTM_LOCK:
+    case RTM_RESOLVE:
+      break;
+    default:
+      return;
+  }
   rtm_flag_dump (rtm->rtm_flags);
   zlog_debug ("Kernel: message seq %d", rtm->rtm_seq);
   zlog_debug ("Kernel: pid %d", rtm->rtm_pid);
@@ -840,6 +952,141 @@ rtmsg_debug (struct rt_msghdr *rtm)
 #endif /* RTA_NUMBITS */
 #endif /* RTAX_MAX */
 
+static char *
+af2str(sa_family_t sa_family)
+{
+  static char str[15];
+
+  switch (sa_family) {
+    case AF_LINK:
+      return "link";
+      break;
+    case AF_INET:
+      return "inet";
+      break;
+    case AF_INET6:
+      return "inet6";
+      break;
+    default:
+      break;
+  }
+  snprintf(str, sizeof(str), "unknown %d", sa_family);
+  return str;
+}
+
+static void
+rtmsg_sockaddrhex(struct sockaddr *s)
+{
+  u_char *v = (u_char *)s;
+  char hex[4];
+  char str[sizeof(struct sockaddr)*2 + 1] = "";
+  int j;
+
+  for (j = 0; j < sizeof(struct sockaddr); j++) {
+    sprintf(hex, "%02x", v[j] & 0xff);
+	strlcat(str, hex, sizeof(str));
+  }
+  zlog_debug("    Hex: 0x%s", str);
+}
+
+/* For debug prupose: dump the RTAX_ list of sockaddr
+ * 
+ * Arguments:
+ *   addr	an array of sockaddr up to RTAX_MAX
+ * Returns:
+ *   none
+ */
+static void
+rtmsg_dumpsockaddr(const struct sockaddr *addr, int rtm_addrs)
+{
+  int i;
+  static const char *rtax[RTAX_MAX] = {
+    "dst",     /* RTAX_DST */
+	"gateway", /* RTAX_GATEWAY */
+	"netmask", /* RTAX_NETMASK */
+	"genmask", /* RTAX_GENMASK */
+	"ifp",     /* RTAX_IFP */
+	"ifa",     /* RTAX_IFA */
+	"author",  /* RTAX_AUTHOR */
+	"brd",     /* RTAX_BRD */
+  };
+
+  if (!IS_ZEBRA_DEBUG_KERNEL)
+    return;
+
+  for (i = 0; i < RTAX_MAX; i++) {
+    union {
+      struct sockaddr     sa;
+      struct sockaddr_dl  sdl;
+      struct sockaddr_in  sin;
+#ifdef HAVE_IPV6
+      struct sockaddr_in6 sin6;
+#endif
+    } *s;
+    int err = 0;
+    char str[64];
+
+    s = (void *) &(addr[i]);
+
+#define IS_ZEBRA_DEBUG_KERNEL_DETAIL 0
+    if (IS_ZEBRA_DEBUG_KERNEL_DETAIL)
+      rtmsg_sockaddrhex(&(s->sa));
+
+    /*
+     * XXX: Some sockaddrs have sa_len != 0 and sa_family = 0,
+     * other sockaddrs have sa_family = 0 and sa_family != 0   !!!
+     */
+    if ( (s->sa.sa_len == 0) && (s->sa.sa_family == 0)
+         && !((1 << i) & rtm_addrs) )
+      continue;
+
+    zlog_debug("  Idx: %d %s Len: %d Family: %s", i, rtax[i], s->sa.sa_len,
+               af2str(s->sa.sa_family));
+    switch (s->sa.sa_family) {
+      case AF_LINK:
+        if (s->sdl.sdl_index != 0) {
+          zlog_debug("    Interface: %d IANA type: 0x%x Link: %s",
+             s->sdl.sdl_index,
+             s->sdl.sdl_type, /* TODO: Dump the string value */
+			 link_ntoa(&(s->sdl)) );
+        } else {
+          zlog_debug("    Link: %s",
+             link_ntoa(&(s->sdl)) );
+        }
+        break;
+      case AF_INET:
+        if (s->sin.sin_port) {
+          zlog_debug("    Port: %d Addr: %s",
+             ntohs(s->sin.sin_port),
+             inet_ntop(AF_INET, &(s->sin.sin_addr), str, sizeof(str)) );
+		} else {
+          zlog_debug("    Addr: %s",
+             inet_ntop(AF_INET, &(s->sin.sin_addr), str, sizeof(str)) );
+		}
+        break;
+#ifdef HAVE_IPV6
+      case AF_INET6:
+        if (s->sin6.sin6_port) {
+          zlog_debug("    Port: %d Flowinfo: %lx Addr: %s Scope: %lx",
+             ntohs(s->sin6.sin6_port),
+             ntohl(s->sin6.sin6_flowinfo),
+             inet_ntop(AF_INET6, &(s->sin6.sin6_addr), str, sizeof(str)),
+             s->sin6.sin6_scope_id);
+		} else {
+          zlog_debug("    Flowinfo: %lx Addr: %s Scope: %lx",
+             ntohl(s->sin6.sin6_flowinfo),
+             inet_ntop(AF_INET6, &(s->sin6.sin6_addr), str, sizeof(str)),
+             s->sin6.sin6_scope_id);
+		}
+        break;
+#endif
+      default:
+        rtmsg_sockaddrhex(&(s->sa));
+        break;
+    }
+  }
+}
+
 /* Kernel routing table and interface updates via routing socket. */
 int
 kernel_read (struct thread *thread)
@@ -847,6 +1094,8 @@ kernel_read (struct thread *thread)
   int sock;
   int nbytes;
   struct rt_msghdr *rtm;
+  struct kern_tab *tab;
+  struct table_descriptor *id;
 
   /*
    * This must be big enough for any message the kernel might send.
@@ -889,11 +1138,22 @@ kernel_read (struct thread *thread)
     } ian;
 #endif /* RTM_IFANNOUNCE */
 
+#if defined(RTM_NEWMADDR) && defined(RTM_DELMADDR)
+    /* Interface multicast address */
+    struct
+    {
+      struct ifma_msghdr ifma;
+      struct sockaddr addr[RTAX_MAX];
+    } ima;
+#endif /* RTM_NEWMADDR && RTM_DELMADDR */
+
   } buf;
 
   /* Fetch routing socket. */
   sock = THREAD_FD (thread);
+  id = (struct table_descriptor *) THREAD_ARG(thread);
 
+  memset(&buf, 0, sizeof buf);
   nbytes= read (sock, &buf, sizeof buf);
 
   if (nbytes <= 0)
@@ -925,23 +1185,35 @@ kernel_read (struct thread *thread)
     {
     case RTM_ADD:
     case RTM_DELETE:
-      rtm_read (rtm);
+      rtm_read (&buf.r.rtm, id->vrf_id, id->safi);
+      rtmsg_dumpsockaddr(buf.r.addr, buf.r.rtm.rtm_addrs);
       break;
     case RTM_IFINFO:
       ifm_read (&buf.im.ifm);
+      rtmsg_dumpsockaddr(buf.im.addr, buf.im.ifm.ifm_addrs);
       break;
     case RTM_NEWADDR:
     case RTM_DELADDR:
       ifam_read (&buf.ia.ifa);
+      rtmsg_dumpsockaddr(buf.ia.addr, buf.ia.ifa.ifam_addrs);
       break;
 #ifdef RTM_IFANNOUNCE
     case RTM_IFANNOUNCE:
       ifan_read (&buf.ian.ifan);
+      /* There is no sockaddr within this class of message */
       break;
 #endif /* RTM_IFANNOUNCE */
+#if defined(RTM_NEWMADDR) && defined(RTM_DELMADDR)
+    case RTM_NEWMADDR:
+    case RTM_DELMADDR:
+      ifma_read (&buf.ima.ifma);
+      rtmsg_dumpsockaddr(buf.ima.addr, buf.ima.ifma.ifmam_addrs);
+      break;
+#endif /* RTM_NEWMADDR && RTM_DELMADDR */
     default:
       if (IS_ZEBRA_DEBUG_KERNEL)
         zlog_debug("Unprocessed RTM_type: %d", rtm->rtm_type);
+      rtmsg_dumpsockaddr(buf.r.addr, buf.r.rtm.rtm_addrs);
       break;
     }
   return 0;
@@ -949,14 +1221,17 @@ kernel_read (struct thread *thread)
 
 /* Make routing socket. */
 void
-routing_socket ()
+routing_socket (int vrf_id, safi_t safi)
 {
+  int sock, vrf_table;
+  struct table_descriptor *id;
+
   if ( zserv_privs.change (ZPRIVS_RAISE) )
     zlog_err ("routing_socket: Can't raise privileges");
 
-  routing_sock = socket (AF_ROUTE, SOCK_RAW, 0);
+    sock = socket (AF_ROUTE, SOCK_RAW, 0);
 
-  if (routing_sock < 0) 
+  if (sock < 0) 
     {
       if ( zserv_privs.change (ZPRIVS_LOWER) )
         zlog_err ("routing_socket: Can't lower privileges");
@@ -964,18 +1239,45 @@ routing_socket ()
       return;
     }
 
+  vrf_table = kernel_table (vrf_id, safi);
+  routing_sock_put(vrf_id, safi, sock);
+
   /* XXX: Socket should be NONBLOCK, however as we currently 
    * discard failed writes, this will lead to inconsistencies.
    * For now, socket must be blocking.
    */
-  /*if (fcntl (routing_sock, F_SETFL, O_NONBLOCK) < 0) 
+  /*if (fcntl (sock, F_SETFL, O_NONBLOCK) < 0) 
     zlog_warn ("Can't set O_NONBLOCK to routing socket");*/
     
   if ( zserv_privs.change (ZPRIVS_LOWER) )
     zlog_err ("routing_socket: Can't lower privileges");
 
+#ifdef VRF
+  /* VPN - begin */
+  if (vpn_id) {
+     if (ioctl(routing_sock, SIOCSVPNID, &vpn_id) < 0)
+       {
+	  zlog_warn ("Can't set VPN identifier to routing socket");
+       }
+  }
+
+  if (vrf_table)
+  {  
+    if (ioctl(sock, SIOCSVPNID, &vrf_table) < 0)
+    {
+      zlog_warn ("Can't set VPN identifier to routing socket");
+    }
+  }
+  /* VPN - end */
+#endif /* VRF */
+
+  id = XMALLOC (MTYPE_VRF, sizeof (struct table_descriptor));
+  id->vrf_id = vrf_id;
+  id->safi = safi;
+ 
   /* kernel_read needs rewrite. */
-  thread_add_read (zebrad.master, kernel_read, NULL, routing_sock);
+  thread_add_read (zebrad.master, kernel_read, id, sock);
+
 }
 
 /* Exported interface function.  This function simply calls
@@ -983,5 +1285,6 @@ routing_socket ()
 void
 kernel_init ()
 {
-  routing_socket ();
+  routing_socket (0, SAFI_UNICAST);
+  routing_socket (0, SAFI_MULTICAST);
 }

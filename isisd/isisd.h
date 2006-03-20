@@ -20,14 +20,28 @@
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
+#include "zclient.h"
 #ifndef ISISD_H
 #define ISISD_H
 
+#include "isis_redistribute.h"
+#include "isis_routemap.h"
+
 #define ISISD_VERSION "0.0.7"
+#define isis_zebra_is_redistribute(type) \
+  (zclient->redist[type])
 
 /* uncomment if you are a developer in bug hunt */
-/* #define EXTREME_DEBUG  */
-/* #define EXTREME_TLV_DEBUG */
+#define EXTREME_DEBUG  
+#define EXTREME_TLV_DEBUG 
+
+/* If you want topology stuff compiled in */
+/* # TOPOLOGY_GENERATE*/
+
 
 struct rmap
 {
@@ -43,13 +57,27 @@ struct isis
   struct list *area_list;	/* list of IS-IS areas */
   struct list *init_circ_list;
   struct list *nexthops;	/* IPv4 next hops from this IS */
+
+
+/* Redistributed external information. */
+  u_char redist[AFI_MAX][ZEBRA_ROUTE_MAX];
+  struct list *ip4_ext_routes [ZEBRA_ROUTE_MAX + 1]; 
+
+
 #ifdef HAVE_IPV6
   struct list *nexthops6;	/* IPv6 next hops from this IS */
+
+
+/* The global external IPv6 routes list */
+  struct list *ip6_ext_routes [ZEBRA_ROUTE_MAX + 1];
+
 #endif				/* HAVE_IPV6 */
   u_char max_area_addrs;	/* maximumAreaAdresses */
   struct area_addr *man_area_addrs;	/* manualAreaAddresses */
   u_int32_t debugs;		/* bitmap for debug */
   time_t uptime;		/* when did we start */
+  int zero_age_lifetime;
+  int metric_default;
 
   /* Redistributed external information. */
   struct route_table *external_info[ZEBRA_ROUTE_MAX + 1];
@@ -88,6 +116,7 @@ struct isis_area
   struct route_table *route_table6;	/* IPv6 routes */
 #endif
   unsigned int min_bcast_mtu;
+  unsigned int lsp_mtu;
   struct list *circuit_list;	/* IS-IS circuits */
   struct flags flags;
   struct thread *t_tick;	/* LSP walker */
@@ -133,6 +162,8 @@ struct isis_area
 void isis_init (void);
 struct isis_area *isis_area_lookup (const char *);
 
+
+
 #define DEBUG_ADJ_PACKETS                (1<<0)
 #define DEBUG_CHECKSUM_ERRORS            (1<<1)
 #define DEBUG_LOCAL_UPDATES              (1<<2)
@@ -144,5 +175,6 @@ struct isis_area *isis_area_lookup (const char *);
 #define DEBUG_SPF_TRIGGERS               (1<<8)
 #define DEBUG_RTE_EVENTS                 (1<<9)
 #define DEBUG_EVENTS                     (1<<10)
+#define DEBUG_REDISTRIBUTE               (1<<11)
 
 #endif /* ISISD_H */

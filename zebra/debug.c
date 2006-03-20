@@ -23,6 +23,8 @@
 #include <zebra.h>
 #include "command.h"
 #include "debug.h"
+#include "memory.h"
+#include "thread.h"
 
 /* For debug statement. */
 unsigned long zebra_debug_event;
@@ -31,49 +33,53 @@ unsigned long zebra_debug_kernel;
 
 DEFUN (show_debugging_zebra,
        show_debugging_zebra_cmd,
-       "show debugging zebra",
+       "show debugging fib",
        SHOW_STR
-       "Zebra configuration\n"
+       "FIB configuration\n"
        "Debugging information\n")
 {
-  vty_out (vty, "Zebra debugging status:%s", VTY_NEWLINE);
+  vty_out (vty, "FIB debugging status:%s", VTY_NEWLINE);
 
   if (IS_ZEBRA_DEBUG_EVENT)
-    vty_out (vty, "  Zebra event debugging is on%s", VTY_NEWLINE);
+    vty_out (vty, "  FIB event debugging is on%s", VTY_NEWLINE);
 
   if (IS_ZEBRA_DEBUG_PACKET)
     {
       if (IS_ZEBRA_DEBUG_SEND && IS_ZEBRA_DEBUG_RECV)
 	{
-	  vty_out (vty, "  Zebra packet%s debugging is on%s",
+	  vty_out (vty, "  FIB packet%s debugging is on%s",
 		   IS_ZEBRA_DEBUG_DETAIL ? " detail" : "",
 		   VTY_NEWLINE);
 	}
       else
 	{
 	  if (IS_ZEBRA_DEBUG_SEND)
-	    vty_out (vty, "  Zebra packet send%s debugging is on%s",
+	    vty_out (vty, "  FIB packet send%s debugging is on%s",
 		     IS_ZEBRA_DEBUG_DETAIL ? " detail" : "",
 		     VTY_NEWLINE);
 	  else
-	    vty_out (vty, "  Zebra packet receive%s debugging is on%s",
+	    vty_out (vty, "  FIB packet receive%s debugging is on%s",
 		     IS_ZEBRA_DEBUG_DETAIL ? " detail" : "",
 		     VTY_NEWLINE);
 	}
     }
 
   if (IS_ZEBRA_DEBUG_KERNEL)
-    vty_out (vty, "  Zebra kernel debugging is on%s", VTY_NEWLINE);
+    vty_out (vty, "  FIB kernel debugging is on%s", VTY_NEWLINE);
+
+  /* Show memory debugging status */
+  if (is_memory_debug())
+    vty_out (vty, "  FIB memory debugging is on%s", VTY_NEWLINE);
 
   return CMD_SUCCESS;
 }
 
 DEFUN (debug_zebra_events,
        debug_zebra_events_cmd,
-       "debug zebra events",
+       "debug fib events",
        DEBUG_STR
-       "Zebra configuration\n"
-       "Debug option set for zebra events\n")
+       "FIB configuration\n"
+       "Debug option set for fib events\n")
 {
   zebra_debug_event = ZEBRA_DEBUG_EVENT;
   return CMD_WARNING;
@@ -81,9 +87,9 @@ DEFUN (debug_zebra_events,
 
 DEFUN (debug_zebra_packet,
        debug_zebra_packet_cmd,
-       "debug zebra packet",
+       "debug fib packet",
        DEBUG_STR
-       "Zebra configuration\n"
+       "FIB configuration\n"
        "Debug option set for zebra packet\n")
 {
   zebra_debug_packet = ZEBRA_DEBUG_PACKET;
@@ -94,10 +100,10 @@ DEFUN (debug_zebra_packet,
 
 DEFUN (debug_zebra_packet_direct,
        debug_zebra_packet_direct_cmd,
-       "debug zebra packet (recv|send)",
+       "debug fib packet (recv|send)",
        DEBUG_STR
-       "Zebra configuration\n"
-       "Debug option set for zebra packet\n"
+       "FIB configuration\n"
+       "Debug option set for fib packet\n"
        "Debug option set for receive packet\n"
        "Debug option set for send packet\n")
 {
@@ -112,13 +118,13 @@ DEFUN (debug_zebra_packet_direct,
 
 DEFUN (debug_zebra_packet_detail,
        debug_zebra_packet_detail_cmd,
-       "debug zebra packet (recv|send) detail",
+       "debug fib packet (recv|send) detail",
        DEBUG_STR
-       "Zebra configuration\n"
-       "Debug option set for zebra packet\n"
+       "FIB configuration\n"
+       "Debug option set for fib packet\n"
        "Debug option set for receive packet\n"
        "Debug option set for send packet\n"
-       "Debug option set detaied information\n")
+       "Debug option set detailed information\n")
 {
   zebra_debug_packet = ZEBRA_DEBUG_PACKET;
   if (strncmp ("send", argv[0], strlen (argv[0])) == 0)
@@ -131,10 +137,10 @@ DEFUN (debug_zebra_packet_detail,
 
 DEFUN (debug_zebra_kernel,
        debug_zebra_kernel_cmd,
-       "debug zebra kernel",
+       "debug fib kernel",
        DEBUG_STR
-       "Zebra configuration\n"
-       "Debug option set for zebra between kernel interface\n")
+       "FIB configuration\n"
+       "Debug option set for fib between kernel interface\n")
 {
   zebra_debug_kernel = ZEBRA_DEBUG_KERNEL;
   return CMD_SUCCESS;
@@ -142,11 +148,11 @@ DEFUN (debug_zebra_kernel,
 
 DEFUN (no_debug_zebra_events,
        no_debug_zebra_events_cmd,
-       "no debug zebra events",
+       "no debug fib events",
        NO_STR
        DEBUG_STR
-       "Zebra configuration\n"
-       "Debug option set for zebra events\n")
+       "FIB configuration\n"
+       "Debug option set for fib events\n")
 {
   zebra_debug_event = 0;
   return CMD_SUCCESS;
@@ -154,10 +160,10 @@ DEFUN (no_debug_zebra_events,
 
 DEFUN (no_debug_zebra_packet,
        no_debug_zebra_packet_cmd,
-       "no debug zebra packet",
+       "no debug fib packet",
        NO_STR
        DEBUG_STR
-       "Zebra configuration\n"
+       "FIB configuration\n"
        "Debug option set for zebra packet\n")
 {
   zebra_debug_packet = 0;
@@ -166,11 +172,11 @@ DEFUN (no_debug_zebra_packet,
 
 DEFUN (no_debug_zebra_packet_direct,
        no_debug_zebra_packet_direct_cmd,
-       "no debug zebra packet (recv|send)",
+       "no debug fib packet (recv|send)",
        NO_STR
        DEBUG_STR
-       "Zebra configuration\n"
-       "Debug option set for zebra packet\n"
+       "FIB configuration\n"
+       "Debug option set for fib packet\n"
        "Debug option set for receive packet\n"
        "Debug option set for send packet\n")
 {
@@ -183,13 +189,36 @@ DEFUN (no_debug_zebra_packet_direct,
 
 DEFUN (no_debug_zebra_kernel,
        no_debug_zebra_kernel_cmd,
-       "no debug zebra kernel",
+       "no debug fib kernel",
        NO_STR
        DEBUG_STR
-       "Zebra configuration\n"
-       "Debug option set for zebra between kernel interface\n")
+       "FIB configuration\n"
+       "Debug option set for fib between kernel interface\n")
 {
   zebra_debug_kernel = 0;
+  return CMD_SUCCESS;
+}
+
+DEFUN (debug_zebra_memory,
+       debug_zebra_memory_cmd,
+       "debug fib memory",
+       DEBUG_STR
+       "FIB configuration\n"
+       "FIB memory usages\n")
+{
+  memory_debug(1);
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_debug_zebra_memory,
+       no_debug_zebra_memory_cmd,
+       "no debug fib memory",
+       NO_STR
+       DEBUG_STR
+       "FIB configuration\n"
+       "FIB memory usages\n")
+{
+  memory_debug(0);
   return CMD_SUCCESS;
 }
 
@@ -208,14 +237,14 @@ config_write_debug (struct vty *vty)
 
   if (IS_ZEBRA_DEBUG_EVENT)
     {
-      vty_out (vty, "debug zebra events%s", VTY_NEWLINE);
+      vty_out (vty, "debug fib events%s", VTY_NEWLINE);
       write++;
     }
   if (IS_ZEBRA_DEBUG_PACKET)
     {
       if (IS_ZEBRA_DEBUG_SEND && IS_ZEBRA_DEBUG_RECV)
 	{
-	  vty_out (vty, "debug zebra packet%s%s",
+	  vty_out (vty, "debug fib packet%s%s",
 		   IS_ZEBRA_DEBUG_DETAIL ? " detail" : "",
 		   VTY_NEWLINE);
 	  write++;
@@ -223,11 +252,11 @@ config_write_debug (struct vty *vty)
       else
 	{
 	  if (IS_ZEBRA_DEBUG_SEND)
-	    vty_out (vty, "debug zebra packet send%s%s",
+	    vty_out (vty, "debug fib packet send%s%s",
 		     IS_ZEBRA_DEBUG_DETAIL ? " detail" : "",
 		     VTY_NEWLINE);
 	  else
-	    vty_out (vty, "debug zebra packet recv%s%s",
+	    vty_out (vty, "debug fib packet recv%s%s",
 		     IS_ZEBRA_DEBUG_DETAIL ? " detail" : "",
 		     VTY_NEWLINE);
 	  write++;
@@ -235,10 +264,28 @@ config_write_debug (struct vty *vty)
     }
   if (IS_ZEBRA_DEBUG_KERNEL)
     {
-      vty_out (vty, "debug zebra kernel%s", VTY_NEWLINE);
+      vty_out (vty, "debug fib kernel%s", VTY_NEWLINE);
       write++;
     }
+
+  if (is_memory_debug())
+    {
+      vty_out (vty, "debug fib memory%s", VTY_NEWLINE);
+      write++;
+    }
+
   return write;
+}
+
+DEFUN(show_cpu_fib,
+      show_cpu_fib_cmd,
+      "show cpu fib (|[RWTEX])",
+      SHOW_STR
+      "Thread CPU usage\n"
+      "Forwarding Input Base manager\n"
+      "Display filter (Read, Write, Timer, Event, eXecute)\n")
+{
+  return thread_dumps(vty, argc, argv);
 }
 
 void
@@ -257,16 +304,22 @@ zebra_debug_init ()
   install_element (ENABLE_NODE, &debug_zebra_packet_direct_cmd);
   install_element (ENABLE_NODE, &debug_zebra_packet_detail_cmd);
   install_element (ENABLE_NODE, &debug_zebra_kernel_cmd);
+  install_element (ENABLE_NODE, &debug_zebra_memory_cmd);
   install_element (ENABLE_NODE, &no_debug_zebra_events_cmd);
   install_element (ENABLE_NODE, &no_debug_zebra_packet_cmd);
   install_element (ENABLE_NODE, &no_debug_zebra_kernel_cmd);
+  install_element (ENABLE_NODE, &no_debug_zebra_memory_cmd);
 
   install_element (CONFIG_NODE, &debug_zebra_events_cmd);
   install_element (CONFIG_NODE, &debug_zebra_packet_cmd);
   install_element (CONFIG_NODE, &debug_zebra_packet_direct_cmd);
   install_element (CONFIG_NODE, &debug_zebra_packet_detail_cmd);
   install_element (CONFIG_NODE, &debug_zebra_kernel_cmd);
+  install_element (CONFIG_NODE, &debug_zebra_memory_cmd);
   install_element (CONFIG_NODE, &no_debug_zebra_events_cmd);
   install_element (CONFIG_NODE, &no_debug_zebra_packet_cmd);
   install_element (CONFIG_NODE, &no_debug_zebra_kernel_cmd);
+  install_element (CONFIG_NODE, &no_debug_zebra_memory_cmd);
+
+  install_element (ENABLE_NODE, &show_cpu_fib_cmd);
 }

@@ -297,6 +297,8 @@ nsm_negotiation_done (struct ospf_neighbor *nbr)
     ospf_db_summary_add (nbr, lsa);
   LSDB_LOOP (ASBR_SUMMARY_LSDB (area), rn, lsa)
     ospf_db_summary_add (nbr, lsa);
+  LSDB_LOOP (NSSA_LSDB (area), rn, lsa)
+    ospf_db_summary_add (nbr, lsa);
 
 #ifdef HAVE_OPAQUE_LSA
   /* Process only if the neighbor is opaque capable. */
@@ -664,8 +666,6 @@ nsm_change_state (struct ospf_neighbor *nbr, int state)
   struct ospf_interface *oi = nbr->oi;
   struct ospf_area *vl_area = NULL;
   u_char old_state;
-  int x;
-  int force = 1;
   
   /* Logging change of status. */
   if (IS_DEBUG_OSPF (nsm, NSM_STATUS))
@@ -700,14 +700,6 @@ nsm_change_state (struct ospf_neighbor *nbr, int state)
 	  if (oi->type == OSPF_IFTYPE_VIRTUALLINK && vl_area)
             if (++vl_area->full_vls == 1)
 	      ospf_schedule_abr_task (oi->ospf);
-
-	  /* kevinm: refresh any redistributions */
-	  for (x = ZEBRA_ROUTE_SYSTEM; x < ZEBRA_ROUTE_MAX; x++)
-	    {
-	      if (x == ZEBRA_ROUTE_OSPF || x == ZEBRA_ROUTE_OSPF6)
-		continue;
-	      ospf_external_lsa_refresh_type (oi->ospf, x, force);
-	    }
 	}
       else
 	{

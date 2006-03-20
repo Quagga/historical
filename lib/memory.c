@@ -1,6 +1,7 @@
 /*
  * Memory management routine
  * Copyright (C) 1998 Kunihiro Ishiguro
+ * Copyright (C) 2003 Vincent Jardin
  *
  * This file is part of GNU Zebra.
  *
@@ -24,11 +25,14 @@
 
 #include "log.h"
 #include "memory.h"
+#include "str.h"
 
 static void alloc_inc (int);
 static void alloc_dec (int);
 static void log_memstats(int log_priority);
 
+#define ROUNDUP4(_size) (((_size+3) >> 2) << 2)
+#if 0
 static struct message mstr [] =
 {
   { MTYPE_THREAD, "thread" },
@@ -38,13 +42,34 @@ static struct message mstr [] =
   { MTYPE_IF, "interface" },
   { 0, NULL },
 };
+#endif
+
+extern struct mlist mlists[];
+
+static const char *
+lookup_memtype(int key)
+{
+  /* use global mlists */
+  struct mlist *list;
+  struct memory_list *list_elem;
+
+  for (list = &mlists[0]; list != NULL; list++) 
+    {
+      for (list_elem = list[0].list; list_elem->index != -1; list_elem++) 
+        if (list_elem->index == key) 
+          return list_elem->format;
+    }
+
+  return "";
+}
+
 
 /* Fatal memory allocation error occured. */
 static void
 zerror (const char *fname, int type, size_t size)
 {
   zlog_err ("%s : can't allocate memory for `%s' size %d: %s\n", 
-	    fname, lookup (mstr, type), (int) size, safe_strerror(errno));
+	    fname, lookup_memtype(type), (int) size, safe_strerror(errno));
   log_memstats(LOG_WARNING);
   /* N.B. It might be preferable to call zlog_backtrace_sigsafe here, since
      that function should definitely be safe in an OOM condition.  But
@@ -119,100 +144,328 @@ zstrdup (int type, const char *str)
   return dup;
 }
 
+static char is_lib_debug_memory = 0;
+
+void
+memory_debug(char enable)
+{
+  is_lib_debug_memory = enable;
+}
+
+char
+is_memory_debug(void)
+{
+  return is_lib_debug_memory;
+}
+
 #ifdef MEMORY_LOG
 static struct 
 {
   const char *name;
-  unsigned long alloc;
-  unsigned long t_malloc;
-  unsigned long c_malloc;
-  unsigned long t_calloc;
-  unsigned long c_calloc;
-  unsigned long t_realloc;
-  unsigned long t_free;
-  unsigned long c_strdup;
+  unsigned long alloc;    /* Xalloc call counter  (number of currently allocated objects) */
+  unsigned long malloc;   /* malloc call counter  (including fails)                       */
+  unsigned long calloc;   /* calloc call counter  (including fails)                       */
+  unsigned long realloc;  /* realloc call counter (including fails)                       */
+  unsigned long free;     /* free call counter    (including fails)                       */
+  unsigned long strdup;   /* strdup call counter  (including fails)                       */
+  size_t alloced;         /* in bytes             (amount of currently allocated memory)  */
 } mstat [MTYPE_MAX];
+
+#define ZMEM_COOKIE1   0xcafedeca
+#define ZMEM_COOKIE2   0xfecacade
+#define ZMEM_COOKIE1_FREE   0xdeaddeca
+
+/*
+ * The header zmem_obj is added to each allocated memory buffers in order
+ * to debug free and realloc, and to provide memory statistics.
+ *
+ *        ZMEM_OFFSET
+ * <------------------------>
+ * +----------+---+---------+-----------------------------------+---------+
+ * | zmem_obj |pad| cookie1 | void *                            | cookie2 |
+ * +----------+---+---------+-----------------------------------+---------+
+ */
+typedef struct {
+	uint32_t val;
+} __attribute__((packed)) zmem_cookie_t;
+
+struct zmem_obj
+{
+  size_t size;
+  int type;               /* MTYPE_XXX            */
+  zmem_cookie_t *cookie1; /* must be ZMEM_COOKIE1 */
+  void *mem;              /* the buffer           */
+  zmem_cookie_t *cookie2; /* must be ZMEM_COOKIE2 */
+  size_t crc;             /* = size | type | *cookie1 | *cookie2 */
+};
+#define ZMEM_OFFSET ROUNDUP4(sizeof(struct zmem_obj) + sizeof(zmem_cookie_t))
+#define ZMEM_TRAILER sizeof(zmem_cookie_t)
+
+#ifdef MEMORY_LOG_ASSERT
+#define ZASSERT(e) assert(e)
+#else
+#define ZASSERT(e) do { \
+  if (!(e))             \
+    _zassert(__FILE__, __LINE__, #e); \
+  } while (0);
+
+static void
+_zassert(const char *file, int line, const char *failedexpr)
+{
+  zlog_warn("Memory error %s: %d, %s", file, line, failedexpr);
+}
+#endif /*MEMORY_LOG_ASSERT*/
+
+/*
+ * Set the memory header
+ */
+static void
+zobj_update(struct zmem_obj **pzobj, int type, void *memory, size_t size)
+{
+  struct zmem_obj *zobj = *pzobj;
+
+  (*pzobj) = (struct zmem_obj *)memory;
+
+  zobj = (struct zmem_obj *)memory;
+  zobj->size    = size;
+  zobj->type    = type;
+  zobj->mem     = (void *)((caddr_t)memory + ZMEM_OFFSET);
+  zobj->cookie1 = (zmem_cookie_t*)((caddr_t)zobj->mem - sizeof(zmem_cookie_t));
+  zobj->cookie2 = (zmem_cookie_t*)((caddr_t)zobj->mem + size);
+  zobj->cookie1->val = ZMEM_COOKIE1;
+  zobj->cookie2->val = ZMEM_COOKIE2;
+  zobj->crc = zobj->size | zobj->type | zobj->cookie1->val | zobj->cookie2->val;
+}
+
+/*
+ * Check the memory's header
+ */
+static void
+zobj_assert(struct zmem_obj * zobj)
+{
+  size_t crc;
+
+  /* detect double free */
+  ZASSERT(zobj->cookie1->val != ZMEM_COOKIE1_FREE);
+
+  /* detect bad pointer or buffer overflow */
+  ZASSERT(zobj->cookie1->val == ZMEM_COOKIE1);
+
+  /* detect buffer overflow */
+  ZASSERT(zobj->cookie2->val == ZMEM_COOKIE2);
+
+ /* detect invalid type */
+  ZASSERT(0 < zobj->type);
+  ZASSERT(zobj->type < MTYPE_MAX);
+
+  /* check crc */
+  crc = zobj->size | zobj->type | zobj->cookie1->val | zobj->cookie2->val;
+  ZASSERT(zobj->crc == crc);
+}
 
 static void
 mtype_log (char *func, void *memory, const char *file, int line, int type)
 {
-  zlog_debug ("%s: %s %p %s %d", func, lookup (mstr, type), memory, file, line);
+  if (is_lib_debug_memory)
+    zlog_debug ("%s: %s %p %s %d", func, lookup_memtype(type), memory, file, line);
 }
 
 void *
 mtype_zmalloc (const char *file, int line, int type, size_t size)
 {
   void *memory;
+  struct zmem_obj *zobj;
 
-  mstat[type].c_malloc++;
-  mstat[type].t_malloc++;
+  ZASSERT(type);
 
-  memory = zmalloc (type, size);
-  mtype_log ("zmalloc", memory, file, line, type);
+  mstat[type].malloc++;
 
-  return memory;
+  memory = zmalloc (type, size + ZMEM_OFFSET + ZMEM_TRAILER);
+
+  if (memory == NULL)
+    return NULL;
+
+  mstat[type].alloced += size;
+
+  zobj_update(&zobj, type, memory, size);
+
+  mtype_log ("zmalloc", zobj->mem, file, line, zobj->type);
+
+  return zobj->mem;
 }
 
 void *
 mtype_zcalloc (const char *file, int line, int type, size_t size)
 {
   void *memory;
+  struct zmem_obj *zobj;
 
-  mstat[type].c_calloc++;
-  mstat[type].t_calloc++;
+  ZASSERT(type);
 
-  memory = zcalloc (type, size);
-  mtype_log ("xcalloc", memory, file, line, type);
+  mstat[type].calloc++;
 
-  return memory;
+  memory = zcalloc (type, size + ZMEM_OFFSET + ZMEM_TRAILER);
+
+  if (memory == NULL)
+    return NULL;
+
+  mstat[type].alloced += size;
+
+  zobj_update(&zobj, type, memory, size);
+ 
+  mtype_log ("xcalloc", zobj->mem, file, line, zobj->type);
+
+  return zobj->mem;
 }
 
 void *
 mtype_zrealloc (const char *file, int line, int type, void *ptr, size_t size)
 {
   void *memory;
+  struct zmem_obj *zobj;
+
+  ZASSERT(type);
+
+  ZASSERT(ptr);
+
+  /* Retrieve the header of the memory buffer */
+  zobj = (struct zmem_obj *)((caddr_t)ptr - ZMEM_OFFSET);
+
+  zobj_assert(zobj);
+
+  /* A potato should not become a cow */
+  if (zobj->type != type) {
+    /* XXX: bad hack in order to be more tolerant */
+    zlog_warn("xrealloc: type changed from `%s' to `%s' %s:%d",
+              lookup_memtype(zobj->type),
+              lookup_memtype(type), file, line);
+    mstat[zobj->type].alloced -= zobj->size;
+    alloc_dec(zobj->type);
+    alloc_inc(type);
+    zobj->type = type;
+  } else {
+    mstat[type].alloced -= zobj->size;
+  }
 
   /* Realloc need before allocated pointer. */
-  mstat[type].t_realloc++;
+  mstat[type].realloc++;
 
-  memory = zrealloc (type, ptr, size);
+  memory = zrealloc (type, zobj, size + ZMEM_OFFSET + ZMEM_TRAILER);
 
-  mtype_log ("xrealloc", memory, file, line, type);
+  if (memory == NULL)
+    return NULL;
 
-  return memory;
+  mstat[type].alloced += size;
+
+  zobj_update(&zobj, type, memory, size);
+
+  mtype_log ("xrealloc", zobj->mem, file, line, zobj->type);
+
+  return zobj->mem;
 }
 
 /* Important function. */
 void 
 mtype_zfree (const char *file, int line, int type, void *ptr)
 {
-  mstat[type].t_free++;
+  struct zmem_obj *zobj;
 
-  mtype_log ("xfree", ptr, file, line, type);
+  ZASSERT(type);
 
-  zfree (type, ptr);
+  ZASSERT(ptr);
+
+  /* Retrieve the header of the memory buffer */
+  zobj = (struct zmem_obj *)((caddr_t)ptr - ZMEM_OFFSET);
+
+  zobj_assert(zobj);
+
+  /* A potato should not become a cow */
+  if (zobj->type != type) {
+    /* XXX */
+    zlog_warn("xfree: type changed from '%s' to '%s' %s:%d",
+              lookup_memtype(zobj->type),
+              lookup_memtype(type), file, line);
+    mstat[zobj->type].alloced -= zobj->size;
+    alloc_dec(zobj->type);
+    alloc_inc(type);
+    zobj->type = type;
+  } else {
+    mstat[type].alloced -= zobj->size;
+  }
+
+  mstat[type].free++;
+
+  /* mark buffer as free, to detect double free */
+  zobj->cookie1->val = ZMEM_COOKIE1_FREE;
+
+  mtype_log ("xfree", zobj->mem, file, line, zobj->type);
+
+  zfree (type, (void *)zobj);
 }
 
 char *
 mtype_zstrdup (const char *file, int line, int type, const char *str)
 {
   char *memory;
+  struct zmem_obj *zobj;
+  size_t size;
 
-  mstat[type].c_strdup++;
+  ZASSERT(type);
 
-  memory = zstrdup (type, str);
-  
-  mtype_log ("xstrdup", memory, file, line, type);
+  size = strlen(str) + 1;
+  mstat[type].strdup++;
 
-  return memory;
+  /*
+   * zstrdup, strdup are rewritten because they are not compatible
+   * with our memory support (zmem_obj).
+   */
+  memory = zmalloc (type, size + ZMEM_OFFSET + ZMEM_TRAILER);
+
+  if (memory == NULL) {
+    zerror ("strdup", type, size);
+    return NULL;
+  }
+
+  mstat[type].alloced += size;
+
+  zobj_update(&zobj, type, memory, size);
+
+  strlcpy((char *)zobj->mem, str, size);
+
+  mtype_log ("xstrdup", zobj->mem, file, line, zobj->type);
+
+  return (char *)zobj->mem;
 }
+
+static int
+unit_div(size_t size)
+{
+  uint8_t i;
+
+  if (size == 0)
+    return 0;
+
+  for (i = 0; size != 0; size /= 1024, i++)
+    ;
+
+  return i-1;
+}
+
+static const char unit_str[][4] =
+  { "B", "KB", "MB"     , "GB"          , "GB"          ,
+    "??" };
+
+static const size_t unit_1024[] =
+  { 1,   1024, 1024*1024, 1024*1024*1024, 1024*1024*1024,
+    1 };
+
 #else
 static struct 
 {
   char *name;
   unsigned long alloc;
 } mstat [MTYPE_MAX];
-#endif /* MTPYE_LOG */
+#endif /* MEMORY_LOG */
 
 /* Increment allocation counter. */
 static void
@@ -249,22 +502,54 @@ log_memstats(int pri)
     }
 }
 
+
 static struct memory_list memory_list_separator[] =
 {
-  { 0, NULL},
-  {-1, NULL}
+  { 0 },
+  {-1 }
 };
 
 static void
-show_memory_vty (struct vty *vty, struct memory_list *list)
+show_memory_vty (struct vty *vty, struct memory_list *list, int protocol)
 {
   struct memory_list *m;
 
+  /* Print the name of the protocol */
+  if (protocol && zlog_default) {
+    vty_out (vty, "=== %s ===%s",
+             zlog_proto_names[zlog_default->protocol], VTY_NEWLINE);
+#ifdef MEMORY_LOG
+    vty_out (vty,   "     Object                           Used   Bytes   Called/Destroyed%s", VTY_NEWLINE);
+#endif /* MEMORY_LOG */
+#if 0
+                     12345678901234567890123456789012345678901234567890123456789
+                              1         2         3         4         5
+#endif
+  }
+
   for (m = list; m->index >= 0; m++)
     if (m->index == 0)
-      vty_out (vty, "-----------------------------\r\n");
+      vty_out (vty, "---------------------------------------%s", VTY_NEWLINE);
     else
-      vty_out (vty, "%-30s: %10ld\r\n", m->format, mstat[m->index].alloc);
+#ifdef MEMORY_LOG
+    {
+      int unit;
+      unit = unit_div(mstat[m->index].alloced);
+
+      vty_out (vty, "%-30s: %10ld %5d%2s %4ld/%ld%s", lookup_memtype(m->index),
+                    mstat[m->index].alloc,
+                    mstat[m->index].alloced / unit_1024[unit],
+                    unit_str[unit],
+                    mstat[m->index].malloc + mstat[m->index].calloc
+                    + mstat[m->index].realloc + mstat[m->index].strdup,
+                    mstat[m->index].free,
+                    VTY_NEWLINE);
+    }
+#else
+    {
+      vty_out (vty, "%-30s: %10ld%s", m->format, mstat[m->index].alloc, VTY_NEWLINE);
+    }
+#endif /* MEMORY_LOG */
 }
 
 DEFUN (show_memory_all,
@@ -274,14 +559,21 @@ DEFUN (show_memory_all,
        "Memory statistics\n"
        "All memory statistics\n")
 {
-  struct mlist *ml;
-
-  for (ml = mlists; ml->list; ml++)
-    {
-      if (ml != mlists)
-        show_memory_vty (vty, memory_list_separator);
-      show_memory_vty (vty, ml->list);
-    }
+  show_memory_vty (vty, memory_list_lib, 1);
+  show_memory_vty (vty, memory_list_separator, 0);
+  show_memory_vty (vty, memory_list_zebra, 0);
+  show_memory_vty (vty, memory_list_separator, 0);
+  show_memory_vty (vty, memory_list_rip, 0);
+  show_memory_vty (vty, memory_list_separator, 0);
+  show_memory_vty (vty, memory_list_ripng, 0);
+  show_memory_vty (vty, memory_list_separator, 0);
+  show_memory_vty (vty, memory_list_ospf, 0);
+  show_memory_vty (vty, memory_list_separator, 0);
+  show_memory_vty (vty, memory_list_ospf6, 0);
+  show_memory_vty (vty, memory_list_separator, 0);
+  show_memory_vty (vty, memory_list_isis, 0);
+  show_memory_vty (vty, memory_list_separator, 0);
+  show_memory_vty (vty, memory_list_bgp, 0);
 
   return CMD_SUCCESS;
 }
@@ -299,86 +591,87 @@ DEFUN (show_memory_lib,
        "Memory statistics\n"
        "Library memory\n")
 {
-  show_memory_vty (vty, memory_list_lib);
+  show_memory_vty (vty, memory_list_lib, 1);
   return CMD_SUCCESS;
 }
 
-DEFUN (show_memory_zebra,
+DEFUN_NOSH (show_memory_zebra,
        show_memory_zebra_cmd,
-       "show memory zebra",
+       "show memory fib",
        SHOW_STR
        "Memory statistics\n"
-       "Zebra memory\n")
+       "FIB memory\n")
 {
-  show_memory_vty (vty, memory_list_zebra);
+  show_memory_vty (vty, memory_list_zebra, 1);
   return CMD_SUCCESS;
 }
 
-DEFUN (show_memory_rip,
+DEFUN_NOSH (show_memory_rip,
        show_memory_rip_cmd,
        "show memory rip",
        SHOW_STR
        "Memory statistics\n"
        "RIP memory\n")
 {
-  show_memory_vty (vty, memory_list_rip);
+  show_memory_vty (vty, memory_list_rip, 1);
   return CMD_SUCCESS;
 }
 
-DEFUN (show_memory_ripng,
+DEFUN_NOSH (show_memory_ripng,
        show_memory_ripng_cmd,
        "show memory ripng",
        SHOW_STR
        "Memory statistics\n"
        "RIPng memory\n")
 {
-  show_memory_vty (vty, memory_list_ripng);
+  show_memory_vty (vty, memory_list_ripng, 1);
   return CMD_SUCCESS;
 }
 
-DEFUN (show_memory_bgp,
+DEFUN_NOSH (show_memory_bgp,
        show_memory_bgp_cmd,
        "show memory bgp",
        SHOW_STR
        "Memory statistics\n"
        "BGP memory\n")
 {
-  show_memory_vty (vty, memory_list_bgp);
+  show_memory_vty (vty, memory_list_bgp, 1);
   return CMD_SUCCESS;
 }
 
-DEFUN (show_memory_ospf,
+DEFUN_NOSH (show_memory_ospf,
        show_memory_ospf_cmd,
        "show memory ospf",
        SHOW_STR
        "Memory statistics\n"
        "OSPF memory\n")
 {
-  show_memory_vty (vty, memory_list_ospf);
+  show_memory_vty (vty, memory_list_ospf, 1);
   return CMD_SUCCESS;
 }
 
-DEFUN (show_memory_ospf6,
+DEFUN_NOSH (show_memory_ospf6,
        show_memory_ospf6_cmd,
        "show memory ospf6",
        SHOW_STR
        "Memory statistics\n"
        "OSPF6 memory\n")
 {
-  show_memory_vty (vty, memory_list_ospf6);
+  show_memory_vty (vty, memory_list_ospf6, 1);
   return CMD_SUCCESS;
 }
 
-DEFUN (show_memory_isis,
+DEFUN_NOSH (show_memory_isis,
        show_memory_isis_cmd,
        "show memory isis",
        SHOW_STR
        "Memory statistics\n"
        "ISIS memory\n")
 {
-  show_memory_vty (vty, memory_list_isis);
+  show_memory_vty (vty, memory_list_isis, 1);
   return CMD_SUCCESS;
 }
+
 
 void
 memory_init (void)
@@ -386,12 +679,14 @@ memory_init (void)
   install_element (VIEW_NODE, &show_memory_cmd);
   install_element (VIEW_NODE, &show_memory_all_cmd);
   install_element (VIEW_NODE, &show_memory_lib_cmd);
+  install_element (VIEW_NODE, &show_memory_zebra_cmd);
   install_element (VIEW_NODE, &show_memory_rip_cmd);
   install_element (VIEW_NODE, &show_memory_ripng_cmd);
   install_element (VIEW_NODE, &show_memory_bgp_cmd);
   install_element (VIEW_NODE, &show_memory_ospf_cmd);
   install_element (VIEW_NODE, &show_memory_ospf6_cmd);
   install_element (VIEW_NODE, &show_memory_isis_cmd);
+
 
   install_element (ENABLE_NODE, &show_memory_cmd);
   install_element (ENABLE_NODE, &show_memory_all_cmd);
@@ -403,4 +698,5 @@ memory_init (void)
   install_element (ENABLE_NODE, &show_memory_ospf_cmd);
   install_element (ENABLE_NODE, &show_memory_ospf6_cmd);
   install_element (ENABLE_NODE, &show_memory_isis_cmd);
+
 }

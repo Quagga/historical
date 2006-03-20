@@ -28,8 +28,10 @@
 
 #include "zebra/rib.h"
 
+#ifndef __linux__
 #include <sys/stream.h>
 #include <sys/tihdr.h>
+#endif
 
 /* Solaris defines these in both <netinet/in.h> and <inet/in.h>, sigh */
 #ifdef SUNOS_5
@@ -54,9 +56,11 @@
 #undef IPOPT_SSRR
 #endif /* SUNOS_5 */
 
+#ifndef __linux__
 #include <inet/common.h>
 #include <inet/ip.h>
 #include <inet/mib2.h>
+#endif
 
 /* device to read IP routing table from */
 #ifndef _PATH_GETMSG_ROUTE
@@ -88,7 +92,7 @@ void handle_route_entry (mib2_ipRouteEntry_t *routeEntry)
 	gateway.s_addr = routeEntry->ipRouteNextHop;
 
 	rib_add_ipv4 (ZEBRA_ROUTE_KERNEL, zebra_flags, &prefix,
-		      &gateway, 0, 0, 0, 0);
+		      &gateway, 0, 0, 0, 0, SAFI_UNICAST);
 }
 
 void route_read ()

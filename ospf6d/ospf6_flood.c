@@ -19,6 +19,10 @@
  * Boston, MA 02111-1307, USA.  
  */
 
+/*
+ * Copyright (C) 2005 6WIND  
+ */
+
 #include <zebra.h>
 
 #include "log.h"
@@ -112,6 +116,7 @@ ospf6_lsa_originate (struct ospf6_lsa *lsa)
   lsdb_self = ospf6_get_scoped_lsdb_self (lsa);
   ospf6_lsdb_add (ospf6_lsa_copy (lsa), lsdb_self);
 
+  THREAD_OFF(lsa->refresh);
   lsa->refresh = thread_add_timer (master, ospf6_lsa_refresh, lsa,
                                    LS_REFRESH_TIME);
 
@@ -226,11 +231,11 @@ ospf6_install_lsa (struct ospf6_lsa *lsa)
     }
 
   gettimeofday (&now, (struct timezone *) NULL);
-  if (! OSPF6_LSA_IS_MAXAGE (lsa))
+  THREAD_OFF(lsa->expire);
+  if (! OSPF6_LSA_IS_MAXAGE (lsa)) {
     lsa->expire = thread_add_timer (master, ospf6_lsa_expire, lsa,
                                     MAXAGE + lsa->birth.tv_sec - now.tv_sec);
-  else
-    lsa->expire = NULL;
+  }
 
   /* actually install */
   lsa->installed = now;
@@ -338,7 +343,7 @@ ospf6_flood_interface (struct ospf6_neighbor *from,
       retrans_added++;
     }
 
-  /* (2) examin next interface if not added to retrans-list */
+  /* (2) examine next interface if not added to retrans-list */
   if (retrans_added == 0)
     {
       if (is_debug)
@@ -399,12 +404,10 @@ ospf6_flood_area (struct ospf6_neighbor *from,
       if (OSPF6_LSA_SCOPE (lsa->header->type) == OSPF6_SCOPE_LINKLOCAL &&
           oi != OSPF6_INTERFACE (lsa->lsdb->data))
         continue;
-
-#if 0
+      
       if (OSPF6_LSA_SCOPE (lsa->header->type) == OSPF6_SCOPE_AS &&
-          ospf6_is_interface_virtual_link (oi))
+         (oi->nw_type == OSPF6_NWTYPE_VIRTUALLINK))
         continue;
-#endif/*0*/
 
       ospf6_flood_interface (from, lsa, oi);
     }
@@ -426,8 +429,12 @@ ospf6_flood_process (struct ospf6_neighbor *from,
           oa != OSPF6_INTERFACE (lsa->lsdb->data)->area)
         continue;
 
-      if (ntohs (lsa->header->type) == OSPF6_LSTYPE_AS_EXTERNAL &&
-          IS_AREA_STUB (oa))
+      if (OSPF6_LSA_SCOPE (lsa->header->type) == OSPF6_SCOPE_AS &&
+          IS_AREA_STUB_OR_NSSA (oa))
+        continue;
+
+      if (ntohs (lsa->header->type) == OSPF6_LSTYPE_TYPE_7 &&
+          !IS_AREA_NSSA (oa))
         continue;
 
       ospf6_flood_area (from, lsa, oa);
@@ -500,8 +507,12 @@ ospf6_flood_clear_process (struct ospf6_lsa *lsa, struct ospf6 *process)
           oa != OSPF6_INTERFACE (lsa->lsdb->data)->area)
         continue;
 
-      if (ntohs (lsa->header->type) == OSPF6_LSTYPE_AS_EXTERNAL &&
-          IS_AREA_STUB (oa))
+      if (OSPF6_LSA_SCOPE (lsa->header->type) == OSPF6_SCOPE_AS &&
+          IS_AREA_STUB_OR_NSSA (oa))
+        continue;
+
+      if (ntohs (lsa->header->type) == OSPF6_LSTYPE_TYPE_7 &&
+          !IS_AREA_NSSA (oa))
         continue;
 
       ospf6_flood_clear_area (lsa, oa);
@@ -762,11 +773,11 @@ ospf6_receive_lsa (struct ospf6_neighbor *from,
 
   /* (2) Examine the LSA's LS type. 
      RFC2470 3.5.1. Receiving Link State Update packets  */
-  if (IS_AREA_STUB (from->ospf6_if->area) &&
+  if (IS_AREA_STUB_OR_NSSA (from->ospf6_if->area) &&
       OSPF6_LSA_SCOPE (new->header->type) == OSPF6_SCOPE_AS)
     {
       if (is_debug)
-        zlog_debug ("AS-External-LSA (or AS-scope LSA) in stub area, discard");
+        zlog_debug ("AS-External-LSA (or AS-scope LSA) in stub/nssa area, discard");
       ospf6_lsa_delete (new);
       return;
     }
@@ -792,6 +803,10 @@ ospf6_receive_lsa (struct ospf6_neighbor *from,
       ospf6_lsa_delete (new);
       return;
     }
+
+  if (OSPF6_LSA_IS_FCODE_UNKNOWN (new->header->type) && 
+      !OSPF6_LSA_UBIT (new->header->type))
+    new->lsdb = from->ospf6_if->lsdb;
 
   /* (4) if MaxAge LSA and if we have no instance, and no neighbor
          is in states Exchange or Loading */
@@ -858,15 +873,17 @@ ospf6_receive_lsa (struct ospf6_neighbor *from,
       reoriginated instance of the LSA not to be rejected by other routers
       due to MinLSArrival. */
       if (new->header->adv_router != from->ospf6_if->area->ospf6->router_id)
-        ospf6_flood (from, new);
+        {
+          ospf6_flood (from, new);
 
-      /* (c) Remove the current database copy from all neighbors' Link
-             state retransmission lists. */
-      /* XXX, flood_clear ? */
+        /* (c) Remove the current database copy from all neighbors' Link
+               state retransmission lists. */
+        /* XXX, flood_clear ? */
 
-      /* (d), installing lsdb, which may cause routing
-              table calculation (replacing database copy) */
-      ospf6_install_lsa (new);
+        /* (d), installing lsdb, which may cause routing
+                table calculation (replacing database copy) */
+          ospf6_install_lsa (new);
+        }
 
       /* (e) possibly acknowledge */
       ospf6_acknowledge_lsa (new, ismore_recent, from);
@@ -882,6 +899,8 @@ ospf6_receive_lsa (struct ospf6_neighbor *from,
               zlog_debug ("Newer instance of the self-originated LSA");
               zlog_debug ("Schedule reorigination");
             }
+
+          assert(! new->refresh);
           new->refresh = thread_add_event (master, ospf6_lsa_refresh, new, 0);
         }
 

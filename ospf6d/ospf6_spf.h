@@ -88,7 +88,7 @@ void ospf6_spf_display_subtree (struct vty *vty, const char *prefix,
 
 int config_write_ospf6_debug_spf (struct vty *vty);
 void install_element_ospf6_debug_spf ();
-void ospf6_spf_init ();
+void ospf6_spf_init (void);
 
 #endif /* OSPF6_SPF_H */
 

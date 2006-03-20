@@ -53,6 +53,8 @@ enum MRT_MSG_TYPES {
    MSG_PROTOCOL_BGP4PLUS,       /* msg is a BGP4+ packet */
    MSG_PROTOCOL_BGP4PLUS_01,    /* msg is a BGP4+ (draft 01) packet */
    MSG_PROTOCOL_OSPF,           /* msg is an OSPF packet */
+   MSG_PROTOCOL_DEP,            /* msg is a DEP packet */
+   MSG_PROTOCOL_NATPT,          /* msg is a NATPT packet */
    MSG_TABLE_DUMP               /* routing table dump */
 };
 
@@ -296,7 +298,7 @@ bgp_dump_routes_entry (struct prefix *p, struct bgp_info *info, int afi,
 
 /* Runs under child process. */
 void
-bgp_dump_routes_func (int afi)
+bgp_dump_routes_func (int afi, safi_t safi)
 {
   struct stream *obuf;
   struct bgp_node *rn;
@@ -315,7 +317,7 @@ bgp_dump_routes_func (int afi)
     return;
 
   /* Walk down each BGP route. */
-  table = bgp->rib[afi][SAFI_UNICAST];
+  table = bgp->rib[afi][safi];
 
   for (rn = bgp_table_top (table); rn; rn = bgp_route_next (rn))
     for (info = rn->info; info; info = info->next)
@@ -335,9 +337,11 @@ bgp_dump_interval_func (struct thread *t)
       /* In case of bgp_dump_routes, we need special route dump function. */
       if (bgp_dump->type == BGP_DUMP_ROUTES)
 	{
-	  bgp_dump_routes_func (AFI_IP);
+	  bgp_dump_routes_func (AFI_IP, SAFI_UNICAST);
+	  bgp_dump_routes_func (AFI_IP, SAFI_MULTICAST);
 #ifdef HAVE_IPV6
-	  bgp_dump_routes_func (AFI_IP6);
+	  bgp_dump_routes_func (AFI_IP6, SAFI_UNICAST);
+	  bgp_dump_routes_func (AFI_IP6, SAFI_MULTICAST);
 #endif /* HAVE_IPV6 */
 	  /* Close the file now. For a RIB dump there's no point in leaving
 	   * it open until the next scheduled dump starts. */
@@ -362,7 +366,7 @@ bgp_dump_common (struct stream *obuf, struct peer *peer)
   stream_putw (obuf, peer->as);
   stream_putw (obuf, peer->local_as);
 
-  if (peer->su.sa.sa_family == AF_INET)
+  if (peer->afc[AFI_IP][SAFI_UNICAST] || peer->afc[AFI_IP][SAFI_MULTICAST])
     {
       stream_putw (obuf, peer->ifindex);
       stream_putw (obuf, AFI_IP);
@@ -375,7 +379,7 @@ bgp_dump_common (struct stream *obuf, struct peer *peer)
 	stream_put (obuf, empty, IPV4_MAX_BYTELEN);
     }
 #ifdef HAVE_IPV6
-  else if (peer->su.sa.sa_family == AF_INET6)
+  else if (peer->afc[AFI_IP6][SAFI_UNICAST] || peer->afc[AFI_IP6][SAFI_MULTICAST])
     {
       /* Interface Index and Address family. */
       stream_putw (obuf, peer->ifindex);

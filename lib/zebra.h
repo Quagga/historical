@@ -36,11 +36,11 @@ typedef unsigned int    u_int32_t;
 typedef unsigned short  u_int16_t;
 typedef unsigned char   u_int8_t;
 #endif /* SUNOS_5 */
-
+#ifndef __linux__ 
 #ifndef HAVE_SOCKLEN_T
 typedef int socklen_t;
 #endif /* HAVE_SOCKLEN_T */
-
+#endif /* __linux__ */
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,7 +50,6 @@ typedef int socklen_t;
 #include <signal.h>
 #include <string.h>
 #include <pwd.h>
-#include <grp.h>
 #ifdef HAVE_STROPTS_H
 #include <stropts.h>
 #endif /* HAVE_STROPTS_H */
@@ -123,6 +122,50 @@ typedef int socklen_t;
 /* network include group */
 
 #include <sys/socket.h>
+
+/* XXX */
+#define ZEBRA_SOCKBUFSIZE 131070
+static __inline int
+bigbuf_socket(int domain, int type, int protocol) {
+	int sock;
+
+	sock = socket(domain, type, protocol);
+
+	if ((sock >= 0) && ZEBRA_SOCKBUFSIZE) {
+		int optval;
+		socklen_t optlen;
+
+		optval = ZEBRA_SOCKBUFSIZE;
+		optlen = sizeof(optval);
+
+		setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &optval, optlen);
+		setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &optval, optlen);
+	}
+
+	return sock;
+}
+
+static __inline int
+bigbuf_accept(int s, struct sockaddr *addr, socklen_t *addrlen) {
+	int sock;
+
+	sock = accept(s, addr, addrlen);
+
+	if ((sock >= 0) && ZEBRA_SOCKBUFSIZE) {
+		int optval;
+		socklen_t optlen;
+
+		optval = ZEBRA_SOCKBUFSIZE;
+		optlen = sizeof(optval);
+
+		setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &optval, optlen);
+		setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &optval, optlen);
+	}
+
+	return sock;
+}
+#define socket(a,b,c) bigbuf_socket(a,b,c)
+#define accept(a,b,c) bigbuf_accept(a,b,c)
 
 #ifdef HAVE_SYS_SOCKIO_H
 #include <sys/sockio.h>
@@ -382,7 +425,11 @@ struct in_pktinfo
 #define ZEBRA_ROUTE_ISIS                 8
 #define ZEBRA_ROUTE_BGP                  9
 #define ZEBRA_ROUTE_HSLS		 10
-#define ZEBRA_ROUTE_MAX                  11
+#define ZEBRA_ROUTE_DEP                  11
+/* XXX for backward compatibility */
+#define ZEBRA_ROUTE_DHCP                 ZEBRA_ROUTE_DEP
+#define ZEBRA_ROUTE_NATPT                12
+#define ZEBRA_ROUTE_MAX                  13
 
 /* Zebra's family types. */
 #define ZEBRA_FAMILY_IPV4                1
@@ -431,6 +478,7 @@ struct in_pktinfo
 #define SAFI_UNICAST_MULTICAST    3
 #define SAFI_MPLS_VPN             4
 #define SAFI_MAX                  5
+#define VRF_TABLE_MAX		  10
 
 /* Filter direction.  */
 #define FILTER_IN                 0
@@ -500,5 +548,24 @@ struct fifo
 
 #define FIFO_TOP(F)                                   \
   (FIFO_EMPTY(F) ? NULL : ((struct fifo *)(F))->next)
+
+/*
+ * stuff to properly read integers on machines that do not not support
+ * unaligned memory access
+ */
+typedef struct {
+	u_int16_t	val;
+} __attribute__((packed)) unaligned_u_int16_t;
+
+typedef struct {
+	u_int32_t	val;
+} __attribute__((packed)) unaligned_u_int32_t;
+
+#define EXTRACT_16BITS(p) \
+	((u_int16_t)(((const unaligned_u_int16_t *)(p))->val))
+#define EXTRACT_32BITS(p) \
+	((u_int32_t)(((const unaligned_u_int32_t *)(p))->val))
+
+#define HAVE_QUAGGA 1
 
 #endif /* _ZEBRA_H */

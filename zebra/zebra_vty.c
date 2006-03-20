@@ -53,6 +53,10 @@ route_type_str (u_char type)
       return "isis";
     case ZEBRA_ROUTE_BGP:
       return "bgp";
+    case ZEBRA_ROUTE_DEP:
+      return "dep";
+    case ZEBRA_ROUTE_NATPT:
+      return "natpt";
     default:
       return "unknown";
     }
@@ -84,6 +88,10 @@ route_type_char (u_char type)
       return 'I';
     case ZEBRA_ROUTE_BGP:
       return 'B';
+    case ZEBRA_ROUTE_DEP:
+      return 'D';
+    case ZEBRA_ROUTE_NATPT:
+      return 'N';
     default:
       return '?';
     }
@@ -93,7 +101,7 @@ route_type_char (u_char type)
 int
 zebra_static_ipv4 (struct vty *vty, int add_cmd, const char *dest_str,
 		   const char *mask_str, const char *gate_str,
-		   const char *flag_str, const char *distance_str)
+		   const char *flag_str, const char *distance_str, safi_t safi)
 {
   int ret;
   u_char distance;
@@ -140,9 +148,9 @@ zebra_static_ipv4 (struct vty *vty, int add_cmd, const char *dest_str,
           return CMD_WARNING;
         }
       if (add_cmd)
-        static_add_ipv4 (&p, NULL, NULL, ZEBRA_FLAG_BLACKHOLE, distance, 0);
+        static_add_ipv4 (&p, NULL, NULL, ZEBRA_FLAG_BLACKHOLE, distance, 0, safi);
       else
-        static_delete_ipv4 (&p, NULL, NULL, distance, 0);
+        static_delete_ipv4 (&p, NULL, NULL, distance, 0, safi);
       return CMD_SUCCESS;
     }
 
@@ -166,9 +174,9 @@ zebra_static_ipv4 (struct vty *vty, int add_cmd, const char *dest_str,
   if (gate_str == NULL)
   {
     if (add_cmd)
-      static_add_ipv4 (&p, NULL, NULL, flag, distance, 0);
+      static_add_ipv4 (&p, NULL, NULL, flag, distance, 0, safi);
     else
-      static_delete_ipv4 (&p, NULL, NULL, distance, 0);
+      static_delete_ipv4 (&p, NULL, NULL, distance, 0, safi);
 
     return CMD_SUCCESS;
   }
@@ -182,9 +190,9 @@ zebra_static_ipv4 (struct vty *vty, int add_cmd, const char *dest_str,
     ifname = gate_str;
 
   if (add_cmd)
-    static_add_ipv4 (&p, ifname ? NULL : &gate, ifname, flag, distance, 0);
+    static_add_ipv4 (&p, ifname ? NULL : &gate, ifname, flag, distance, 0, safi);
   else
-    static_delete_ipv4 (&p, ifname ? NULL : &gate, ifname, distance, 0);
+    static_delete_ipv4 (&p, ifname ? NULL : &gate, ifname, distance, 0, safi);
 
   return CMD_SUCCESS;
 }
@@ -192,7 +200,7 @@ zebra_static_ipv4 (struct vty *vty, int add_cmd, const char *dest_str,
 /* Static route configuration.  */
 DEFUN (ip_route, 
        ip_route_cmd,
-       "ip route A.B.C.D/M (A.B.C.D|INTERFACE|null0)",
+       "ip (route|mroute) A.B.C.D/M (A.B.C.D|INTERFACE|null0)",
        IP_STR
        "Establish static routes\n"
        "IP destination prefix (e.g. 10.0.0.0/8)\n"
@@ -200,12 +208,13 @@ DEFUN (ip_route,
        "IP gateway interface name\n"
        "Null interface\n")
 {
-  return zebra_static_ipv4 (vty, 1, argv[0], NULL, argv[1], NULL, NULL);
+  return zebra_static_ipv4 (vty, 1, argv[1], NULL, argv[2], NULL, NULL,
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
-DEFUN (ip_route_flags,
+DEFUN (ip_route_flags, 
        ip_route_flags_cmd,
-       "ip route A.B.C.D/M (A.B.C.D|INTERFACE) (reject|blackhole)",
+       "ip (route|mroute) A.B.C.D/M (A.B.C.D|INTERFACE) (reject|blackhole)",
        IP_STR
        "Establish static routes\n"
        "IP destination prefix (e.g. 10.0.0.0/8)\n"
@@ -214,25 +223,27 @@ DEFUN (ip_route_flags,
        "Emit an ICMP unreachable when matched\n"
        "Silently discard pkts when matched\n")
 {
-  return zebra_static_ipv4 (vty, 1, argv[0], NULL, argv[1], argv[2], NULL);
+  return zebra_static_ipv4 (vty, 1, argv[1], NULL, argv[2], argv[3], NULL,
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (ip_route_flags2,
        ip_route_flags2_cmd,
-       "ip route A.B.C.D/M (reject|blackhole)",
+       "ip (route|mroute) A.B.C.D/M (reject|blackhole)",
        IP_STR
        "Establish static routes\n"
        "IP destination prefix (e.g. 10.0.0.0/8)\n"
        "Emit an ICMP unreachable when matched\n"
        "Silently discard pkts when matched\n")
 {
-  return zebra_static_ipv4 (vty, 1, argv[0], NULL, NULL, argv[1], NULL);
+  return zebra_static_ipv4 (vty, 1, argv[1], NULL, NULL, argv[2], NULL,
+        argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 /* Mask as A.B.C.D format.  */
 DEFUN (ip_route_mask,
        ip_route_mask_cmd,
-       "ip route A.B.C.D A.B.C.D (A.B.C.D|INTERFACE|null0)",
+       "ip (route|mroute) A.B.C.D A.B.C.D (A.B.C.D|INTERFACE|null0)",
        IP_STR
        "Establish static routes\n"
        "IP destination prefix\n"
@@ -241,12 +252,13 @@ DEFUN (ip_route_mask,
        "IP gateway interface name\n"
        "Null interface\n")
 {
-  return zebra_static_ipv4 (vty, 1, argv[0], argv[1], argv[2], NULL, NULL);
+  return zebra_static_ipv4 (vty, 1, argv[1], argv[2], argv[3], NULL, NULL, 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (ip_route_mask_flags,
        ip_route_mask_flags_cmd,
-       "ip route A.B.C.D A.B.C.D (A.B.C.D|INTERFACE) (reject|blackhole)",
+       "ip (route|mroute) A.B.C.D A.B.C.D (A.B.C.D|INTERFACE) (reject|blackhole)",
        IP_STR
        "Establish static routes\n"
        "IP destination prefix\n"
@@ -256,12 +268,13 @@ DEFUN (ip_route_mask_flags,
        "Emit an ICMP unreachable when matched\n"
        "Silently discard pkts when matched\n")
 {
-  return zebra_static_ipv4 (vty, 1, argv[0], argv[1], argv[2], argv[3], NULL);
+  return zebra_static_ipv4 (vty, 1, argv[1], argv[2], argv[3], argv[4], NULL, 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (ip_route_mask_flags2,
        ip_route_mask_flags2_cmd,
-       "ip route A.B.C.D A.B.C.D (reject|blackhole)",
+       "ip (route|mroute) A.B.C.D A.B.C.D (reject|blackhole)",
        IP_STR
        "Establish static routes\n"
        "IP destination prefix\n"
@@ -269,13 +282,14 @@ DEFUN (ip_route_mask_flags2,
        "Emit an ICMP unreachable when matched\n"
        "Silently discard pkts when matched\n")
 {
-  return zebra_static_ipv4 (vty, 1, argv[0], argv[1], NULL, argv[2], NULL);
+  return zebra_static_ipv4 (vty, 1, argv[1], argv[2], NULL, argv[3], NULL,
+         argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 /* Distance option value.  */
 DEFUN (ip_route_distance,
        ip_route_distance_cmd,
-       "ip route A.B.C.D/M (A.B.C.D|INTERFACE|null0) <1-255>",
+       "ip (route|mroute) A.B.C.D/M (A.B.C.D|INTERFACE|null0) <1-255>",
        IP_STR
        "Establish static routes\n"
        "IP destination prefix (e.g. 10.0.0.0/8)\n"
@@ -284,12 +298,13 @@ DEFUN (ip_route_distance,
        "Null interface\n"
        "Distance value for this route\n")
 {
-  return zebra_static_ipv4 (vty, 1, argv[0], NULL, argv[1], NULL, argv[2]);
+  return zebra_static_ipv4 (vty, 1, argv[1], NULL, argv[2], NULL, argv[3], 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (ip_route_flags_distance,
        ip_route_flags_distance_cmd,
-       "ip route A.B.C.D/M (A.B.C.D|INTERFACE) (reject|blackhole) <1-255>",
+       "ip (route|mroute) A.B.C.D/M (A.B.C.D|INTERFACE) (reject|blackhole) <1-255>",
        IP_STR
        "Establish static routes\n"
        "IP destination prefix (e.g. 10.0.0.0/8)\n"
@@ -299,12 +314,13 @@ DEFUN (ip_route_flags_distance,
        "Silently discard pkts when matched\n"
        "Distance value for this route\n")
 {
-  return zebra_static_ipv4 (vty, 1, argv[0], NULL, argv[1], argv[2], argv[3]);
+  return zebra_static_ipv4 (vty, 1, argv[1], NULL, argv[2], argv[3], argv[4], 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (ip_route_flags_distance2,
        ip_route_flags_distance2_cmd,
-       "ip route A.B.C.D/M (reject|blackhole) <1-255>",
+       "ip (route|mroute) A.B.C.D/M (reject|blackhole) <1-255>",
        IP_STR
        "Establish static routes\n"
        "IP destination prefix (e.g. 10.0.0.0/8)\n"
@@ -312,12 +328,13 @@ DEFUN (ip_route_flags_distance2,
        "Silently discard pkts when matched\n"
        "Distance value for this route\n")
 {
-  return zebra_static_ipv4 (vty, 1, argv[0], NULL, NULL, argv[1], argv[2]);
-}
+  return zebra_static_ipv4 (vty, 1, argv[1], NULL, NULL, argv[2], argv[3],
+         argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
+} 
 
 DEFUN (ip_route_mask_distance,
        ip_route_mask_distance_cmd,
-       "ip route A.B.C.D A.B.C.D (A.B.C.D|INTERFACE|null0) <1-255>",
+       "ip (route|mroute) A.B.C.D A.B.C.D (A.B.C.D|INTERFACE|null0) <1-255>",
        IP_STR
        "Establish static routes\n"
        "IP destination prefix\n"
@@ -327,12 +344,13 @@ DEFUN (ip_route_mask_distance,
        "Null interface\n"
        "Distance value for this route\n")
 {
-  return zebra_static_ipv4 (vty, 1, argv[0], argv[1], argv[2], NULL, argv[3]);
+  return zebra_static_ipv4 (vty, 1, argv[1], argv[2], argv[3], NULL, argv[4], 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (ip_route_mask_flags_distance,
        ip_route_mask_flags_distance_cmd,
-       "ip route A.B.C.D A.B.C.D (A.B.C.D|INTERFACE) (reject|blackhole) <1-255>",
+       "ip (route|mroute) A.B.C.D A.B.C.D (A.B.C.D|INTERFACE) (reject|blackhole) <1-255>",
        IP_STR
        "Establish static routes\n"
        "IP destination prefix\n"
@@ -343,12 +361,13 @@ DEFUN (ip_route_mask_flags_distance,
        "Emit an ICMP unreachable when matched\n"
        "Silently discard pkts when matched\n")
 {
-  return zebra_static_ipv4 (vty, 1, argv[0], argv[1], argv[2], argv[3], argv[4]);
+  return zebra_static_ipv4 (vty, 1, argv[1], argv[2], argv[3], argv[4], argv[5], 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (ip_route_mask_flags_distance2,
        ip_route_mask_flags_distance2_cmd,
-       "ip route A.B.C.D A.B.C.D (reject|blackhole) <1-255>",
+       "ip (route|mroute) A.B.C.D A.B.C.D (reject|blackhole) <1-255>",
        IP_STR
        "Establish static routes\n"
        "IP destination prefix\n"
@@ -357,12 +376,13 @@ DEFUN (ip_route_mask_flags_distance2,
        "Emit an ICMP unreachable when matched\n"
        "Silently discard pkts when matched\n")
 {
-  return zebra_static_ipv4 (vty, 1, argv[0], argv[1], NULL, argv[2], argv[3]);
+  return zebra_static_ipv4 (vty, 1, argv[1], argv[2], NULL, argv[3], argv[4],
+         argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (no_ip_route, 
        no_ip_route_cmd,
-       "no ip route A.B.C.D/M (A.B.C.D|INTERFACE|null0)",
+       "no ip (route|mroute) A.B.C.D/M (A.B.C.D|INTERFACE|null0)",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -371,12 +391,13 @@ DEFUN (no_ip_route,
        "IP gateway interface name\n"
        "Null interface\n")
 {
-  return zebra_static_ipv4 (vty, 0, argv[0], NULL, argv[1], NULL, NULL);
+  return zebra_static_ipv4 (vty, 0, argv[1], NULL, argv[2], NULL, NULL, 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
-ALIAS (no_ip_route,
+ALIAS (no_ip_route, 
        no_ip_route_flags_cmd,
-       "no ip route A.B.C.D/M (A.B.C.D|INTERFACE) (reject|blackhole)",
+       "no ip (route|mroute) A.B.C.D/M (A.B.C.D|INTERFACE) (reject|blackhole)",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -388,7 +409,7 @@ ALIAS (no_ip_route,
 
 DEFUN (no_ip_route_flags2,
        no_ip_route_flags2_cmd,
-       "no ip route A.B.C.D/M (reject|blackhole)",
+       "no ip (route|mroute) A.B.C.D/M (reject|blackhole)",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -396,12 +417,13 @@ DEFUN (no_ip_route_flags2,
        "Emit an ICMP unreachable when matched\n"
        "Silently discard pkts when matched\n")
 {
-  return zebra_static_ipv4 (vty, 0, argv[0], NULL, NULL, NULL, NULL);
+  return zebra_static_ipv4 (vty, 0, argv[1], NULL, NULL, NULL, NULL,
+         argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (no_ip_route_mask,
        no_ip_route_mask_cmd,
-       "no ip route A.B.C.D A.B.C.D (A.B.C.D|INTERFACE|null0)",
+       "no ip (route|mroute) A.B.C.D A.B.C.D (A.B.C.D|INTERFACE|null0)",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -411,12 +433,13 @@ DEFUN (no_ip_route_mask,
        "IP gateway interface name\n"
        "Null interface\n")
 {
-  return zebra_static_ipv4 (vty, 0, argv[0], argv[1], argv[2], NULL, NULL);
+  return zebra_static_ipv4 (vty, 0, argv[1], argv[2], argv[3], NULL, NULL,
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 ALIAS (no_ip_route_mask,
        no_ip_route_mask_flags_cmd,
-       "no ip route A.B.C.D A.B.C.D (A.B.C.D|INTERFACE) (reject|blackhole)",
+       "no ip (route|mroute) A.B.C.D A.B.C.D (A.B.C.D|INTERFACE) (reject|blackhole)",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -429,7 +452,7 @@ ALIAS (no_ip_route_mask,
 
 DEFUN (no_ip_route_mask_flags2,
        no_ip_route_mask_flags2_cmd,
-       "no ip route A.B.C.D A.B.C.D (reject|blackhole)",
+       "no ip (route|mroute) A.B.C.D A.B.C.D (reject|blackhole)",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -438,12 +461,13 @@ DEFUN (no_ip_route_mask_flags2,
        "Emit an ICMP unreachable when matched\n"
        "Silently discard pkts when matched\n")
 {
-  return zebra_static_ipv4 (vty, 0, argv[0], argv[1], NULL, NULL, NULL);
+  return zebra_static_ipv4 (vty, 0, argv[1], argv[2], NULL, NULL, NULL,
+         argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (no_ip_route_distance,
        no_ip_route_distance_cmd,
-       "no ip route A.B.C.D/M (A.B.C.D|INTERFACE|null0) <1-255>",
+       "no ip (route|mroute) A.B.C.D/M (A.B.C.D|INTERFACE|null0) <1-255>",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -453,12 +477,13 @@ DEFUN (no_ip_route_distance,
        "Null interface\n"
        "Distance value for this route\n")
 {
-  return zebra_static_ipv4 (vty, 0, argv[0], NULL, argv[1], NULL, argv[2]);
+  return zebra_static_ipv4 (vty, 0, argv[1], NULL, argv[2], NULL, argv[3], 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (no_ip_route_flags_distance,
        no_ip_route_flags_distance_cmd,
-       "no ip route A.B.C.D/M (A.B.C.D|INTERFACE) (reject|blackhole) <1-255>",
+       "no ip (route|mroute) A.B.C.D/M (A.B.C.D|INTERFACE) (reject|blackhole) <1-255>",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -469,12 +494,13 @@ DEFUN (no_ip_route_flags_distance,
        "Silently discard pkts when matched\n"
        "Distance value for this route\n")
 {
-  return zebra_static_ipv4 (vty, 0, argv[0], NULL, argv[1], argv[2], argv[3]);
+  return zebra_static_ipv4 (vty, 0, argv[1], NULL, argv[2], argv[3], argv[4], 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (no_ip_route_flags_distance2,
        no_ip_route_flags_distance2_cmd,
-       "no ip route A.B.C.D/M (reject|blackhole) <1-255>",
+       "no ip (route|mroute) A.B.C.D/M (reject|blackhole) <1-255>",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -483,12 +509,13 @@ DEFUN (no_ip_route_flags_distance2,
        "Silently discard pkts when matched\n"
        "Distance value for this route\n")
 {
-  return zebra_static_ipv4 (vty, 0, argv[0], NULL, NULL, argv[1], argv[2]);
+  return zebra_static_ipv4 (vty, 0, argv[1], NULL, NULL, argv[2], argv[3],
+         argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (no_ip_route_mask_distance,
        no_ip_route_mask_distance_cmd,
-       "no ip route A.B.C.D A.B.C.D (A.B.C.D|INTERFACE|null0) <1-255>",
+       "no ip (route|mroute) A.B.C.D A.B.C.D (A.B.C.D|INTERFACE|null0) <1-255>",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -499,12 +526,13 @@ DEFUN (no_ip_route_mask_distance,
        "Null interface\n"
        "Distance value for this route\n")
 {
-  return zebra_static_ipv4 (vty, 0, argv[0], argv[1], argv[2], NULL, argv[3]);
+  return zebra_static_ipv4 (vty, 0, argv[1], argv[2], argv[3], NULL, argv[4], 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (no_ip_route_mask_flags_distance,
        no_ip_route_mask_flags_distance_cmd,
-       "no ip route A.B.C.D A.B.C.D (A.B.C.D|INTERFACE) (reject|blackhole) <1-255>",
+       "no ip (route|mroute) A.B.C.D A.B.C.D (A.B.C.D|INTERFACE) (reject|blackhole) <1-255>",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -516,12 +544,13 @@ DEFUN (no_ip_route_mask_flags_distance,
        "Silently discard pkts when matched\n"
        "Distance value for this route\n")
 {
-  return zebra_static_ipv4 (vty, 0, argv[0], argv[1], argv[2], argv[3], argv[4]);
+  return zebra_static_ipv4 (vty, 0, argv[1], argv[2], argv[3], argv[4], argv[5], 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (no_ip_route_mask_flags_distance2,
        no_ip_route_mask_flags_distance2_cmd,
-       "no ip route A.B.C.D A.B.C.D (reject|blackhole) <1-255>",
+       "no ip (route|mroute) A.B.C.D A.B.C.D (reject|blackhole) <1-255>",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -531,7 +560,8 @@ DEFUN (no_ip_route_mask_flags_distance2,
        "Silently discard pkts when matched\n"
        "Distance value for this route\n")
 {
-  return zebra_static_ipv4 (vty, 0, argv[0], argv[1], NULL, argv[2], argv[3]);
+  return zebra_static_ipv4 (vty, 0, argv[1], argv[2], NULL, argv[3], argv[4],
+         argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 /* New RIB.  Detailed information for IPv4 route. */
@@ -553,9 +583,9 @@ vty_show_ip_route_detail (struct vty *vty, struct route_node *rn)
       if (rib->refcnt)
 	vty_out (vty, ", refcnt %ld", rib->refcnt);
       if (CHECK_FLAG (rib->flags, ZEBRA_FLAG_BLACKHOLE))
-       vty_out (vty, ", blackhole");
+	vty_out (vty, ", blackhole");
       if (CHECK_FLAG (rib->flags, ZEBRA_FLAG_REJECT))
-       vty_out (vty, ", reject");
+	vty_out (vty, ", reject");
       vty_out (vty, "%s", VTY_NEWLINE);
 
 #define ONE_DAY_SECOND 60*60*24
@@ -563,7 +593,8 @@ vty_show_ip_route_detail (struct vty *vty, struct route_node *rn)
       if (rib->type == ZEBRA_ROUTE_RIP
 	  || rib->type == ZEBRA_ROUTE_OSPF
 	  || rib->type == ZEBRA_ROUTE_ISIS
-	  || rib->type == ZEBRA_ROUTE_BGP)
+	  || rib->type == ZEBRA_ROUTE_BGP
+	  || rib->type == ZEBRA_ROUTE_DEP)
 	{
 	  time_t uptime;
 	  struct tm *tm;
@@ -607,10 +638,10 @@ vty_show_ip_route_detail (struct vty *vty, struct route_node *rn)
 	    case NEXTHOP_TYPE_IFNAME:
 	      vty_out (vty, " directly connected, %s", nexthop->ifname);
 	      break;
-      case NEXTHOP_TYPE_BLACKHOLE:
-        vty_out (vty, " directly connected, Null0");
-        break;
-      default:
+            case NEXTHOP_TYPE_BLACKHOLE:
+	      vty_out (vty, " directly connected, Null0");
+	      break;
+	      default:
 	      break;
 	    }
 	  if (! CHECK_FLAG (nexthop->flags, NEXTHOP_FLAG_ACTIVE))
@@ -690,10 +721,10 @@ vty_show_ip_route (struct vty *vty, struct route_node *rn, struct rib *rib)
 	case NEXTHOP_TYPE_IFNAME:
 	  vty_out (vty, " is directly connected, %s", nexthop->ifname);
 	  break;
-  case NEXTHOP_TYPE_BLACKHOLE:
-    vty_out (vty, " is directly connected, Null0");
-    break;
-  default:
+	case NEXTHOP_TYPE_BLACKHOLE:
+	  vty_out (vty, " is directly connected, Null0");
+	  break;
+	  default:
 	  break;
 	}
       if (! CHECK_FLAG (nexthop->flags, NEXTHOP_FLAG_ACTIVE))
@@ -720,14 +751,15 @@ vty_show_ip_route (struct vty *vty, struct route_node *rn, struct rib *rib)
 	}
 
       if (CHECK_FLAG (rib->flags, ZEBRA_FLAG_BLACKHOLE))
-               vty_out (vty, ", bh");
+		vty_out (vty, ", bh");
       if (CHECK_FLAG (rib->flags, ZEBRA_FLAG_REJECT))
-               vty_out (vty, ", rej");
+		vty_out (vty, ", rej");
 
       if (rib->type == ZEBRA_ROUTE_RIP
 	  || rib->type == ZEBRA_ROUTE_OSPF
 	  || rib->type == ZEBRA_ROUTE_ISIS
-	  || rib->type == ZEBRA_ROUTE_BGP)
+	  || rib->type == ZEBRA_ROUTE_BGP
+	  || rib->type == ZEBRA_ROUTE_DEP)
 	{
 	  time_t uptime;
 	  struct tm *tm;
@@ -756,21 +788,23 @@ vty_show_ip_route (struct vty *vty, struct route_node *rn, struct rib *rib)
 
 #define SHOW_ROUTE_V4_HEADER "Codes: K - kernel route, C - connected, " \
   "S - static, R - RIP, O - OSPF,%s       I - ISIS, B - BGP, " \
-  "> - selected route, * - FIB route%s%s"
+  "D - Delegated Prefix, > - selected route,  * - FIB route%s%s"
+#define SHOW_MROUTE_V4_HEADER "Codes: K - kernel route, C - connected, S - static%s       B - BGP > - selected route, * - FIB route%s%s"
 
 DEFUN (show_ip_route,
        show_ip_route_cmd,
-       "show ip route",
+       "show ip (route|mroute)",
        SHOW_STR
        IP_STR
-       "IP routing table\n")
+       "IP routing table\n"
+       "IP multicast Sub-Address-Family routing table\n")
 {
   struct route_table *table;
   struct route_node *rn;
   struct rib *rib;
   int first = 1;
 
-  table = vrf_table (AFI_IP, SAFI_UNICAST, 0);
+  table = vrf_table (AFI_IP, argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST, 0);
   if (! table)
     return CMD_SUCCESS;
 
@@ -780,8 +814,8 @@ DEFUN (show_ip_route,
       {
 	if (first)
 	  {
-	    vty_out (vty, SHOW_ROUTE_V4_HEADER, VTY_NEWLINE, VTY_NEWLINE,
-		     VTY_NEWLINE);
+	    vty_out (vty, argv[0][0] == 'r' ? SHOW_ROUTE_V4_HEADER : SHOW_MROUTE_V4_HEADER,
+                     VTY_NEWLINE, VTY_NEWLINE, VTY_NEWLINE); 
 	    first = 0;
 	  }
 	vty_show_ip_route (vty, rn, rib);
@@ -791,10 +825,11 @@ DEFUN (show_ip_route,
 
 DEFUN (show_ip_route_prefix_longer,
        show_ip_route_prefix_longer_cmd,
-       "show ip route A.B.C.D/M longer-prefixes",
+       "show ip (route|mroute) A.B.C.D/M longer-prefixes",
        SHOW_STR
        IP_STR
        "IP routing table\n"
+       "IP multicast Sub-Address-Family routing table\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
        "Show route matching the specified Network/Mask pair only\n")
 {
@@ -805,14 +840,14 @@ DEFUN (show_ip_route_prefix_longer,
   int ret;
   int first = 1;
 
-  ret = str2prefix (argv[0], &p);
+  ret = str2prefix (argv[1], &p);
   if (! ret)
     {
       vty_out (vty, "%% Malformed Prefix%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
   
-  table = vrf_table (AFI_IP, SAFI_UNICAST, 0);
+  table = vrf_table (AFI_IP, argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST, 0);
   if (! table)
     return CMD_SUCCESS;
 
@@ -823,8 +858,8 @@ DEFUN (show_ip_route_prefix_longer,
 	{
 	  if (first)
 	    {
-	      vty_out (vty, SHOW_ROUTE_V4_HEADER, VTY_NEWLINE,
-		       VTY_NEWLINE, VTY_NEWLINE);
+	      vty_out (vty, argv[0][0] == 'r' ? SHOW_ROUTE_V4_HEADER : SHOW_MROUTE_V4_HEADER, 
+	VTY_NEWLINE, VTY_NEWLINE, VTY_NEWLINE);
 	      first = 0;
 	    }
 	  vty_show_ip_route (vty, rn, rib);
@@ -834,10 +869,11 @@ DEFUN (show_ip_route_prefix_longer,
 
 DEFUN (show_ip_route_supernets,
        show_ip_route_supernets_cmd,
-       "show ip route supernets-only",
+       "show ip (route|mroute) supernets-only",
        SHOW_STR
        IP_STR
        "IP routing table\n"
+       "IP multicast Sub-Address-Family routing table\n"
        "Show supernet entries only\n")
 {
   struct route_table *table;
@@ -846,7 +882,7 @@ DEFUN (show_ip_route_supernets,
   u_int32_t addr; 
   int first = 1;
 
-  table = vrf_table (AFI_IP, SAFI_UNICAST, 0);
+  table = vrf_table (AFI_IP, argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST, 0);
   if (! table)
     return CMD_SUCCESS;
 
@@ -862,8 +898,8 @@ DEFUN (show_ip_route_supernets,
 	  {
 	    if (first)
 	      {
-		vty_out (vty, SHOW_ROUTE_V4_HEADER, VTY_NEWLINE,
-			 VTY_NEWLINE, VTY_NEWLINE);
+		vty_out (vty, argv[0][0] == 'r' ? SHOW_ROUTE_V4_HEADER : SHOW_MROUTE_V4_HEADER, 
+			VTY_NEWLINE, VTY_NEWLINE, VTY_NEWLINE);
 		first = 0;
 	      }
 	    vty_show_ip_route (vty, rn, rib);
@@ -874,17 +910,19 @@ DEFUN (show_ip_route_supernets,
 
 DEFUN (show_ip_route_protocol,
        show_ip_route_protocol_cmd,
-       "show ip route (bgp|connected|isis|kernel|ospf|rip|static)",
+       "show ip (route|mroute) (bgp|connected|isis|kernel|ospf|rip|static|dep)",
        SHOW_STR
        IP_STR
        "IP routing table\n"
+       "IP multicast Sub-Address-Family routing table\n"
        "Border Gateway Protocol (BGP)\n"
        "Connected\n"
        "ISO IS-IS (ISIS)\n"
        "Kernel\n"
        "Open Shortest Path First (OSPF)\n"
        "Routing Information Protocol (RIP)\n"
-       "Static routes\n")
+       "Static routes\n"
+       "DElegated Prefixes (DEP)\n")
 {
   int type;
   struct route_table *table;
@@ -892,27 +930,29 @@ DEFUN (show_ip_route_protocol,
   struct rib *rib;
   int first = 1;
 
-  if (strncmp (argv[0], "b", 1) == 0)
+  if (strncmp (argv[1], "b", 1) == 0)
     type = ZEBRA_ROUTE_BGP;
-  else if (strncmp (argv[0], "c", 1) == 0)
+  else if (strncmp (argv[1], "c", 1) == 0)
     type = ZEBRA_ROUTE_CONNECT;
-  else if (strncmp (argv[0], "k", 1) ==0)
+  else if (strncmp (argv[1], "k", 1) ==0)
     type = ZEBRA_ROUTE_KERNEL;
-  else if (strncmp (argv[0], "o", 1) == 0)
+  else if (strncmp (argv[1], "o", 1) == 0)
     type = ZEBRA_ROUTE_OSPF;
-  else if (strncmp (argv[0], "i", 1) == 0)
+  else if (strncmp (argv[1], "i", 1) == 0)
     type = ZEBRA_ROUTE_ISIS;
-  else if (strncmp (argv[0], "r", 1) == 0)
+  else if (strncmp (argv[1], "r", 1) == 0)
     type = ZEBRA_ROUTE_RIP;
-  else if (strncmp (argv[0], "s", 1) == 0)
+  else if (strncmp (argv[1], "s", 1) == 0)
     type = ZEBRA_ROUTE_STATIC;
-  else 
+  else if (strncmp (argv[1], "d", 1) == 0)
+    type = ZEBRA_ROUTE_DEP;
+   else 
     {
       vty_out (vty, "Unknown route type%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
   
-  table = vrf_table (AFI_IP, SAFI_UNICAST, 0);
+  table = vrf_table (AFI_IP, argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST, 0);
   if (! table)
     return CMD_SUCCESS;
 
@@ -923,7 +963,7 @@ DEFUN (show_ip_route_protocol,
 	{
 	  if (first)
 	    {
-	      vty_out (vty, SHOW_ROUTE_V4_HEADER,
+	      vty_out (vty, argv[0][0] == 'r' ? SHOW_ROUTE_V4_HEADER : SHOW_MROUTE_V4_HEADER,
 		       VTY_NEWLINE, VTY_NEWLINE, VTY_NEWLINE);
 	      first = 0;
 	    }
@@ -934,10 +974,11 @@ DEFUN (show_ip_route_protocol,
 
 DEFUN (show_ip_route_addr,
        show_ip_route_addr_cmd,
-       "show ip route A.B.C.D",
+       "show ip (route|mroute) A.B.C.D",
        SHOW_STR
        IP_STR
        "IP routing table\n"
+       "IP multicast Sub-Address-Family routing table\n"
        "Network in the IP routing table to display\n")
 {
   int ret;
@@ -945,14 +986,14 @@ DEFUN (show_ip_route_addr,
   struct route_table *table;
   struct route_node *rn;
 
-  ret = str2prefix_ipv4 (argv[0], &p);
+  ret = str2prefix_ipv4 (argv[1], &p);
   if (ret <= 0)
     {
       vty_out (vty, "%% Malformed IPv4 address%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  table = vrf_table (AFI_IP, SAFI_UNICAST, 0);
+  table = vrf_table (AFI_IP, argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST, 0);
   if (! table)
     return CMD_SUCCESS;
 
@@ -972,10 +1013,11 @@ DEFUN (show_ip_route_addr,
 
 DEFUN (show_ip_route_prefix,
        show_ip_route_prefix_cmd,
-       "show ip route A.B.C.D/M",
+       "show ip (route|mroute) A.B.C.D/M",
        SHOW_STR
        IP_STR
        "IP routing table\n"
+       "IP multicast Sub-Address-Family routing table\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
 {
   int ret;
@@ -983,14 +1025,14 @@ DEFUN (show_ip_route_prefix,
   struct route_table *table;
   struct route_node *rn;
 
-  ret = str2prefix_ipv4 (argv[0], &p);
+  ret = str2prefix_ipv4 (argv[1], &p);
   if (ret <= 0)
     {
       vty_out (vty, "%% Malformed IPv4 address%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  table = vrf_table (AFI_IP, SAFI_UNICAST, 0);
+  table = vrf_table (AFI_IP, argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST, 0);
   if (! table)
     return CMD_SUCCESS;
 
@@ -1030,6 +1072,7 @@ zebra_show_ip_route (struct vty *vty, struct vrf *vrf)
   vty_out (vty, "  NSSA External-1: %d NSSA External-2: %d%s",
 	   0, 0, VTY_NEWLINE);
 
+  vty_out (vty, "delegated pref. %d%s", 0, VTY_NEWLINE);
   vty_out (vty, "internal        %d%s", 0, VTY_NEWLINE);
   vty_out (vty, "Total           %d%s", 0, VTY_NEWLINE);
 }
@@ -1060,7 +1103,7 @@ DEFUN (show_ip_route_summary,
 
 /* Write IPv4 static route configuration. */
 int
-static_config_ipv4 (struct vty *vty)
+static_config_ipv4 (struct vty *vty, int vrf_id, safi_t safi)
 {
   struct route_node *rn;
   struct static_ipv4 *si;  
@@ -1070,15 +1113,15 @@ static_config_ipv4 (struct vty *vty)
   write = 0;
 
   /* Lookup table.  */
-  stable = vrf_static_table (AFI_IP, SAFI_UNICAST, 0);
+  stable = vrf_static_table (AFI_IP, safi, vrf_id);
   if (! stable)
     return -1;
 
   for (rn = route_top (stable); rn; rn = route_next (rn))
     for (si = rn->info; si; si = si->next)
       {
-        vty_out (vty, "ip route %s/%d", inet_ntoa (rn->p.u.prefix4),
-                 rn->p.prefixlen);
+	vty_out (vty, "ip %sroute %s/%d", safi == SAFI_UNICAST ? "" : "m",
+		 inet_ntoa (rn->p.u.prefix4), rn->p.prefixlen);
 
         switch (si->type)
           {
@@ -1118,7 +1161,7 @@ static_config_ipv4 (struct vty *vty)
 int
 static_ipv6_func (struct vty *vty, int add_cmd, const char *dest_str,
 		  const char *gate_str, const char *ifname,
-		  const char *flag_str, const char *distance_str)
+		  const char *flag_str, const char *distance_str, safi_t safi)
 {
   int ret;
   u_char distance;
@@ -1193,28 +1236,29 @@ static_ipv6_func (struct vty *vty, int add_cmd, const char *dest_str,
     }
 
   if (add_cmd)
-    static_add_ipv6 (&p, type, gate, ifname, flag, distance, table);
+    static_add_ipv6 (&p, type, gate, ifname, flag, distance, table, safi);
   else
-    static_delete_ipv6 (&p, type, gate, ifname, distance, table);
+    static_delete_ipv6 (&p, type, gate, ifname, distance, table, safi);
 
   return CMD_SUCCESS;
 }
 
 DEFUN (ipv6_route,
        ipv6_route_cmd,
-       "ipv6 route X:X::X:X/M (X:X::X:X|INTERFACE)",
+       "ipv6 (route|mroute) X:X::X:X/M (X:X::X:X|INTERFACE)",
        IP_STR
        "Establish static routes\n"
        "IPv6 destination prefix (e.g. 3ffe:506::/32)\n"
        "IPv6 gateway address\n"
        "IPv6 gateway interface name\n")
 {
-  return static_ipv6_func (vty, 1, argv[0], argv[1], NULL, NULL, NULL);
+  return static_ipv6_func (vty, 1, argv[1], argv[2], NULL, NULL, NULL, 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (ipv6_route_flags,
        ipv6_route_flags_cmd,
-       "ipv6 route X:X::X:X/M (X:X::X:X|INTERFACE) (reject|blackhole)",
+       "ipv6 (route|mroute) X:X::X:X/M (X:X::X:X|INTERFACE) (reject|blackhole)",
        IP_STR
        "Establish static routes\n"
        "IPv6 destination prefix (e.g. 3ffe:506::/32)\n"
@@ -1223,24 +1267,26 @@ DEFUN (ipv6_route_flags,
        "Emit an ICMP unreachable when matched\n"
        "Silently discard pkts when matched\n")
 {
-  return static_ipv6_func (vty, 1, argv[0], argv[1], NULL, argv[2], NULL);
+  return static_ipv6_func (vty, 1, argv[1], argv[2], NULL, argv[3], NULL, 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (ipv6_route_ifname,
        ipv6_route_ifname_cmd,
-       "ipv6 route X:X::X:X/M X:X::X:X INTERFACE",
+       "ipv6 (route|mroute) X:X::X:X/M X:X::X:X INTERFACE",
        IP_STR
        "Establish static routes\n"
        "IPv6 destination prefix (e.g. 3ffe:506::/32)\n"
        "IPv6 gateway address\n"
        "IPv6 gateway interface name\n")
 {
-  return static_ipv6_func (vty, 1, argv[0], argv[1], argv[2], NULL, NULL);
+  return static_ipv6_func (vty, 1, argv[1], argv[2], argv[3], NULL, NULL,
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (ipv6_route_ifname_flags,
        ipv6_route_ifname_flags_cmd,
-       "ipv6 route X:X::X:X/M X:X::X:X INTERFACE (reject|blackhole)",
+       "ipv6 (route|mroute) X:X::X:X/M X:X::X:X INTERFACE (reject|blackhole)",
        IP_STR
        "Establish static routes\n"
        "IPv6 destination prefix (e.g. 3ffe:506::/32)\n"
@@ -1249,12 +1295,13 @@ DEFUN (ipv6_route_ifname_flags,
        "Emit an ICMP unreachable when matched\n"
        "Silently discard pkts when matched\n")
 {
-  return static_ipv6_func (vty, 1, argv[0], argv[1], argv[2], argv[3], NULL);
+  return static_ipv6_func (vty, 1, argv[1], argv[2], argv[3], argv[4], NULL, 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (ipv6_route_pref,
        ipv6_route_pref_cmd,
-       "ipv6 route X:X::X:X/M (X:X::X:X|INTERFACE) <1-255>",
+       "ipv6 (route|mroute) X:X::X:X/M (X:X::X:X|INTERFACE) <1-255>",
        IP_STR
        "Establish static routes\n"
        "IPv6 destination prefix (e.g. 3ffe:506::/32)\n"
@@ -1262,12 +1309,13 @@ DEFUN (ipv6_route_pref,
        "IPv6 gateway interface name\n"
        "Distance value for this prefix\n")
 {
-  return static_ipv6_func (vty, 1, argv[0], argv[1], NULL, NULL, argv[2]);
+  return static_ipv6_func (vty, 1, argv[1], argv[2], NULL, NULL, argv[3], 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (ipv6_route_flags_pref,
        ipv6_route_flags_pref_cmd,
-       "ipv6 route X:X::X:X/M (X:X::X:X|INTERFACE) (reject|blackhole) <1-255>",
+       "ipv6 (route|mroute) X:X::X:X/M (X:X::X:X|INTERFACE) (reject|blackhole) <1-255>",
        IP_STR
        "Establish static routes\n"
        "IPv6 destination prefix (e.g. 3ffe:506::/32)\n"
@@ -1277,12 +1325,13 @@ DEFUN (ipv6_route_flags_pref,
        "Silently discard pkts when matched\n"
        "Distance value for this prefix\n")
 {
-  return static_ipv6_func (vty, 1, argv[0], argv[1], NULL, argv[2], argv[3]);
+  return static_ipv6_func (vty, 1, argv[1], argv[2], NULL, argv[3], argv[4], 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (ipv6_route_ifname_pref,
        ipv6_route_ifname_pref_cmd,
-       "ipv6 route X:X::X:X/M X:X::X:X INTERFACE <1-255>",
+       "ipv6 (route|mroute) X:X::X:X/M X:X::X:X INTERFACE <1-255>",
        IP_STR
        "Establish static routes\n"
        "IPv6 destination prefix (e.g. 3ffe:506::/32)\n"
@@ -1290,12 +1339,13 @@ DEFUN (ipv6_route_ifname_pref,
        "IPv6 gateway interface name\n"
        "Distance value for this prefix\n")
 {
-  return static_ipv6_func (vty, 1, argv[0], argv[1], argv[2], NULL, argv[3]);
+  return static_ipv6_func (vty, 1, argv[1], argv[2], argv[3], NULL, argv[4], 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (ipv6_route_ifname_flags_pref,
        ipv6_route_ifname_flags_pref_cmd,
-       "ipv6 route X:X::X:X/M X:X::X:X INTERFACE (reject|blackhole) <1-255>",
+       "ipv6 (route|mroute) X:X::X:X/M X:X::X:X INTERFACE (reject|blackhole) <1-255>",
        IP_STR
        "Establish static routes\n"
        "IPv6 destination prefix (e.g. 3ffe:506::/32)\n"
@@ -1305,12 +1355,13 @@ DEFUN (ipv6_route_ifname_flags_pref,
        "Silently discard pkts when matched\n"
        "Distance value for this prefix\n")
 {
-  return static_ipv6_func (vty, 1, argv[0], argv[1], argv[2], argv[3], argv[4]);
+  return static_ipv6_func (vty, 1, argv[1], argv[2], argv[3], argv[4], argv[5], 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (no_ipv6_route,
        no_ipv6_route_cmd,
-       "no ipv6 route X:X::X:X/M (X:X::X:X|INTERFACE)",
+       "no ipv6 (route|mroute) X:X::X:X/M (X:X::X:X|INTERFACE)",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -1318,12 +1369,13 @@ DEFUN (no_ipv6_route,
        "IPv6 gateway address\n"
        "IPv6 gateway interface name\n")
 {
-  return static_ipv6_func (vty, 0, argv[0], argv[1], NULL, NULL, NULL);
+  return static_ipv6_func (vty, 0, argv[1], argv[2], NULL, NULL, NULL, 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 ALIAS (no_ipv6_route,
        no_ipv6_route_flags_cmd,
-       "no ipv6 route X:X::X:X/M (X:X::X:X|INTERFACE) (reject|blackhole)",
+       "no ipv6 (route|mroute) X:X::X:X/M (X:X::X:X|INTERFACE) (reject|blackhole)",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -1335,7 +1387,7 @@ ALIAS (no_ipv6_route,
 
 DEFUN (no_ipv6_route_ifname,
        no_ipv6_route_ifname_cmd,
-       "no ipv6 route X:X::X:X/M X:X::X:X INTERFACE",
+       "no ipv6 (route|mroute) X:X::X:X/M X:X::X:X INTERFACE",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -1343,12 +1395,13 @@ DEFUN (no_ipv6_route_ifname,
        "IPv6 gateway address\n"
        "IPv6 gateway interface name\n")
 {
-  return static_ipv6_func (vty, 0, argv[0], argv[1], argv[2], NULL, NULL);
+  return static_ipv6_func (vty, 0, argv[1], argv[2], argv[3], NULL, NULL, 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 ALIAS (no_ipv6_route_ifname,
        no_ipv6_route_ifname_flags_cmd,
-       "no ipv6 route X:X::X:X/M X:X::X:X INTERFACE (reject|blackhole)",
+       "no ipv6 (route|mroute) X:X::X:X/M X:X::X:X INTERFACE (reject|blackhole)",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -1360,7 +1413,7 @@ ALIAS (no_ipv6_route_ifname,
 
 DEFUN (no_ipv6_route_pref,
        no_ipv6_route_pref_cmd,
-       "no ipv6 route X:X::X:X/M (X:X::X:X|INTERFACE) <1-255>",
+       "no ipv6 (route|mroute) X:X::X:X/M (X:X::X:X|INTERFACE) <1-255>",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -1369,12 +1422,13 @@ DEFUN (no_ipv6_route_pref,
        "IPv6 gateway interface name\n"
        "Distance value for this prefix\n")
 {
-  return static_ipv6_func (vty, 0, argv[0], argv[1], NULL, NULL, argv[2]);
+  return static_ipv6_func (vty, 0, argv[1], argv[2], NULL, NULL, argv[3], 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (no_ipv6_route_flags_pref,
        no_ipv6_route_flags_pref_cmd,
-       "no ipv6 route X:X::X:X/M (X:X::X:X|INTERFACE) (reject|blackhole) <1-255>",
+       "no ipv6 (route|mroute) X:X::X:X/M (X:X::X:X|INTERFACE) (reject|blackhole) <1-255>",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -1386,12 +1440,13 @@ DEFUN (no_ipv6_route_flags_pref,
        "Distance value for this prefix\n")
 {
   /* We do not care about argv[2] */
-  return static_ipv6_func (vty, 0, argv[0], argv[1], NULL, argv[2], argv[3]);
+  return static_ipv6_func (vty, 0, argv[1], argv[2], NULL, argv[3], argv[4], 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (no_ipv6_route_ifname_pref,
        no_ipv6_route_ifname_pref_cmd,
-       "no ipv6 route X:X::X:X/M X:X::X:X INTERFACE <1-255>",
+       "no ipv6 (route|mroute) X:X::X:X/M X:X::X:X INTERFACE <1-255>",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -1400,12 +1455,13 @@ DEFUN (no_ipv6_route_ifname_pref,
        "IPv6 gateway interface name\n"
        "Distance value for this prefix\n")
 {
-  return static_ipv6_func (vty, 0, argv[0], argv[1], argv[2], NULL, argv[3]);
+  return static_ipv6_func (vty, 0, argv[1], argv[2], argv[3], NULL, argv[4], 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 DEFUN (no_ipv6_route_ifname_flags_pref,
        no_ipv6_route_ifname_flags_pref_cmd,
-       "no ipv6 route X:X::X:X/M X:X::X:X INTERFACE (reject|blackhole) <1-255>",
+       "no ipv6 (route|mroute) X:X::X:X/M X:X::X:X INTERFACE (reject|blackhole) <1-255>",
        NO_STR
        IP_STR
        "Establish static routes\n"
@@ -1416,7 +1472,8 @@ DEFUN (no_ipv6_route_ifname_flags_pref,
        "Silently discard pkts when matched\n"
        "Distance value for this prefix\n")
 {
-  return static_ipv6_func (vty, 0, argv[0], argv[1], argv[2], argv[3], argv[4]);
+  return static_ipv6_func (vty, 0, argv[1], argv[2], argv[3], argv[4], argv[5], 
+	argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST);
 }
 
 /* New RIB.  Detailed information for IPv6 route. */
@@ -1440,9 +1497,9 @@ vty_show_ipv6_route_detail (struct vty *vty, struct route_node *rn)
       if (rib->refcnt)
 	vty_out (vty, ", refcnt %ld", rib->refcnt);
       if (CHECK_FLAG (rib->flags, ZEBRA_FLAG_BLACKHOLE))
-       vty_out (vty, ", blackhole");
+	vty_out (vty, ", blackhole");
       if (CHECK_FLAG (rib->flags, ZEBRA_FLAG_REJECT))
-       vty_out (vty, ", reject");
+	vty_out (vty, ", reject");
       vty_out (vty, "%s", VTY_NEWLINE);
 
 #define ONE_DAY_SECOND 60*60*24
@@ -1450,7 +1507,9 @@ vty_show_ipv6_route_detail (struct vty *vty, struct route_node *rn)
       if (rib->type == ZEBRA_ROUTE_RIPNG
 	  || rib->type == ZEBRA_ROUTE_OSPF6
 	  || rib->type == ZEBRA_ROUTE_ISIS
-	  || rib->type == ZEBRA_ROUTE_BGP)
+	  || rib->type == ZEBRA_ROUTE_BGP
+          || rib->type == ZEBRA_ROUTE_DEP
+	  || rib->type == ZEBRA_ROUTE_NATPT)
 	{
 	  time_t uptime;
 	  struct tm *tm;
@@ -1622,14 +1681,16 @@ vty_show_ipv6_route (struct vty *vty, struct route_node *rn,
 	}
 
       if (CHECK_FLAG (rib->flags, ZEBRA_FLAG_BLACKHOLE))
-       vty_out (vty, ", bh");
+	vty_out (vty, ", bh");
       if (CHECK_FLAG (rib->flags, ZEBRA_FLAG_REJECT))
-       vty_out (vty, ", rej");
-      
+	vty_out (vty, ", rej");
+
       if (rib->type == ZEBRA_ROUTE_RIPNG
 	  || rib->type == ZEBRA_ROUTE_OSPF6
 	  || rib->type == ZEBRA_ROUTE_ISIS
-	  || rib->type == ZEBRA_ROUTE_BGP)
+	  || rib->type == ZEBRA_ROUTE_BGP
+	  || rib->type == ZEBRA_ROUTE_DEP
+	  || rib->type == ZEBRA_ROUTE_NATPT)
 	{
 	  time_t uptime;
 	  struct tm *tm;
@@ -1656,21 +1717,23 @@ vty_show_ipv6_route (struct vty *vty, struct route_node *rn,
     }
 }
 
-#define SHOW_ROUTE_V6_HEADER "Codes: K - kernel route, C - connected, S - static, R - RIPng, O - OSPFv3,%s       I - ISIS, B - BGP, * - FIB route.%s%s"
+#define SHOW_ROUTE_V6_HEADER "Codes: K - kernel route, C - connected, S - static, R - RIPng, O - OSPFv3,%s       I - ISIS, B - BGP, N - NAT-PT, D - Delegated Prefix, > - selected route,  * - FIB route.%s%s"
+#define SHOW_MROUTE_V6_HEADER "Codes: K - kernel route, C - connected, S - static, R - RIPng, %s       B - BGP, > - selected route, * - FIB route.%s%s"
 
 DEFUN (show_ipv6_route,
        show_ipv6_route_cmd,
-       "show ipv6 route",
+       "show ipv6 (route|mroute)",
        SHOW_STR
-       IP_STR
-       "IPv6 routing table\n")
+       IPV6_STR
+       "IPv6 routing table\n"
+       "IPv6 multicast Sub-Address-Family routing table\n")
 {
   struct route_table *table;
   struct route_node *rn;
   struct rib *rib;
   int first = 1;
 
-  table = vrf_table (AFI_IP6, SAFI_UNICAST, 0);
+  table = vrf_table (AFI_IP6, argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST, 0);
   if (! table)
     return CMD_SUCCESS;
 
@@ -1680,7 +1743,8 @@ DEFUN (show_ipv6_route,
       {
 	if (first)
 	  {
-	    vty_out (vty, SHOW_ROUTE_V6_HEADER, VTY_NEWLINE, VTY_NEWLINE, VTY_NEWLINE);
+	    vty_out (vty, argv[0][0] == 'r' ? SHOW_ROUTE_V6_HEADER : SHOW_MROUTE_V6_HEADER, 
+		VTY_NEWLINE, VTY_NEWLINE, VTY_NEWLINE);
 	    first = 0;
 	  }
 	vty_show_ipv6_route (vty, rn, rib);
@@ -1690,10 +1754,11 @@ DEFUN (show_ipv6_route,
 
 DEFUN (show_ipv6_route_prefix_longer,
        show_ipv6_route_prefix_longer_cmd,
-       "show ipv6 route X:X::X:X/M longer-prefixes",
+       "show ipv6 (route|mroute) X:X::X:X/M longer-prefixes",
        SHOW_STR
-       IP_STR
+       IPV6_STR
        "IPv6 routing table\n"
+       "IPv6 multicast Sub-Address-Family routing table\n"
        "IPv6 prefix\n"
        "Show route matching the specified Network/Mask pair only\n")
 {
@@ -1704,7 +1769,7 @@ DEFUN (show_ipv6_route_prefix_longer,
   int ret;
   int first = 1;
 
-  table = vrf_table (AFI_IP6, SAFI_UNICAST, 0);
+  table = vrf_table (AFI_IP6, argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST, 0);
   if (! table)
     return CMD_SUCCESS;
 
@@ -1722,7 +1787,8 @@ DEFUN (show_ipv6_route_prefix_longer,
 	{
 	  if (first)
 	    {
-	      vty_out (vty, SHOW_ROUTE_V6_HEADER, VTY_NEWLINE, VTY_NEWLINE, VTY_NEWLINE);
+	      vty_out (vty, argv[0][0] == 'r' ? SHOW_ROUTE_V6_HEADER : SHOW_MROUTE_V6_HEADER, 
+		VTY_NEWLINE, VTY_NEWLINE, VTY_NEWLINE);
 	      first = 0;
 	    }
 	  vty_show_ipv6_route (vty, rn, rib);
@@ -1732,17 +1798,20 @@ DEFUN (show_ipv6_route_prefix_longer,
 
 DEFUN (show_ipv6_route_protocol,
        show_ipv6_route_protocol_cmd,
-       "show ipv6 route (bgp|connected|isis|kernel|ospf6|ripng|static)",
+       "show ipv6 (route|mroute) (bgp|connected|isis|kernel|ospf6|ripng|static|dep|natpt)",
        SHOW_STR
-       IP_STR
-       "IP routing table\n"
+       IPV6_STR
+       "IPv6 routing table\n"
+       "IPv6 multicast Sub-Address-Family routing table\n"
        "Border Gateway Protocol (BGP)\n"
        "Connected\n"
        "ISO IS-IS (ISIS)\n"
        "Kernel\n"
        "Open Shortest Path First (OSPFv3)\n"
        "Routing Information Protocol (RIPng)\n"
-       "Static routes\n")
+       "Static routes\n"
+       "DElegated Prefixes (DEP)\n"
+       "Network Address Translation Protocol Translation (NAT-PT)\n")
 {
   int type;
   struct route_table *table;
@@ -1750,27 +1819,31 @@ DEFUN (show_ipv6_route_protocol,
   struct rib *rib;
   int first = 1;
 
-  if (strncmp (argv[0], "b", 1) == 0)
+  if (strncmp (argv[1], "b", 1) == 0)
     type = ZEBRA_ROUTE_BGP;
-  else if (strncmp (argv[0], "c", 1) == 0)
+  else if (strncmp (argv[1], "c", 1) == 0)
     type = ZEBRA_ROUTE_CONNECT;
-  else if (strncmp (argv[0], "k", 1) ==0)
+  else if (strncmp (argv[1], "k", 1) ==0)
     type = ZEBRA_ROUTE_KERNEL;
-  else if (strncmp (argv[0], "o", 1) == 0)
+  else if (strncmp (argv[1], "o", 1) == 0)
     type = ZEBRA_ROUTE_OSPF6;
-  else if (strncmp (argv[0], "i", 1) == 0)
-    type = ZEBRA_ROUTE_ISIS;
-  else if (strncmp (argv[0], "r", 1) == 0)
+  else if (strncmp (argv[1], "r", 1) == 0)
     type = ZEBRA_ROUTE_RIPNG;
-  else if (strncmp (argv[0], "s", 1) == 0)
+  else if (strncmp (argv[1], "s", 1) == 0)
     type = ZEBRA_ROUTE_STATIC;
+  else if (strncmp (argv[1], "d", 1) == 0)
+    type = ZEBRA_ROUTE_DEP;
+  else if (strncmp (argv[1], "n", 1) == 0)
+    type = ZEBRA_ROUTE_NATPT;
+  else if (strncmp (argv[1], "i", 1) == 0)
+    type = ZEBRA_ROUTE_ISIS;
   else 
     {
       vty_out (vty, "Unknown route type%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
   
-  table = vrf_table (AFI_IP6, SAFI_UNICAST, 0);
+  table = vrf_table (AFI_IP6, argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST, 0);
   if (! table)
     return CMD_SUCCESS;
 
@@ -1781,7 +1854,8 @@ DEFUN (show_ipv6_route_protocol,
 	{
 	  if (first)
 	    {
-	      vty_out (vty, SHOW_ROUTE_V6_HEADER, VTY_NEWLINE, VTY_NEWLINE, VTY_NEWLINE);
+	      vty_out (vty, argv[0][0] == 'r' ? SHOW_ROUTE_V6_HEADER : SHOW_MROUTE_V6_HEADER, 
+		VTY_NEWLINE, VTY_NEWLINE, VTY_NEWLINE);
 	      first = 0;
 	    }
 	  vty_show_ipv6_route (vty, rn, rib);
@@ -1791,10 +1865,11 @@ DEFUN (show_ipv6_route_protocol,
 
 DEFUN (show_ipv6_route_addr,
        show_ipv6_route_addr_cmd,
-       "show ipv6 route X:X::X:X",
+       "show ipv6 (route|mroute) X:X::X:X",
        SHOW_STR
-       IP_STR
+       IPV6_STR
        "IPv6 routing table\n"
+       "IPv6 multicast Sub-Address-Family routing table\n"
        "IPv6 Address\n")
 {
   int ret;
@@ -1802,14 +1877,14 @@ DEFUN (show_ipv6_route_addr,
   struct route_table *table;
   struct route_node *rn;
 
-  ret = str2prefix_ipv6 (argv[0], &p);
+  ret = str2prefix_ipv6 (argv[1], &p);
   if (ret <= 0)
     {
       vty_out (vty, "Malformed IPv6 address%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  table = vrf_table (AFI_IP6, SAFI_UNICAST, 0);
+  table = vrf_table (AFI_IP6, argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST, 0);
   if (! table)
     return CMD_SUCCESS;
 
@@ -1829,10 +1904,11 @@ DEFUN (show_ipv6_route_addr,
 
 DEFUN (show_ipv6_route_prefix,
        show_ipv6_route_prefix_cmd,
-       "show ipv6 route X:X::X:X/M",
+       "show ipv6 (route|mroute) X:X::X:X/M",
        SHOW_STR
-       IP_STR
+       IPV6_STR
        "IPv6 routing table\n"
+       "IPv6 multicast Sub-Address-Family routing table\n"
        "IPv6 prefix\n")
 {
   int ret;
@@ -1840,14 +1916,14 @@ DEFUN (show_ipv6_route_prefix,
   struct route_table *table;
   struct route_node *rn;
 
-  ret = str2prefix_ipv6 (argv[0], &p);
+  ret = str2prefix_ipv6 (argv[1], &p);
   if (ret <= 0)
     {
       vty_out (vty, "Malformed IPv6 prefix%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  table = vrf_table (AFI_IP6, SAFI_UNICAST, 0);
+  table = vrf_table (AFI_IP6, argv[0][0] == 'r' ? SAFI_UNICAST : SAFI_MULTICAST, 0);
   if (! table)
     return CMD_SUCCESS;
 
@@ -1865,10 +1941,9 @@ DEFUN (show_ipv6_route_prefix,
   return CMD_SUCCESS;
 }
 
-
 /* Write IPv6 static route configuration. */
 int
-static_config_ipv6 (struct vty *vty)
+static_config_ipv6 (struct vty *vty, int vrf_id, safi_t safi)
 {
   struct route_node *rn;
   struct static_ipv6 *si;  
@@ -1879,14 +1954,15 @@ static_config_ipv6 (struct vty *vty)
   write = 0;
 
   /* Lookup table.  */
-  stable = vrf_static_table (AFI_IP6, SAFI_UNICAST, 0);
+  stable = vrf_static_table (AFI_IP6, safi, vrf_id);
   if (! stable)
     return -1;
 
   for (rn = route_top (stable); rn; rn = route_next (rn))
     for (si = rn->info; si; si = si->next)
       {
-	vty_out (vty, "ipv6 route %s/%d",
+	vty_out (vty, "ipv6 %sroute %s/%d",
+		 safi == SAFI_UNICAST ? "" : "m",
 		 inet_ntop (AF_INET6, &rn->p.u.prefix6, buf, BUFSIZ),
 		 rn->p.prefixlen);
 
@@ -1904,11 +1980,11 @@ static_config_ipv6 (struct vty *vty)
 	    break;
 	  }
 
-       if (CHECK_FLAG(si->flags, ZEBRA_FLAG_REJECT))
-               vty_out (vty, " %s", "reject");
-
-       if (CHECK_FLAG(si->flags, ZEBRA_FLAG_BLACKHOLE))
-               vty_out (vty, " %s", "blackhole");
+	if (CHECK_FLAG(si->flags, ZEBRA_FLAG_REJECT))
+		vty_out (vty, " %s", "reject");
+ 
+	if (CHECK_FLAG(si->flags, ZEBRA_FLAG_BLACKHOLE))
+		vty_out (vty, " %s", "blackhole");
 
 	if (si->distance != ZEBRA_STATIC_DISTANCE_DEFAULT)
 	  vty_out (vty, " %d", si->distance);
@@ -1926,16 +2002,18 @@ zebra_ip_config (struct vty *vty)
 {
   int write = 0;
 
-  write += static_config_ipv4 (vty);
+  write += static_config_ipv4 (vty, 0, SAFI_UNICAST);
+  write += static_config_ipv4 (vty, 0, SAFI_MULTICAST);
 #ifdef HAVE_IPV6
-  write += static_config_ipv6 (vty);
+  write += static_config_ipv6 (vty, 0, SAFI_UNICAST);
+  write += static_config_ipv6 (vty, 0, SAFI_MULTICAST);
 #endif /* HAVE_IPV6 */
 
   return write;
 }
 
 /* IP node for static routes. */
-struct cmd_node ip_node = { IP_NODE,  "",  1 };
+struct cmd_node ip_node  = { IP_NODE,  "",  1 };
 
 /* Route VTY.  */
 void
@@ -1988,6 +2066,7 @@ zebra_vty_route_init ()
 #ifdef HAVE_IPV6
   install_element (CONFIG_NODE, &ipv6_route_cmd);
   install_element (CONFIG_NODE, &ipv6_route_flags_cmd);
+  install_element (CONFIG_NODE, &ipv6_route_ifname_flags_cmd);
   install_element (CONFIG_NODE, &ipv6_route_ifname_cmd);
   install_element (CONFIG_NODE, &ipv6_route_ifname_flags_cmd);
   install_element (CONFIG_NODE, &no_ipv6_route_cmd);

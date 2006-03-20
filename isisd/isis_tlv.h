@@ -80,6 +80,7 @@
 #define LSP_ENTRIES               9
 #define AUTH_INFO                 10
 #define CHECKSUM                  12
+#define LSP_BUFFERSIZE		  14
 #define TE_IS_NEIGHBOURS          22
 #define IPV4_INT_REACHABILITY     128
 #define IPV4_EXT_REACHABILITY     130
@@ -99,6 +100,7 @@
 #define LSP_ENTRIES_LEN (10 + ISIS_SYS_ID_LEN)	/* FIXME: should be entry */
 #define IPV4_REACH_LEN 12
 #define IPV6_REACH_LEN 22
+#define LSP_BUFFERSIZE_LEN 2
 
 /* struct for neighbor */
 struct is_neigh
@@ -157,6 +159,7 @@ struct ipv4_reachability
   struct metric metrics;
   struct in_addr prefix;
   struct in_addr mask;
+  u_short *tag;              /* Route map set tag. */
 };
 
 /* te router id */
@@ -188,6 +191,7 @@ struct ipv6_reachability
   u_char control_info;
   u_char prefix_len;
   u_char prefix[16];
+  u_short *tag;              /* Route map set tag. */
 };
 #endif /* HAVE_IPV6 */
 
@@ -279,5 +283,7 @@ int tlv_add_ipv6_reachs (struct list *ipv6_reachs, struct stream *stream);
 #endif /* HAVE_IPV6 */
 
 int tlv_add_padding (struct stream *stream);
+
+int tlv_add_lsp_buffersize(int lsp_buffersize,struct stream *stream);
 
 #endif /* _ZEBRA_ISIS_TLV_H */

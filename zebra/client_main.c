@@ -1,5 +1,5 @@
 /*
- * $Id: client_main.c,v 1.1 2002/12/13 20:15:30 paul Exp $
+ * $Id: client_main.c,v 1.6 2005/08/30 12:22:25 vize Exp $
  *
  * GNU Zebra client test main routine.
  * Copyright (C) 1997 Kunihiro Ishiguro
@@ -72,10 +72,10 @@ zebra_test_ipv4 (int command, int type, char *prefix, char *gateway,
   switch (command)
     {
     case ZEBRA_IPV4_ROUTE_ADD:
-      zapi_ipv4_add (zclient, &p, &api);
+       zapi_ipv4_route (ZEBRA_IPV4_ROUTE_ADD, zclient, &p, &api);
       break;
     case ZEBRA_IPV4_ROUTE_DELETE:
-      zapi_ipv4_delete (zclient, &p, &api);
+       zapi_ipv4_route (ZEBRA_IPV4_ROUTE_DELETE, zclient, &p, &api);
       break;
     }
 }

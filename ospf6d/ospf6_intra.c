@@ -19,6 +19,10 @@
  * Boston, MA 02111-1307, USA.  
  */
 
+/*
+ * Copyright (C) 2005 6WIND  
+ */
+
 #include <zebra.h>
 
 #include "log.h"
@@ -131,9 +135,17 @@ ospf6_router_lsa_originate (struct thread *thread)
     ((caddr_t) lsa_header + sizeof (struct ospf6_lsa_header));
 
   OSPF6_OPT_SET (router_lsa->options, OSPF6_OPT_V6);
-  OSPF6_OPT_SET (router_lsa->options, OSPF6_OPT_E);
+  if (IS_AREA_STUB_OR_NSSA (oa))
+    OSPF6_OPT_CLEAR (router_lsa->options, OSPF6_OPT_E);
+  else	
+    OSPF6_OPT_SET (router_lsa->options, OSPF6_OPT_E);
+
   OSPF6_OPT_CLEAR (router_lsa->options, OSPF6_OPT_MC);
-  OSPF6_OPT_CLEAR (router_lsa->options, OSPF6_OPT_N);
+
+  if (IS_AREA_NSSA (oa))
+    OSPF6_OPT_SET (router_lsa->options, OSPF6_OPT_N);
+  else
+    OSPF6_OPT_CLEAR (router_lsa->options, OSPF6_OPT_N);
   OSPF6_OPT_SET (router_lsa->options, OSPF6_OPT_R);
   OSPF6_OPT_CLEAR (router_lsa->options, OSPF6_OPT_DC);
 
@@ -141,12 +153,23 @@ ospf6_router_lsa_originate (struct thread *thread)
     SET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_B);
   else
     UNSET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_B);
-  if (ospf6_asbr_is_asbr (ospf6))
+  if (!IS_AREA_STUB (oa) && (ospf6_asbr_is_asbr (ospf6) ||
+      ospf6_is_router_nssa_abr (ospf6)))
     SET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_E);
   else
     UNSET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_E);
-  UNSET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_V);
+  /* Set V bit if the area has full VLINKs */
+  if (oa->full_vls)
+    SET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_V);
+  else
+    UNSET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_V);
+  
   UNSET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_W);
+  if (ospf6_is_router_abr (ospf6) && IS_AREA_NSSA (oa) &&
+      (oa->NSSATranslatorState == NSSA_TRANSLATOR_STATE_ENABLED))
+    SET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_NT);
+  else
+    UNSET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_NT);
 
   /* describe links for each interfaces */
   lsdesc = (struct ospf6_router_lsdesc *)
@@ -258,7 +281,23 @@ ospf6_router_lsa_originate (struct thread *thread)
         }
 
       /* Virtual links */
-        /* xxx */
+      if ((oi->nw_type == OSPF6_NWTYPE_VIRTUALLINK) && (oi->state == OSPF6_INTERFACE_POINTTOPOINT))
+        {
+          for (ALL_LIST_ELEMENTS_RO (oi->neighbor_list, j, on))
+            {
+              if (on->state != OSPF6_NEIGHBOR_FULL)
+                continue;
+
+              lsdesc->type = OSPF6_ROUTER_LSDESC_VIRTUAL_LINK;
+              lsdesc->metric = htons (oi->cost);
+              lsdesc->interface_id = htonl (oi->interface->ifindex);
+              lsdesc->neighbor_interface_id = htonl (on->ifindex);
+              lsdesc->neighbor_router_id = on->router_id;
+
+              lsdesc++;
+            }
+        }
+
       /* Point-to-Multipoint interfaces */
         /* xxx */
     }
@@ -677,7 +716,7 @@ ospf6_intra_prefix_lsa_originate_stub (struct thread *thread)
   struct ospf6_lsa *old, *lsa;
 
   struct ospf6_intra_prefix_lsa *intra_prefix_lsa;
-  struct ospf6_interface *oi;
+  struct ospf6_interface *oi = NULL;
   struct ospf6_neighbor *on;
   struct ospf6_route *route;
   struct ospf6_prefix *op;
@@ -686,6 +725,8 @@ ospf6_intra_prefix_lsa_originate_stub (struct thread *thread)
   unsigned short prefix_num = 0;
   char buf[BUFSIZ];
   struct ospf6_route_table *route_advertise;
+  struct ospf6_vl_data *vl_data;
+  struct listnode *vl_node;
 
   oa = (struct ospf6_area *) THREAD_ARG (thread);
   oa->thread_intra_prefix_lsa = NULL;
@@ -759,7 +800,7 @@ ospf6_intra_prefix_lsa_originate_stub (struct thread *thread)
         }
     }
 
-  if (route_advertise->count == 0)
+  if ( (route_advertise->count == 0) && (ospf6_area_vlink_count (oa) == 0))
     {
       if (old)
         ospf6_lsa_purge (old);
@@ -784,6 +825,20 @@ ospf6_intra_prefix_lsa_originate_stub (struct thread *thread)
     }
 
   ospf6_route_table_delete (route_advertise);
+  
+  /* put prefixes for virtual link with LA-bit set */
+  for (ALL_LIST_ELEMENTS_RO (oa->vlink_list, vl_node, vl_data))
+    {
+      if (vl_data->vl_oi->global_addr == NULL)
+        continue;
+      op->prefix_length = 128;
+      SET_FLAG(op->prefix_options, OSPF6_PREFIX_OPTION_LA);
+      op->prefix_metric = htons (0);
+      memcpy (OSPF6_PREFIX_BODY (op), vl_data->vl_oi->global_addr, 
+              OSPF6_PREFIX_SPACE (op->prefix_length));
+      op = OSPF6_PREFIX_NEXT (op);
+      prefix_num++;
+    }
 
   if (prefix_num == 0)
     {
@@ -799,9 +854,7 @@ ospf6_intra_prefix_lsa_originate_stub (struct thread *thread)
   lsa_header->type = htons (OSPF6_LSTYPE_INTRA_PREFIX);
   lsa_header->id = htonl (0);
   lsa_header->adv_router = oa->ospf6->router_id;
-  lsa_header->seqnum =
-    ospf6_new_ls_seqnum (lsa_header->type, lsa_header->id,
-                         lsa_header->adv_router, oa->lsdb);
+  lsa_header->seqnum = htonl (INITIAL_SEQUENCE_NUMBER + oa->stub_lsa_count++);
   lsa_header->length = htons ((caddr_t) op - (caddr_t) lsa_header);
 
   /* LSA checksum */
@@ -1172,6 +1225,8 @@ ospf6_intra_prefix_lsa_remove (struct ospf6_lsa *lsa)
             }
           ospf6_route_remove (route, oa->route_table);
         }
+        if (route)
+          ospf6_route_unlock (route);
     }
 
   if (current != end && IS_OSPF6_DEBUG_EXAMIN (INTRA_PREFIX))
@@ -1181,7 +1236,7 @@ ospf6_intra_prefix_lsa_remove (struct ospf6_lsa *lsa)
 void
 ospf6_intra_route_calculation (struct ospf6_area *oa)
 {
-  struct ospf6_route *route;
+  struct ospf6_route *route, *stale;
   u_int16_t type;
   struct ospf6_lsa *lsa;
   void (*hook_add) (struct ospf6_route *) = NULL;
@@ -1197,7 +1252,14 @@ ospf6_intra_route_calculation (struct ospf6_area *oa)
 
   for (route = ospf6_route_head (oa->route_table); route;
        route = ospf6_route_next (route))
-    route->flag = OSPF6_ROUTE_REMOVE;
+    {
+      SET_FLAG (route->flag, OSPF6_ROUTE_REMOVE);
+      UNSET_FLAG (route->flag, OSPF6_ROUTE_ADD);
+    }
+
+  for (stale = ospf6_route_head (ospf6->stale_table); stale;
+       stale = ospf6_route_next (stale))
+    stale->flag = OSPF6_STALE_LOCK;
 
   type = htons (OSPF6_LSTYPE_INTRA_PREFIX);
   for (lsa = ospf6_lsdb_type_head (type, oa->lsdb); lsa;
@@ -1208,17 +1270,18 @@ ospf6_intra_route_calculation (struct ospf6_area *oa)
   oa->route_table->hook_remove = hook_remove;
 
   for (route = ospf6_route_head (oa->route_table); route;
-       route = ospf6_route_next (route))
+       route = ospf6_route_best_next (route))
     {
-      if (CHECK_FLAG (route->flag, OSPF6_ROUTE_REMOVE) &&
-          CHECK_FLAG (route->flag, OSPF6_ROUTE_ADD))
-        {
-          UNSET_FLAG (route->flag, OSPF6_ROUTE_REMOVE);
-          UNSET_FLAG (route->flag, OSPF6_ROUTE_ADD);
-        }
-
       if (CHECK_FLAG (route->flag, OSPF6_ROUTE_REMOVE))
-        ospf6_route_remove (route, oa->route_table);
+        {
+          if (CHECK_FLAG (route->flag, OSPF6_ROUTE_ADD))
+            {
+              UNSET_FLAG (route->flag, OSPF6_ROUTE_REMOVE);
+              UNSET_FLAG (route->flag, OSPF6_ROUTE_ADD);
+            }
+          else if (! IN6_IS_ADDR_LOOPBACK (&route->nexthop[0].address))
+            ospf6_route_remove (route, oa->route_table);
+        }
       else if (CHECK_FLAG (route->flag, OSPF6_ROUTE_ADD) ||
                CHECK_FLAG (route->flag, OSPF6_ROUTE_CHANGE))
         {
@@ -1226,7 +1289,9 @@ ospf6_intra_route_calculation (struct ospf6_area *oa)
             (*hook_add) (route);
         }
 
-      route->flag = 0;
+      for (stale = ospf6_route_head (ospf6->stale_table); stale;
+           stale = ospf6_route_next (stale))
+        stale->flag = OSPF6_STALE_UNLOCK;
     }
 
   if (IS_OSPF6_DEBUG_EXAMIN (INTRA_PREFIX))
@@ -1255,7 +1320,9 @@ ospf6_intra_brouter_calculation (struct ospf6_area *oa)
     {
       if (lsentry->path.area_id != oa->area_id)
         continue;
-      lsentry->flag = OSPF6_ROUTE_REMOVE;
+
+      SET_FLAG (lsentry->flag, OSPF6_ROUTE_REMOVE);
+      UNSET_FLAG (lsentry->flag, OSPF6_ROUTE_ADD);
     }
 
   for (lsentry = ospf6_route_head (oa->spf_table); lsentry;
@@ -1272,7 +1339,7 @@ ospf6_intra_brouter_calculation (struct ospf6_area *oa)
       copy = ospf6_route_copy (lsentry);
       copy->type = OSPF6_DEST_TYPE_ROUTER;
       copy->path.area_id = oa->area_id;
-      ospf6_route_add (copy, oa->ospf6->brouter_table);
+      copy = ospf6_route_add (copy, oa->ospf6->brouter_table);
 
       if (IS_OSPF6_DEBUG_ROUTE (INTRA))
         {
@@ -1286,7 +1353,7 @@ ospf6_intra_brouter_calculation (struct ospf6_area *oa)
   oa->ospf6->brouter_table->hook_remove = hook_remove;
 
   for (lsentry = ospf6_route_head (oa->ospf6->brouter_table); lsentry;
-       lsentry = ospf6_route_next (lsentry))
+       lsentry = ospf6_route_best_next (lsentry))
     {
       if (lsentry->path.area_id != oa->area_id)
         continue;
@@ -1294,15 +1361,21 @@ ospf6_intra_brouter_calculation (struct ospf6_area *oa)
       if (CHECK_FLAG (lsentry->flag, OSPF6_ROUTE_WAS_REMOVED))
         continue;
 
-      if (CHECK_FLAG (lsentry->flag, OSPF6_ROUTE_REMOVE) &&
-          CHECK_FLAG (lsentry->flag, OSPF6_ROUTE_ADD))
-        {
-          UNSET_FLAG (lsentry->flag, OSPF6_ROUTE_REMOVE);
-          UNSET_FLAG (lsentry->flag, OSPF6_ROUTE_ADD);
-        }
-
       if (CHECK_FLAG (lsentry->flag, OSPF6_ROUTE_REMOVE))
-        ospf6_route_remove (lsentry, oa->ospf6->brouter_table);
+        {
+          if (CHECK_FLAG (lsentry->flag, OSPF6_ROUTE_ADD))
+            {
+              UNSET_FLAG (lsentry->flag, OSPF6_ROUTE_REMOVE);
+              UNSET_FLAG (lsentry->flag, OSPF6_ROUTE_ADD);
+            }
+          else
+            {
+              ospf6_route_remove (lsentry, oa->ospf6->brouter_table);
+
+              /* Maintenance for virtual links */
+              ospf6_vl_down_check (oa, lsentry->path.origin.adv_router);
+            }
+        }
       else if (CHECK_FLAG (lsentry->flag, OSPF6_ROUTE_ADD) ||
                CHECK_FLAG (lsentry->flag, OSPF6_ROUTE_CHANGE))
         {
@@ -1315,8 +1388,6 @@ ospf6_intra_brouter_calculation (struct ospf6_area *oa)
           if (hook_add)
             (*hook_add) (lsentry);
         }
-
-      lsentry->flag = 0;
     }
 
   if (IS_OSPF6_DEBUG_ROUTE (INTRA))

@@ -1,5 +1,5 @@
 /*
- * $Id: str.h,v 1.2 2005/04/02 16:01:05 ajs Exp $
+ * $Id: str.h,v 1.5 2005/09/29 15:48:36 vize Exp $
  */
 
 #ifndef _ZEBRA_STR_H

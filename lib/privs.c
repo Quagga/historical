@@ -25,6 +25,7 @@
 #include "log.h"
 #include "privs.h"
 #include "memory.h"
+#include <grp.h>
 
 /* internal privileges state */
 static struct _zprivs_t

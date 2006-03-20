@@ -18,6 +18,10 @@ along with GNU Zebra; see the file COPYING.  If not, write to the Free
 Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 02111-1307, USA.  */
 
+/*
+ * Copyright (C) 2005 6WIND  
+ */
+
 #include <zebra.h>
 
 #include "linklist.h"
@@ -248,7 +252,8 @@ bgp_capability_orf (struct peer *peer, struct capability *cap,
 	  if (type == ORF_TYPE_PREFIX &&
 	      ((afi == AFI_IP && safi == SAFI_UNICAST)
 		|| (afi == AFI_IP && safi == SAFI_MULTICAST)
-		|| (afi == AFI_IP6 && safi == SAFI_UNICAST)))
+		|| (afi == AFI_IP6 && safi == SAFI_UNICAST)
+		|| (afi == AFI_IP6 && safi == SAFI_MULTICAST)))
 	    {
 	      sm_cap = PEER_CAP_ORF_PREFIX_SM_RCV;
 	      rm_cap = PEER_CAP_ORF_PREFIX_RM_RCV;
@@ -268,7 +273,8 @@ bgp_capability_orf (struct peer *peer, struct capability *cap,
 	  if (type == ORF_TYPE_PREFIX_OLD &&
 	      ((afi == AFI_IP && safi == SAFI_UNICAST)
 		|| (afi == AFI_IP && safi == SAFI_MULTICAST)
-		|| (afi == AFI_IP6 && safi == SAFI_UNICAST)))
+		|| (afi == AFI_IP6 && safi == SAFI_UNICAST)
+		|| (afi == AFI_IP6 && safi == SAFI_MULTICAST)))
 	    {
 	      sm_cap = PEER_CAP_ORF_PREFIX_SM_OLD_RCV;
 	      rm_cap = PEER_CAP_ORF_PREFIX_RM_OLD_RCV;
@@ -847,7 +853,22 @@ bgp_open_capability (struct stream *s, struct peer *peer)
       stream_putc (s, CAPABILITY_CODE_RESTART_LEN + 2);
       stream_putc (s, CAPABILITY_CODE_RESTART);
       stream_putc (s, CAPABILITY_CODE_RESTART_LEN);
-      stream_putw (s, peer->bgp->restart_time);
+      stream_putw (s, peer->bgp->restart_time | RESTART_R_BIT);
+#ifdef HAVE_IPV6
+  /* IPv6 unicast. */
+      if (peer->afc[AFI_IP6][SAFI_UNICAST])
+      {
+        stream_putw (s, AFI_IP6);
+        stream_putc (s, SAFI_UNICAST);
+        stream_putc (s, CAPABILITY_CODE_RESTART_FWS);
+      }
+#endif
+      else if (peer->afc[AFI_IP][SAFI_UNICAST])
+      {
+        stream_putw (s, AFI_IP);
+        stream_putc (s, SAFI_UNICAST);
+        stream_putc (s, CAPABILITY_CODE_RESTART_FWS);
+      }
      }
 
   /* Total Opt Parm Len. */

@@ -21,8 +21,6 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #ifndef _ZEBRA_VTY_H
 #define _ZEBRA_VTY_H
 
-#include "thread.h"
-
 #define VTY_BUFSIZ 512
 #define VTY_MAXHIST 20
 
@@ -121,6 +119,7 @@ struct vty
 
 /* Integrated configuration file. */
 #define INTEGRATE_DEFAULT_CONFIG "Quagga.conf"
+#define INTEGRATE_DEFAULT_MCONFIG "MQuagga.conf"
 
 /* Small macro to determine newline is newline only or linefeed needed. */
 #define VTY_NEWLINE  ((vty->type == VTY_TERM) ? "\r\n" : "\n")
@@ -177,6 +176,7 @@ struct vty
 /* Exported variables */
 extern char integrate_default[];
 
+#include "thread.h"
 /* Prototypes. */
 void vty_init (struct thread_master *);
 void vty_init_vtysh (void);
@@ -194,9 +194,10 @@ int vty_config_unlock (struct vty *);
 int vty_shell (struct vty *);
 int vty_shell_serv (struct vty *);
 void vty_hello (struct vty *);
+void vpn_id_set (int );
 
 /* Send a fixed-size message to all vty terminal monitors; this should be
    an async-signal-safe function. */
-extern void vty_log_fixed (const char *buf, size_t len);
+extern void vty_log_fixed (char *buf, size_t len);
 
 #endif /* _ZEBRA_VTY_H */

@@ -45,7 +45,7 @@ struct assegment
   u_char type;
   u_char length;
   as_t asval[1];
-};
+} __attribute__((packed));
 
 /* Hash for aspath.  This is the top level structure of AS path. */
 struct hash *ashash;
@@ -1129,12 +1129,13 @@ aspath_key_make (struct aspath *aspath)
   int length;
   unsigned short *pnt;
 
-  length = aspath->length / 2;
+  length = aspath->length / sizeof(unsigned short);
   pnt = (unsigned short *) aspath->data;
 
   while (length)
     {
-      key += *pnt++;
+      key += EXTRACT_16BITS(pnt);
+      pnt++;
       length--;
     }
 

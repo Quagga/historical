@@ -33,9 +33,10 @@
 #include "memory.h"
 #include "table.h"
 
+
 #include "zebra/rib.h"
 #include "zebra/zserv.h"
-
+
 /* Zebra client events. */
 enum event {ZCLIENT_SCHEDULE, ZCLIENT_READ, ZCLIENT_CONNECT};
 
@@ -46,7 +47,13 @@ extern struct thread_master *master;
 
 /* This file local debug flag. */
 int zclient_debug = 0;
-
+
+/* Set socket TCP port */
+static int port = ZEBRA_PORT;
+
+/* Set Socket unix path */
+static char zebra_serv_path[sizeof (ZEBRA_SERV_PATH) + 20] = ZEBRA_SERV_PATH;
+
 /* Allocate zclient structure. */
 struct zclient *
 zclient_new ()
@@ -62,7 +69,22 @@ zclient_new ()
   return zclient;
 }
 
-#if 0
+void vpn_id_zset (int vpn_numb)
+{
+  if (vpn_numb)
+  {
+    port += 10*vpn_numb;
+  }
+}
+
+void vpn_path_zset (char *vpn_path)
+{
+  char fnt[] =".";
+  strncat (zebra_serv_path, fnt, sizeof (zebra_serv_path));
+  strncat (zebra_serv_path, vpn_path, sizeof (zebra_serv_path));
+}
+
+/* #if 0  but this is used by DHCP */
 /* This function is never used.  And it must not be used, because
    many parts of the code do not check for I/O errors, so they could
    reference an invalid pointer if the structure was ever freed.
@@ -81,7 +103,7 @@ zclient_free (struct zclient *zclient)
 
   XFREE (MTYPE_ZCLIENT, zclient);
 }
-#endif
+/* #endif */
 
 /* Initialize zebra client.  Argument redist_default is unwanted
    redistribute route type. */
@@ -162,11 +184,13 @@ zclient_socket(void)
   sock = socket (AF_INET, SOCK_STREAM, 0);
   if (sock < 0)
     return -1;
-  
+
+
   /* Make server socket. */ 
   memset (&serv, 0, sizeof (struct sockaddr_in));
   serv.sin_family = AF_INET;
-  serv.sin_port = htons (ZEBRA_PORT);
+  serv.sin_port = htons (port);
+  port = ZEBRA_PORT;
 #ifdef HAVE_SIN_LEN
   serv.sin_len = sizeof (struct sockaddr_in);
 #endif /* HAVE_SIN_LEN */
@@ -315,7 +339,8 @@ zclient_start (struct zclient *zclient)
 #ifdef HAVE_TCP_ZEBRA
   zclient->sock = zclient_socket ();
 #else
-  zclient->sock = zclient_socket_un (ZEBRA_SERV_PATH);
+  zclient->sock = zclient_socket_un (zebra_serv_path);
+  strcpy (zebra_serv_path, ZEBRA_SERV_PATH);
 #endif /* HAVE_TCP_ZEBRA */
   if (zclient->sock < 0)
     {
@@ -470,6 +495,11 @@ zapi_ipv4_route (u_char cmd, struct zclient *zclient, struct prefix_ipv4 *p,
     stream_putc (s, api->distance);
   if (CHECK_FLAG (api->message, ZAPI_MESSAGE_METRIC))
     stream_putl (s, api->metric);
+  if (CHECK_FLAG (api->message, ZAPI_MESSAGE_MULTICAST))
+    {
+      stream_putw (s, api->vrf_id);
+      stream_putw (s, api->safi);
+    }
 
   /* Put length at the first point of the stream. */
   stream_putw_at (s, 0, stream_get_endp (s));
@@ -525,6 +555,11 @@ zapi_ipv6_route (u_char cmd, struct zclient *zclient, struct prefix_ipv6 *p,
     stream_putc (s, api->distance);
   if (CHECK_FLAG (api->message, ZAPI_MESSAGE_METRIC))
     stream_putl (s, api->metric);
+  if (CHECK_FLAG (api->message, ZAPI_MESSAGE_MULTICAST))
+    {
+      stream_putw (s, api->vrf_id);
+      stream_putw (s, api->safi);
+    }
 
   /* Put length at the first point of the stream. */
   stream_putw_at (s, 0, stream_get_endp (s));

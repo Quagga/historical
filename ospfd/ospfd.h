@@ -98,12 +98,15 @@
 #define OSPF_ROUTER_PRIORITY_DEFAULT        1
 #define OSPF_RETRANSMIT_INTERVAL_DEFAULT    5
 #define OSPF_TRANSMIT_DELAY_DEFAULT         1
-#define OSPF_DEFAULT_BANDWIDTH		 10000	/* Kbps */
+#define OSPF_DEFAULT_BANDWIDTH		 100000	/* Kbps */
 
 #define OSPF_DEFAULT_REF_BANDWIDTH	100000  /* Kbps */
 
 #define OSPF_POLL_INTERVAL_DEFAULT         60
 #define OSPF_NEIGHBOR_PRIORITY_DEFAULT      0
+
+#define OSPF_STATIC_MTU_DEFAULT             0
+#define OSPF_MTU_IGNORE_DEFAULT             1
 
 /* OSPF options. */
 #define OSPF_OPTION_T                    0x01  /* TOS. */
@@ -125,6 +128,9 @@
 
 #define OSPF_LS_REFRESH_SHIFT       (60 * 15)
 #define OSPF_LS_REFRESH_JITTER      60
+
+/* Threshold for maximum prefix */
+#define OSPF_MAXIMUM_PREFIX_THRESHOLD_DEFAULT 75
 
 /* OSPF master for system wide configuration and variables. */
 struct ospf_master
@@ -194,6 +200,7 @@ struct ospf
 #define DEFAULT_ORIGINATE_ALWAYS	2
   u_int32_t ref_bandwidth;		/* Reference Bandwidth (Kbps). */
   struct route_table *networks;         /* OSPF config networks. */
+  struct list *interfaces;              /* OSPF config interfaces. */
   struct list *vlinks;                  /* Configured Virtual-Links. */
   struct list *areas;                   /* OSPF areas. */
   struct route_table *nbr_nbma;
@@ -260,6 +267,12 @@ struct ospf
   } dlist[ZEBRA_ROUTE_MAX];
 #define DISTRIBUTE_NAME(O,T)    (O)->dlist[T].name
 #define DISTRIBUTE_LIST(O,T)    (O)->dlist[T].list
+
+  /* Redistribute max prefix */
+  u_int32_t maximum_prefix;
+  u_int8_t  max_prefix_threshold;
+  u_int8_t  max_prefix_warning_only;
+  u_int32_t redstr_count;
 
   /* Redistribute metric info. */
   struct 
@@ -342,6 +355,7 @@ struct ospf_area
 #define OSPF_SHORTCUT_DISABLE	2
   int shortcut_capability;              /* Other ABRs agree on S-bit */
   u_int32_t default_cost;               /* StubDefaultCost. */
+  u_int8_t default_metric_type;         /* Type 7 default metric type */
   int auth_type;                        /* Authentication type. */
 
   u_char NSSATranslatorRole;          /* NSSA configured role */
@@ -351,7 +365,9 @@ struct ospf_area
   u_char NSSATranslatorState;              /* NSSA operational role */
 #define OSPF_NSSA_TRANSLATE_DISABLED 0
 #define OSPF_NSSA_TRANSLATE_ENABLED  1
-  int NSSATranslatorStabilityInterval;
+  u_int16_t NSSATranslatorStabilityInterval;
+  struct thread *thread_nssa_trans_state_disable;
+  u_char nssa_no_propagate;
   
   u_char transit;			/* TransitCapability. */
 #define OSPF_TRANSIT_FALSE      0
@@ -427,6 +443,17 @@ struct ospf_area
 /* OSPF config network structure. */
 struct ospf_network
 {
+  /* Area ID. */
+  struct in_addr area_id;
+  int format;
+};
+
+/* OSPF config network interface structure. */
+struct ospf_network_if
+{
+  /* Interface name. */
+  char *ifname;
+
   /* Area ID. */
   struct in_addr area_id;
   int format;
@@ -532,13 +559,15 @@ void ospf_finish (struct ospf *);
 int ospf_router_id_update_timer (struct thread *);
 void ospf_router_id_update ();
 int ospf_network_match_iface (struct connected *, struct prefix *);
-int ospf_network_set (struct ospf *, struct prefix_ipv4 *, struct in_addr);
+int ospf_network_set (struct ospf *, struct prefix_ipv4 *, struct in_addr, int);
 int ospf_network_unset (struct ospf *, struct prefix_ipv4 *, struct in_addr);
-int ospf_area_stub_set (struct ospf *, struct in_addr);
+int ospf_interface_set (struct ospf *, const char *, struct in_addr, int);
+int ospf_interface_unset (struct ospf *, const char *, struct in_addr);
+int ospf_area_stub_set (struct ospf *, struct in_addr, int);
 int ospf_area_stub_unset (struct ospf *, struct in_addr);
-int ospf_area_no_summary_set (struct ospf *, struct in_addr);
+int ospf_area_no_summary_set (struct ospf *, struct in_addr, int);
 int ospf_area_no_summary_unset (struct ospf *, struct in_addr);
-int ospf_area_nssa_set (struct ospf *, struct in_addr);
+int ospf_area_nssa_set (struct ospf *, struct in_addr, int);
 int ospf_area_nssa_unset (struct ospf *, struct in_addr);
 int ospf_area_nssa_translator_role_set (struct ospf *, struct in_addr, int);
 int ospf_area_export_list_set (struct ospf *, struct ospf_area *, const char *);

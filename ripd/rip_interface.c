@@ -19,6 +19,11 @@
  * 02111-1307, USA.  
  */
 
+
+/*
+ * Copyright (C) 2006 6WIND  
+ */
+
 #include <zebra.h>
 
 #include "command.h"
@@ -84,9 +89,13 @@ ipv4_multicast_join (int sock,
 				   group.s_addr, 
 				   ifindex); 
 
-  if (ret < 0) 
-    zlog (NULL, LOG_INFO, "can't setsockopt IP_ADD_MEMBERSHIP %s",
-	  safe_strerror (errno));
+  if (ret < 0) {
+    if (errno == EADDRINUSE) /* group already joined. Not an error */
+      ret = 0;
+    else
+      zlog (NULL, LOG_INFO, "can't setsockopt IP_ADD_MEMBERSHIP %s",
+	 safe_strerror (errno));
+  }
 
   return ret;
 }
@@ -123,9 +132,8 @@ rip_interface_new ()
 
   /* Default authentication type is simple password for Cisco
      compatibility. */
-  /* ri->auth_type = RIP_NO_AUTH; */
-  ri->auth_type = RIP_AUTH_SIMPLE_PASSWORD;
-  ri->md5_auth_len = RIP_AUTH_MD5_COMPAT_SIZE;
+    ri->auth_type = RIP_NO_AUTH; 
+    ri->md5_auth_len = RIP_AUTH_MD5_COMPAT_SIZE; /* old-ripd/Cisco */
 
   /* Set default split-horizon behavior.  If the interface is Frame
      Relay or SMDS is enabled, the default value for split-horizon is
@@ -334,7 +342,7 @@ rip_multicast_join (struct interface *ifp, int sock)
       
 	  if (p->family != AF_INET)
 	    continue;
-      
+
 	  group.s_addr = htonl (INADDR_RIP_GROUP);
 	  if (ipv4_multicast_join (sock, group, p->prefix, ifp->ifindex) < 0)
 	    return -1;
@@ -367,14 +375,14 @@ rip_multicast_leave (struct interface *ifp, int sock)
 	  if (p->family != AF_INET)
 	    continue;
       
-	  group.s_addr = htonl (INADDR_RIP_GROUP);
+          group.s_addr = htonl (INADDR_RIP_GROUP);
           if (ipv4_multicast_leave (sock, group, p->prefix, ifp->ifindex) == 0)
 	    return;
         }
     }
 }
 
-/* Is there and address on interface that I could use ? */
+/* Is there an address on interface that I could use ? */
 int
 rip_if_ipv4_address_check (struct interface *ifp)
 {
@@ -479,7 +487,7 @@ if_valid_neighbor (struct in_addr addr)
   return 0;
 }
 
-/* Inteface link down message processing. */
+/* Interface link down message processing. */
 int
 rip_interface_down (int command, struct zclient *zclient, zebra_size_t length)
 {
@@ -504,7 +512,7 @@ rip_interface_down (int command, struct zclient *zclient, zebra_size_t length)
   return 0;
 }
 
-/* Inteface link up message processing */
+/* Interface link up message processing */
 int
 rip_interface_up (int command, struct zclient *zclient, zebra_size_t length)
 {
@@ -533,7 +541,7 @@ rip_interface_up (int command, struct zclient *zclient, zebra_size_t length)
   return 0;
 }
 
-/* Inteface addition message from zebra. */
+/* Interface addition message from zebra. */
 int
 rip_interface_add (int command, struct zclient *zclient, zebra_size_t length)
 {
@@ -629,8 +637,7 @@ rip_interface_reset ()
       ri->ri_send = RI_RIP_UNSPEC;
       ri->ri_receive = RI_RIP_UNSPEC;
 
-      /* ri->auth_type = RIP_NO_AUTH; */
-      ri->auth_type = RIP_AUTH_SIMPLE_PASSWORD;
+      ri->auth_type = RIP_NO_AUTH; 
 
       if (ri->auth_str)
 	{
@@ -670,12 +677,16 @@ int
 rip_if_down(struct interface *ifp)
 {
   struct route_node *rp;
-  struct rip_info *rinfo;
+  struct rip_info *rinfo = NULL;
   struct rip_interface *ri = NULL;
+  struct list *list = NULL;
+  struct listnode *listnode = NULL;
+
   if (rip)
     {
       for (rp = route_top (rip->table); rp; rp = route_next (rp))
-	if ((rinfo = rp->info) != NULL)
+	if ((list = rp->info) != NULL)
+          for (ALL_LIST_ELEMENTS_RO(list, listnode, rinfo))
 	  {
 	    /* Routes got through this interface. */
 	    if (rinfo->ifindex == ifp->ifindex &&
@@ -684,7 +695,7 @@ rip_if_down(struct interface *ifp)
 	      {
 		rip_zebra_ipv4_delete ((struct prefix_ipv4 *) &rp->p,
 				       &rinfo->nexthop,
-				       rinfo->ifindex);
+				       rinfo->metric, list);
 
 		rip_redistribute_delete (rinfo->type,rinfo->sub_type,
 					 (struct prefix_ipv4 *)&rp->p,
@@ -704,7 +715,10 @@ rip_if_down(struct interface *ifp)
     }
 	    
   ri = ifp->info;
-  
+
+  ri->enable_interface = 0;
+  ri->enable_network = 0;
+
   if (ri->running)
    {
      if (IS_RIP_DEBUG_EVENT)
@@ -731,7 +745,8 @@ rip_if_down_all ()
 }
 
 static void
-rip_apply_address_add (struct connected *ifc) {
+rip_apply_address_add (struct connected *ifc)
+{
   struct prefix_ipv4 address;
   struct prefix *p;
 
@@ -749,13 +764,9 @@ rip_apply_address_add (struct connected *ifc) {
   address.prefixlen = p->prefixlen;
   apply_mask_ipv4(&address);
 
-  /* Check if this interface is RIP enabled or not
-     or  Check if this address's prefix is RIP enabled */
-  if ((rip_enable_if_lookup(ifc->ifp->name) >= 0) ||
-      (rip_enable_network_lookup2(ifc) >= 0))
-    rip_redistribute_add(ZEBRA_ROUTE_CONNECT, RIP_ROUTE_INTERFACE,
-                         &address, ifc->ifp->ifindex, NULL);
-
+  /* Check if this interface is RIP enabled or not. Turn it on if necessary.
+   * redistribute new address if necessary */
+  rip_enable_apply (ifc->ifp);
 }
 
 int
@@ -779,7 +790,6 @@ rip_interface_address_add (int command, struct zclient *zclient,
 	zlog_debug ("connected address %s/%d is added", 
 		   inet_ntoa (p->u.prefix4), p->prefixlen);
 
-      rip_enable_apply(ifc->ifp);
       /* Check if this prefix needs to be redistributed */
       rip_apply_address_add(ifc);
 
@@ -823,7 +833,7 @@ rip_interface_address_delete (int command, struct zclient *zclient,
 
   ifc = zebra_interface_address_read (ZEBRA_INTERFACE_ADDRESS_DELETE,
                                       zclient->ibuf);
-  
+ 
   if (ifc)
     {
       p = ifc->address;
@@ -851,7 +861,7 @@ rip_interface_address_delete (int command, struct zclient *zclient,
 
 /* Check interface is enabled by network statement. */
 /* Check wether the interface has at least a connected prefix that
- * is within the ripng_enable_network table. */
+ * is within the rip_enable_network table. */
 int
 rip_enable_network_lookup_if (struct interface *ifp)
 {
@@ -884,7 +894,7 @@ rip_enable_network_lookup_if (struct interface *ifp)
   return -1;
 }
 
-/* Check wether connected is within the ripng_enable_network table. */
+/* Check wether connected is within the rip_enable_network table. */
 int
 rip_enable_network_lookup2 (struct connected *connected)
 {
@@ -1501,25 +1511,6 @@ DEFUN (ip_rip_receive_version_2,
 }
 
 DEFUN (no_ip_rip_receive_version,
-       no_ip_rip_receive_version_cmd,
-       "no ip rip receive version",
-       NO_STR
-       IP_STR
-       "Routing Information Protocol\n"
-       "Advertisement reception\n"
-       "Version control\n")
-{
-  struct interface *ifp;
-  struct rip_interface *ri;
-
-  ifp = (struct interface *)vty->index;
-  ri = ifp->info;
-
-  ri->ri_receive = RI_RIP_UNSPEC;
-  return CMD_SUCCESS;
-}
-
-ALIAS (no_ip_rip_receive_version,
        no_ip_rip_receive_version_num_cmd,
        "no ip rip receive version (1|2)",
        NO_STR
@@ -1529,6 +1520,29 @@ ALIAS (no_ip_rip_receive_version,
        "Version control\n"
        "Version 1\n"
        "Version 2\n")
+{
+  struct interface *ifp;
+  struct rip_interface *ri;
+
+  ifp = (struct interface *)vty->index;
+  ri = ifp->info;
+
+  if (argc == 1 && ((atoi(argv[0]) == 1 && ri->ri_receive == RI_RIP_VERSION_1) || (atoi(argv[0]) == 2 && ri->ri_receive == RI_RIP_VERSION_2)))
+    ri->ri_receive = RI_RIP_UNSPEC;
+  else if (argc == 0)
+    ri->ri_receive = RI_RIP_UNSPEC;
+
+  return CMD_SUCCESS;
+}
+
+ALIAS (no_ip_rip_receive_version,
+       no_ip_rip_receive_version_cmd,
+       "no ip rip receive version",
+       NO_STR
+       IP_STR
+       "Routing Information Protocol\n"
+       "Advertisement reception\n"
+       "Version control\n")
 
 DEFUN (ip_rip_send_version,
        ip_rip_send_version_cmd,
@@ -1603,25 +1617,6 @@ DEFUN (ip_rip_send_version_2,
 }
 
 DEFUN (no_ip_rip_send_version,
-       no_ip_rip_send_version_cmd,
-       "no ip rip send version",
-       NO_STR
-       IP_STR
-       "Routing Information Protocol\n"
-       "Advertisement transmission\n"
-       "Version control\n")
-{
-  struct interface *ifp;
-  struct rip_interface *ri;
-
-  ifp = (struct interface *)vty->index;
-  ri = ifp->info;
-
-  ri->ri_send = RI_RIP_UNSPEC;
-  return CMD_SUCCESS;
-}
-
-ALIAS (no_ip_rip_send_version,
        no_ip_rip_send_version_num_cmd,
        "no ip rip send version (1|2)",
        NO_STR
@@ -1631,6 +1626,29 @@ ALIAS (no_ip_rip_send_version,
        "Version control\n"
        "Version 1\n"
        "Version 2\n")
+{
+  struct interface *ifp;
+  struct rip_interface *ri;
+
+  ifp = (struct interface *)vty->index;
+  ri = ifp->info;
+
+  if (argc == 1 && ((atoi(argv[0]) == 1 && ri->ri_send == RI_RIP_VERSION_1) || (atoi(argv[0]) == 2 && ri->ri_send == RI_RIP_VERSION_2)))
+    ri->ri_send = RI_RIP_UNSPEC;
+  else if (argc == 0)
+    ri->ri_send = RI_RIP_UNSPEC;
+
+  return CMD_SUCCESS;
+}
+
+ALIAS (no_ip_rip_send_version,
+       no_ip_rip_send_version_cmd,
+       "no ip rip send version",
+       NO_STR
+       IP_STR
+       "Routing Information Protocol\n"
+       "Advertisement transmission\n"
+       "Version control\n")
 
 DEFUN (ip_rip_authentication_mode,
        ip_rip_authentication_mode_cmd,
@@ -1655,7 +1673,10 @@ DEFUN (ip_rip_authentication_mode,
     }
     
   if (strncmp ("md5", argv[0], strlen (argv[0])) == 0)
-    ri->auth_type = RIP_AUTH_MD5;
+    {
+      ri->auth_type = RIP_AUTH_MD5;
+      ri->md5_auth_len = RIP_AUTH_MD5_COMPAT_SIZE;
+    }
   else if (strncmp ("text", argv[0], strlen (argv[0])) == 0)
     ri->auth_type = RIP_AUTH_SIMPLE_PASSWORD;
   else
@@ -1671,7 +1692,7 @@ DEFUN (ip_rip_authentication_mode,
     {
       vty_out (vty, "auth length argument only valid for md5%s", VTY_NEWLINE);
       return CMD_WARNING;
-}
+    }
 
   if (strncmp ("r", argv[1], 1) == 0)
     ri->md5_auth_len = RIP_AUTH_MD5_SIZE;
@@ -1685,40 +1706,17 @@ DEFUN (ip_rip_authentication_mode,
 
 ALIAS (ip_rip_authentication_mode,
        ip_rip_authentication_mode_authlen_cmd,
-       "ip rip authentication mode (md5|text) auth-length (rfc|old-ripd)",
+       "ip rip authentication mode (md5|) auth-length (rfc|old-ripd)",
        IP_STR
        "Routing Information Protocol\n"
        "Authentication control\n"
        "Authentication mode\n"
        "Keyed message digest\n"
-       "Clear text authentication\n"
        "MD5 authentication data length\n"
        "RFC compatible\n"
        "Old ripd compatible\n")
 
 DEFUN (no_ip_rip_authentication_mode,
-       no_ip_rip_authentication_mode_cmd,
-       "no ip rip authentication mode",
-       NO_STR
-       IP_STR
-       "Routing Information Protocol\n"
-       "Authentication control\n"
-       "Authentication mode\n")
-{
-  struct interface *ifp;
-  struct rip_interface *ri;
-
-  ifp = (struct interface *)vty->index;
-  ri = ifp->info;
-
-  /* ri->auth_type = RIP_NO_AUTH; */
-  ri->auth_type = RIP_AUTH_SIMPLE_PASSWORD;
-  ri->md5_auth_len = RIP_AUTH_MD5_COMPAT_SIZE;
-
-  return CMD_SUCCESS;
-}
-
-ALIAS (no_ip_rip_authentication_mode,
        no_ip_rip_authentication_mode_type_cmd,
        "no ip rip authentication mode (md5|text)",
        NO_STR
@@ -1728,20 +1726,86 @@ ALIAS (no_ip_rip_authentication_mode,
        "Authentication mode\n"
        "Keyed message digest\n"
        "Clear text authentication\n")
+{
+  struct interface *ifp;
+  struct rip_interface *ri;
+
+  ifp = (struct interface *)vty->index;
+  ri = ifp->info;
+
+  switch (argc)
+  {
+    case 0:
+      ri->auth_type = RIP_NO_AUTH;
+      ri->md5_auth_len = RIP_AUTH_MD5_COMPAT_SIZE;
+      break;
+
+    case 2:
+      if (strncmp (argv[0], "md5", strlen(argv[0])) != 0)
+      {
+        vty_out (vty, "auth length argument only valid for md5%s", VTY_NEWLINE);
+        return CMD_WARNING;
+      }
+      if (ri->md5_auth_len == RIP_AUTH_MD5_SIZE)
+        ri->md5_auth_len = RIP_AUTH_MD5_COMPAT_SIZE;
+      else
+      {
+	vty_out (vty, "this length of md5 has not been configured%s", VTY_NEWLINE);
+        return CMD_WARNING;
+      }
+
+    case 1:
+      if (!strncmp (argv[0], "md5", strlen(argv[0])))
+      {
+	  if (ri->auth_type == RIP_AUTH_MD5)
+            ri->auth_type = RIP_AUTH_SIMPLE_PASSWORD;
+	  else
+	  {
+	    vty_out (vty, "md5 has not been configured%s", VTY_NEWLINE);
+            return CMD_WARNING;
+	  }
+      }
+
+      if (!strncmp (argv[0], "text", strlen(argv[0])))
+      {
+	  if (ri->auth_type == RIP_AUTH_SIMPLE_PASSWORD)
+            ri->auth_type = RIP_NO_AUTH;
+	  else
+	  {
+	    vty_out (vty, "simple-password has not been configured%s", VTY_NEWLINE);
+            return CMD_WARNING;
+	  }
+      }
+      break;
+
+    default:
+      break;
+  }
+
+  return CMD_SUCCESS;
+}
+
+/*if no argument is set*/
+ALIAS (no_ip_rip_authentication_mode,
+       no_ip_rip_authentication_mode_cmd,
+       "no ip rip authentication mode",
+       NO_STR
+       IP_STR
+       "Routing Information Protocol\n"
+       "Authentication control\n"
+       "ALL authentication mode\n")
 
 ALIAS (no_ip_rip_authentication_mode,
        no_ip_rip_authentication_mode_type_authlen_cmd,
-       "no ip rip authentication mode (md5|text) auth-length (rfc|old-ripd)",
+       "no ip rip authentication mode (md5|) auth-length (rfc|)",
        NO_STR
        IP_STR
        "Routing Information Protocol\n"
        "Authentication control\n"
        "Authentication mode\n"
        "Keyed message digest\n"
-       "Clear text authentication\n"
        "MD5 authentication data length\n"
-       "RFC compatible\n"
-       "Old ripd compatible\n")
+       "RFC compatible\n")
 
 DEFUN (ip_rip_authentication_string,
        ip_rip_authentication_string_cmd,
@@ -1881,10 +1945,11 @@ ALIAS (no_ip_rip_authentication_key_chain,
  */
 DEFUN (ip_rip_split_horizon,
        ip_rip_split_horizon_cmd,
-       "ip rip split-horizon",
+       "ip rip split-horizon simple",
        IP_STR
        "Routing Information Protocol\n"
-       "Perform split horizon\n")
+       "Perform split horizon\n"
+       "Simple mode without poisoned-reverse\n")
 {
   struct interface *ifp;
   struct rip_interface *ri;
@@ -1920,11 +1985,12 @@ DEFUN (ip_rip_split_horizon_poisoned_reverse,
  */
 DEFUN (no_ip_rip_split_horizon,
        no_ip_rip_split_horizon_cmd,
-       "no ip rip split-horizon",
+       "no ip rip split-horizon simple",
        NO_STR
        IP_STR
        "Routing Information Protocol\n"
-       "Perform split horizon\n")
+       "Perform split horizon\n"
+       "Simple mode without poisoned-reverse\n")
 {
   struct interface *ifp;
   struct rip_interface *ri;
@@ -1936,7 +2002,7 @@ DEFUN (no_ip_rip_split_horizon,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_ip_rip_split_horizon,
+DEFUN (no_ip_rip_split_horizon_poisoned_reverse,
        no_ip_rip_split_horizon_poisoned_reverse_cmd,
        "no ip rip split-horizon poisoned-reverse",
        NO_STR
@@ -1944,6 +2010,23 @@ ALIAS (no_ip_rip_split_horizon,
        "Routing Information Protocol\n"
        "Perform split horizon\n"
        "With poisoned-reverse\n")
+{
+  struct interface *ifp;
+  struct rip_interface *ri;
+
+  ifp = vty->index;
+  ri = ifp->info;
+
+  switch( ri->split_horizon )
+  {
+	case RIP_SPLIT_HORIZON_POISONED_REVERSE:
+		ri->split_horizon = RIP_SPLIT_HORIZON;
+	default:
+		break;
+  }
+
+  return CMD_SUCCESS;
+}
 
 DEFUN (rip_passive_interface,
        rip_passive_interface_cmd,
@@ -2006,8 +2089,7 @@ rip_interface_config_write (struct vty *vty)
           (ri->split_horizon == ri->split_horizon_default) &&
           (ri->ri_send == RI_RIP_UNSPEC)                   &&
           (ri->ri_receive == RI_RIP_UNSPEC)                &&
-          (ri->auth_type != RIP_AUTH_MD5)                  &&
-          (ri->md5_auth_len != RIP_AUTH_MD5_SIZE)          &&
+          (ri->auth_type == RIP_NO_AUTH)                   &&
           (!ri->auth_str)                                  &&
           (!ri->key_chain)                                 )
         continue;
@@ -2024,7 +2106,7 @@ rip_interface_config_write (struct vty *vty)
 	{
           switch (ri->split_horizon) {
           case RIP_SPLIT_HORIZON:
-            vty_out (vty, " ip rip split-horizon%s", VTY_NEWLINE);
+            vty_out (vty, " ip rip split-horizon simple%s", VTY_NEWLINE);
             break;
           case RIP_SPLIT_HORIZON_POISONED_REVERSE:
             vty_out (vty, " ip rip split-horizon poisoned-reverse%s",
@@ -2032,7 +2114,7 @@ rip_interface_config_write (struct vty *vty)
             break;
           case RIP_NO_SPLIT_HORIZON:
           default:
-            vty_out (vty, " no ip rip split-horizon%s", VTY_NEWLINE);
+            vty_out (vty, " no ip rip split-horizon simple%s", VTY_NEWLINE);
             break;
           }
 	}
@@ -2049,11 +2131,8 @@ rip_interface_config_write (struct vty *vty)
 		 VTY_NEWLINE);
 
       /* RIP authentication. */
-#if 0 
-      /* RIP_AUTH_SIMPLE_PASSWORD becomes default mode. */
       if (ri->auth_type == RIP_AUTH_SIMPLE_PASSWORD)
 	vty_out (vty, " ip rip authentication mode text%s", VTY_NEWLINE);
-#endif /* 0 */
 
       if (ri->auth_type == RIP_AUTH_MD5)
         {

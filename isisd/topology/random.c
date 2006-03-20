@@ -1,3 +1,7 @@
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
 /*********************************************************************/
 /*                                                                   */
 /* current processor time in seconds                                 */
@@ -47,11 +51,11 @@ unsigned long internal_seed;
 
 void init_rand ( init_seed )
 
-long init_seed;
+ long init_seed;
 
-{ internal_seed = ( init_seed > 0 )
-                 ? (unsigned long) init_seed
-                 : (unsigned long) timer(); 
+{ internal_seed = ( unsigned long)( init_seed > 0 )
+                 ?  init_seed
+                 :  timer(); 
                 
 
   /* only odd numbers are acceptable */
@@ -96,9 +100,10 @@ static long irand ()
 #define A1   37252
 #define A2   29589
 
+#if 0
 static long xrand()
-
-{ unsigned long is1, is2;
+{ 
+  unsigned long is1, is2;
 
   is1 = internal_seed / T15;
   is2 = internal_seed % T15;
@@ -106,6 +111,7 @@ static long xrand()
   internal_seed = ( (((is2 * A1) + (is1 * A2))% T16 )* T15 + (is2 * A2) ) & B;
   return (long) ( internal_seed ) ;
 }
+#endif
 
 
 /*********************************************************************/
@@ -113,7 +119,7 @@ static long xrand()
 
 double rand01()
 
-{ return  (double) irand() / BF ;
+{ return  (double) (irand() / BF) ;
 }
   
 /*********************************************************************/

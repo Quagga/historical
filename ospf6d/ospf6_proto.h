@@ -47,12 +47,11 @@
 
 #define ALLSPFROUTERS6 "ff02::5"
 #define ALLDROUTERS6   "ff02::6"
+#define IPV6_ADDR_ANY  "::"
 
-/* Configurable Constants */
+#define DEFAULT_NSSA_TRANSLATOR_STABILITY_INTERVAL 40
 
-#define DEFAULT_HELLO_INTERVAL       10
-#define DEFAULT_ROUTER_DEAD_INTERVAL 40
-
+#define OSPF6_ROUTER_BIT_NT    (1 << 4)
 #define OSPF6_ROUTER_BIT_W     (1 << 3)
 #define OSPF6_ROUTER_BIT_V     (1 << 2)
 #define OSPF6_ROUTER_BIT_E     (1 << 1)
@@ -77,6 +76,7 @@ struct ospf6_prefix
 {
   u_int8_t prefix_length;
   u_int8_t prefix_options;
+#ifndef __linux__
   union {
     u_int16_t _prefix_metric;
     u_int16_t _prefix_referenced_lstype;
@@ -85,6 +85,13 @@ struct ospf6_prefix
 #define prefix_refer_lstype  u._prefix_referenced_lstype
   /* followed by one address_prefix */
 };
+#else
+    u_int16_t u;
+#define prefix_metric u
+#define prefix_refer_lstype u
+  /* followed by one address_prefix */
+} __attribute__ ((packed));
+#endif
 
 #define OSPF6_PREFIX_OPTION_NU (1 << 0)  /* No Unicast */
 #define OSPF6_PREFIX_OPTION_LA (1 << 1)  /* Local Address */
@@ -104,6 +111,16 @@ struct ospf6_prefix
 /* struct ospf6_prefix *OSPF6_PREFIX_NEXT (struct ospf6_prefix *); */
 #define OSPF6_PREFIX_NEXT(x) \
    ((struct ospf6_prefix *)((caddr_t)(x) + OSPF6_PREFIX_SIZE (x)))
+
+#define ospf6_fwd_in6_addr(in6, op)                            \
+do {                                                           \
+  memset (in6, 0, sizeof (struct in6_addr));                   \
+  if (CHECK_FLAG (op->bits_metric, OSPF6_ASBR_BIT_F))          \
+    memcpy (in6, (caddr_t) op +                                \
+            sizeof (struct ospf6_as_external_lsa) +            \
+            OSPF6_PREFIX_SPACE (op->prefix.prefix_length),     \
+            sizeof (struct in6_addr));                         \
+} while (0)
 
 #define ospf6_prefix_in6_addr(in6, op)                         \
 do {                                                           \

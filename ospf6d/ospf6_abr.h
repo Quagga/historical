@@ -52,13 +52,29 @@ struct ospf6_inter_router_lsa
   { (E)->metric &= htonl (0x00000000); \
     (E)->metric |= htonl (0x00ffffff) & htonl (C); }
 
+#define NSSA_CHECK_TRANSLATORS    0
+#define NSSA_CANDIDATE_ELECTION	  1
+
+#define TYPE7_ORIGINATE	          0
+#define TYPE7_CLEAR               1
+
 int ospf6_is_router_abr (struct ospf6 *o);
+int ospf6_is_router_nssa_abr (struct ospf6 *o);
 
 void ospf6_abr_enable_area (struct ospf6_area *oa);
 void ospf6_abr_disable_area (struct ospf6_area *oa);
 
+int default_summary_prefix_cmp (const struct prefix *p1);
+
 void ospf6_abr_originate_summary_to_area (struct ospf6_route *route,
                                           struct ospf6_area *area);
+void ospf6_abr_originate_default_summary_to_area (struct ospf6_area *area);
+void ospf6_abr_default_type_7_org_or_clear (struct ospf6_area *area,
+                                            u_int8_t org_or_clear);
+void ospf6_abr_clear_default_summary_to_area (struct ospf6_area *area);
+void ospf6_abr_translate_type7_lsa_to_type5 (struct ospf6_lsa *lsa);
+void ospf6_abr_flush_translated_type7_by_lsa (struct ospf6_lsa *lsa);
+
 void ospf6_abr_originate_summary (struct ospf6_route *route);
 void ospf6_abr_examin_summary (struct ospf6_lsa *lsa, struct ospf6_area *oa);
 void ospf6_abr_examin_brouter (u_int32_t router_id);
@@ -68,6 +84,9 @@ void install_element_ospf6_debug_abr ();
 int ospf6_abr_config_write (struct vty *vty);
 
 void ospf6_abr_init ();
+void ospf6_abr_nssa_translator_state_update (struct ospf6_area *oa);
+void ospf6_abr_nssa_translator_state_disable_now (struct ospf6_area
+                                                  *oa);
 
 #endif /*OSPF6_ABR_H*/
 

@@ -27,6 +27,7 @@
 #include "plist.h"
 #include "sockunion.h"
 #include "buffer.h"
+#include "log.h"
 #include "stream.h"
 
 /* Each prefix-list's entry. */
@@ -330,7 +331,7 @@ prefix_list_delete (struct prefix_list *plist)
   prefix_list_free (plist);
 
   if (master->delete_hook)
-    (*master->delete_hook) ();
+    (*master->delete_hook) (NULL);
 }
 
 static struct prefix_list_entry *
@@ -918,6 +919,10 @@ vty_show_prefix_entry (struct vty *vty, afi_t afi, struct prefix_list *plist,
 {
   struct prefix_list_entry *pentry;
 
+  /* Print the name of the protocol */
+  if (zlog_default)
+      vty_out (vty, "%s: ", zlog_proto_names[zlog_default->protocol]);
+
   if (dtype == normal_display)
     {
       vty_out (vty, "ip%s prefix-list %s: %d entries%s",
@@ -1179,7 +1184,7 @@ DEFUN (ip_prefix_list_ge,
        "Specify packets to forward\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n")
+       "Minimum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_install (vty, AFI_IP, argv[0], NULL, argv[1], 
 				 argv[2], argv[3], NULL);
@@ -1195,9 +1200,9 @@ DEFUN (ip_prefix_list_ge_le,
        "Specify packets to forward\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n"
+       "Minimum prefix length (le >= ge > prefix-len)\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n")
+       "Maximum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_install (vty, AFI_IP, argv[0], NULL, argv[1], 
 				  argv[2], argv[3], argv[4]);
@@ -1213,7 +1218,7 @@ DEFUN (ip_prefix_list_le,
        "Specify packets to forward\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n")
+       "Maximum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_install (vty, AFI_IP, argv[0], NULL, argv[1],
 				  argv[2], NULL, argv[3]);
@@ -1229,9 +1234,9 @@ DEFUN (ip_prefix_list_le_ge,
        "Specify packets to forward\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n"
+       "Maximum prefix length (le >= ge > prefix-len)\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n")
+       "Minimum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_install (vty, AFI_IP, argv[0], NULL, argv[1],
 				  argv[2], argv[4], argv[3]);
@@ -1266,7 +1271,7 @@ DEFUN (ip_prefix_list_seq_ge,
        "Specify packets to forward\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n")
+       "Minimum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_install (vty, AFI_IP, argv[0], argv[1], argv[2],
 				  argv[3], argv[4], NULL);
@@ -1284,9 +1289,9 @@ DEFUN (ip_prefix_list_seq_ge_le,
        "Specify packets to forward\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n"
+       "Minimum prefix length (le >= ge > prefix-len)\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n")
+       "Maximum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_install (vty, AFI_IP, argv[0], argv[1], argv[2],
 				  argv[3], argv[4], argv[5]);
@@ -1304,7 +1309,7 @@ DEFUN (ip_prefix_list_seq_le,
        "Specify packets to forward\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n")
+       "Maximum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_install (vty, AFI_IP, argv[0], argv[1], argv[2],
 				  argv[3], NULL, argv[4]);
@@ -1322,9 +1327,9 @@ DEFUN (ip_prefix_list_seq_le_ge,
        "Specify packets to forward\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n"
+       "Maximum prefix length (le >= ge > prefix-len)\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n")
+       "Minimum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_install (vty, AFI_IP, argv[0], argv[1], argv[2],
 				  argv[3], argv[5], argv[4]);
@@ -1369,7 +1374,7 @@ DEFUN (no_ip_prefix_list_ge,
        "Specify packets to forward\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n")
+       "Minimum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_uninstall (vty, AFI_IP, argv[0], NULL, argv[1],
 				    argv[2], argv[3], NULL);
@@ -1386,9 +1391,9 @@ DEFUN (no_ip_prefix_list_ge_le,
        "Specify packets to forward\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n"
+       "Minimum prefix length (le >= ge > prefix-len)\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n")
+       "Maximum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_uninstall (vty, AFI_IP, argv[0], NULL, argv[1],
 				    argv[2], argv[3], argv[4]);
@@ -1405,7 +1410,7 @@ DEFUN (no_ip_prefix_list_le,
        "Specify packets to forward\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n")
+       "Maximum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_uninstall (vty, AFI_IP, argv[0], NULL, argv[1],
 				    argv[2], NULL, argv[3]);
@@ -1422,9 +1427,9 @@ DEFUN (no_ip_prefix_list_le_ge,
        "Specify packets to forward\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n"
+       "Maximum prefix length (le >= ge > prefix-len)\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n")
+       "Minimum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_uninstall (vty, AFI_IP, argv[0], NULL, argv[1],
 				    argv[2], argv[4], argv[3]);
@@ -1461,7 +1466,7 @@ DEFUN (no_ip_prefix_list_seq_ge,
        "Specify packets to forward\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n")
+       "Minimum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_uninstall (vty, AFI_IP, argv[0], argv[1], argv[2],
 				    argv[3], argv[4], NULL);
@@ -1480,9 +1485,9 @@ DEFUN (no_ip_prefix_list_seq_ge_le,
        "Specify packets to forward\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n"
+       "Minimum prefix length (le >= ge > prefix-len)\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n")
+       "Maximum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_uninstall (vty, AFI_IP, argv[0], argv[1], argv[2],
 				    argv[3], argv[4], argv[5]);
@@ -1501,7 +1506,7 @@ DEFUN (no_ip_prefix_list_seq_le,
        "Specify packets to forward\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n")
+       "Maximum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_uninstall (vty, AFI_IP, argv[0], argv[1], argv[2],
 				    argv[3], NULL, argv[4]);
@@ -1520,9 +1525,9 @@ DEFUN (no_ip_prefix_list_seq_le_ge,
        "Specify packets to forward\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n"
+       "Maximum prefix length (le >= ge > prefix-len)\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n")
+       "Minimum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_uninstall (vty, AFI_IP, argv[0], argv[1], argv[2],
 				    argv[3], argv[5], argv[4]);
@@ -1774,7 +1779,7 @@ DEFUN (ipv6_prefix_list_ge,
        "Specify packets to forward\n"
        "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n")
+       "Minimum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_install (vty, AFI_IP6, argv[0], NULL, argv[1], 
 				 argv[2], argv[3], NULL);
@@ -1790,9 +1795,9 @@ DEFUN (ipv6_prefix_list_ge_le,
        "Specify packets to forward\n"
        "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n"
+       "Minimum prefix length (le >= ge > prefix-len)\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n")
+       "Maximum prefix length (le >= ge > prefix-len)\n")
 
 {
   return vty_prefix_list_install (vty, AFI_IP6, argv[0], NULL, argv[1], 
@@ -1809,7 +1814,7 @@ DEFUN (ipv6_prefix_list_le,
        "Specify packets to forward\n"
        "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n")
+       "Maximum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_install (vty, AFI_IP6, argv[0], NULL, argv[1],
 				  argv[2], NULL, argv[3]);
@@ -1825,9 +1830,9 @@ DEFUN (ipv6_prefix_list_le_ge,
        "Specify packets to forward\n"
        "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n"
+       "Maximum prefix length (le >= ge > prefix-len)\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n")
+       "Minimum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_install (vty, AFI_IP6, argv[0], NULL, argv[1],
 				  argv[2], argv[4], argv[3]);
@@ -1862,7 +1867,7 @@ DEFUN (ipv6_prefix_list_seq_ge,
        "Specify packets to forward\n"
        "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n")
+       "Minimum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_install (vty, AFI_IP6, argv[0], argv[1], argv[2],
 				  argv[3], argv[4], NULL);
@@ -1880,9 +1885,9 @@ DEFUN (ipv6_prefix_list_seq_ge_le,
        "Specify packets to forward\n"
        "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n"
+       "Minimum prefix length (le >= ge > prefix-len)\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n")
+       "Maximum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_install (vty, AFI_IP6, argv[0], argv[1], argv[2],
 				  argv[3], argv[4], argv[5]);
@@ -1900,7 +1905,7 @@ DEFUN (ipv6_prefix_list_seq_le,
        "Specify packets to forward\n"
        "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n")
+       "Maximum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_install (vty, AFI_IP6, argv[0], argv[1], argv[2],
 				  argv[3], NULL, argv[4]);
@@ -1918,9 +1923,9 @@ DEFUN (ipv6_prefix_list_seq_le_ge,
        "Specify packets to forward\n"
        "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n"
+       "Maximum prefix length (le >= ge > prefix-len)\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n")
+       "Minimum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_install (vty, AFI_IP6, argv[0], argv[1], argv[2],
 				  argv[3], argv[5], argv[4]);
@@ -1965,7 +1970,7 @@ DEFUN (no_ipv6_prefix_list_ge,
        "Specify packets to forward\n"
        "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n")
+       "Minimum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_uninstall (vty, AFI_IP6, argv[0], NULL, argv[1],
 				    argv[2], argv[3], NULL);
@@ -1982,9 +1987,9 @@ DEFUN (no_ipv6_prefix_list_ge_le,
        "Specify packets to forward\n"
        "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n"
+       "Minimum prefix length (le >= ge > prefix-len)\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n")
+       "Maximum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_uninstall (vty, AFI_IP6, argv[0], NULL, argv[1],
 				    argv[2], argv[3], argv[4]);
@@ -2001,7 +2006,7 @@ DEFUN (no_ipv6_prefix_list_le,
        "Specify packets to forward\n"
        "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n")
+       "Maximum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_uninstall (vty, AFI_IP6, argv[0], NULL, argv[1],
 				    argv[2], NULL, argv[3]);
@@ -2018,9 +2023,9 @@ DEFUN (no_ipv6_prefix_list_le_ge,
        "Specify packets to forward\n"
        "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n"
+       "Maximum prefix length (le >= ge > prefix-len)\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n")
+       "Minimum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_uninstall (vty, AFI_IP6, argv[0], NULL, argv[1],
 				    argv[2], argv[4], argv[3]);
@@ -2057,7 +2062,7 @@ DEFUN (no_ipv6_prefix_list_seq_ge,
        "Specify packets to forward\n"
        "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n")
+       "Minimum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_uninstall (vty, AFI_IP6, argv[0], argv[1], argv[2],
 				    argv[3], argv[4], NULL);
@@ -2076,9 +2081,9 @@ DEFUN (no_ipv6_prefix_list_seq_ge_le,
        "Specify packets to forward\n"
        "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n"
+       "Minimum prefix length (le >= ge > prefix-len)\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n")
+       "Maximum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_uninstall (vty, AFI_IP6, argv[0], argv[1], argv[2],
 				    argv[3], argv[4], argv[5]);
@@ -2097,7 +2102,7 @@ DEFUN (no_ipv6_prefix_list_seq_le,
        "Specify packets to forward\n"
        "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n")
+       "Maximum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_uninstall (vty, AFI_IP6, argv[0], argv[1], argv[2],
 				    argv[3], NULL, argv[4]);
@@ -2116,9 +2121,9 @@ DEFUN (no_ipv6_prefix_list_seq_le_ge,
        "Specify packets to forward\n"
        "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
        "Maximum prefix length to be matched\n"
-       "Maximum prefix length\n"
+       "Maximum prefix length (le >= ge > prefix-len)\n"
        "Minimum prefix length to be matched\n"
-       "Minimum prefix length\n")
+       "Minimum prefix length (le >= ge > prefix-len)\n")
 {
   return vty_prefix_list_uninstall (vty, AFI_IP6, argv[0], argv[1], argv[2],
 				    argv[3], argv[5], argv[4]);

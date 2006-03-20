@@ -139,6 +139,67 @@ ospf_vertex_free (struct vertex *v)
   XFREE (MTYPE_OSPF_VERTEX, v);
 }
 
+/*
+ * Free the SPF table (it is composed of vertices referencing each other)
+ *
+ * Algorithm to avoid double frees:
+ * - create the list of nexthops (nhfree), without duplicates
+ * - create the list of vertices (vfree), without duplicates
+ *   (child vertices of a vertex are temporarily stored into vremain list)
+ * - then free all nexthops and vertices from nhfree and vfree lists
+ */
+void
+ospf_vertex_table_free(struct vertex *v)
+{
+  struct list * nhfree;  /* list of nexthops to free */
+  struct list * vfree;   /* list of vertices to free */
+  struct list * vremain; /* list of vertices remaining to examine */
+  struct listnode *vnode;
+
+  nhfree = list_new();
+  vfree = list_new();
+  vremain = list_new();
+
+  listnode_add (vremain, v);
+
+  while ((vnode = listhead(vremain)) != NULL)
+  {
+     struct listnode *node, *nnode;
+     struct vertex *cv;
+     struct nexthop *nh;
+
+     v = listgetdata(vnode);
+
+     /* put nexthops nh from v->nexthop list to nhfree list */
+     for (ALL_LIST_ELEMENTS (v->nexthop, node, nnode, nh))
+       {
+         list_delete_node(v->nexthop, node);
+         if (listnode_lookup(nhfree, nh) == NULL)
+           listnode_add(nhfree, nh);
+       }
+
+     /* put child vertices cv from v->child list to vremain list */
+     for (ALL_LIST_ELEMENTS (v->child, node, nnode, cv))
+       {
+         list_delete_node(v->child, node);
+         if (listnode_lookup(vremain, cv) == NULL &&
+             listnode_lookup(vfree, cv) == NULL)
+           listnode_add(vremain, cv);
+       }
+
+     /* now that vertex v references nothing, put it in vfree list */
+     list_delete_node(vremain, vnode);
+     listnode_add(vfree, v);
+  }
+
+  vfree->del  = (void (*)(void *))ospf_vertex_free;
+  nhfree->del = (void (*)(void *))vertex_nexthop_free;
+
+  list_delete(vremain);
+  list_delete(vfree);
+  list_delete(nhfree);
+}
+
 void
 ospf_vertex_dump(const char *msg, struct vertex *v,
 		 int print_nexthops, int print_children)
@@ -203,6 +264,16 @@ ospf_vertex_add_parent (struct vertex *v)
     }
 }
 
+void
+ospf_spf_free (struct ospf_area *area)
+{
+  if (area->spf)
+    {
+      ospf_vertex_table_free(area->spf);
+      area->spf = NULL;
+    }
+}
+
 void
 ospf_spf_init (struct ospf_area *area)
 {
@@ -331,7 +402,7 @@ ospf_nexthop_merge (struct list *a, struct list *b)
 #define ROUTER_LSA_TOS_SIZE 4
 
 /* Find the next link after prev_link from v to w.  If prev_link is
- * NULL, return the first link from v to w.  Ignore stub and virtual links;
+ * NULL, return the first link from v to w.  Ignore stub links;
  * these link types will never be returned.
  */
 struct router_lsa_link *
@@ -362,12 +433,6 @@ ospf_get_next_link (struct vertex *v, struct vertex *w,
       if (l->m[0].type == LSA_LINK_TYPE_STUB)
         continue;
 
-      /* Defer NH calculation via VLs until summaries from
-         transit areas area confidered             */
-
-      if (l->m[0].type == LSA_LINK_TYPE_VIRTUALLINK)
-        continue;
-
       if (IPV4_ADDR_SAME (&l->link_id, &w->id))
         return l;
     }
@@ -377,7 +442,7 @@ ospf_get_next_link (struct vertex *v, struct vertex *w,
 
 /* 
  * Consider supplied next-hop for inclusion to the supplied list of
- * equal-cost next-hops, adjust list as neccessary.  
+ * equal-cost next-hops, adjust list as necessary.  
  *
  * (Discussed on GNU Zebra list 27 May 2003, [zebra 19184])
  *
@@ -543,13 +608,37 @@ ospf_nexthop_calculation (struct ospf_area *area,
                       nh->oi = oi;
                       nh->router = l2->link_data;
                       ospf_spf_consider_nexthop (w->nexthop, nh);
+                    } else {
+                      /* check if this link is an unnumbered interface */
+                      oi = ospf_get_unnumbered_if (area->ospf,
+                                                   ntohl(l->link_data.s_addr));
+                      if (oi) {
+		        /* found all necessary info to build nexthop */
+                        nh = vertex_nexthop_new (v);
+                        nh->oi = oi;
+                        ospf_spf_consider_nexthop (w->nexthop, nh);
+                      }
+		      else
+		        {
+		          zlog_info("ospf_nexthop_calculation(): "
+				    "could not determine nexthop for link");
+		        }
                     }
-		  else
-		    {
-		      zlog_info("ospf_nexthop_calculation(): "
-				"could not determine nexthop for link");
-		    }
                 } /* end point-to-point link from V to W */
+             else if (l->m[0].type == LSA_LINK_TYPE_VIRTUALLINK)
+                {
+                  struct listnode *cnode;
+                  struct vertex *cv = NULL;
+
+                  for (ALL_LIST_ELEMENTS_RO (v->child, cnode, cv))
+                    {
+                      if (IPV4_ADDR_SAME (&cv->id, &w->id))
+                        break;
+                    }
+
+                  if (! cv)
+                    listnode_add (v->child, w);
+                }
             } /* end iterate over links in W */
         } /* end W is a Router vertex */
       else
@@ -610,8 +699,10 @@ ospf_nexthop_calculation (struct ospf_area *area,
    */
   for (ALL_LIST_ELEMENTS (v->nexthop, node, nnode, nh))
     {
-      nh->parent = v;
-      ospf_nexthop_add_unique (nh, w->nexthop);
+      struct vertex_nexthop *new;
+      new = vertex_nexthop_dup(nh);
+      new->parent = v;
+      ospf_nexthop_add_unique (new, w->nexthop);
     }
 }
 
@@ -1024,6 +1115,7 @@ ospf_spf_calculate (struct ospf_area *area, struct route_table *new_table,
 
   /* Initialize the shortest-path tree to only the root (which is the
      router doing the calculation). */
+  ospf_spf_free (area);
   ospf_spf_init (area);
   v = area->spf;
   /* Set LSA position to LSA_SPF_IN_SPFTREE. This vertex is the root of the

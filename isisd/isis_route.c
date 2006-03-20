@@ -22,6 +22,10 @@
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <zebra.h>
@@ -115,7 +119,6 @@ nexthoplookup (struct list *nexthops, struct in_addr *ip,
   return 0;
 }
 
-#if 0 /* Old or new code? */
 static void
 nexthop_print (struct isis_nexthop *nh)
 {
@@ -123,18 +126,20 @@ nexthop_print (struct isis_nexthop *nh)
 
   inet_ntop (AF_INET, &nh->ip, (char *) buf, BUFSIZ);
 
-  zlog_debug ("      %s %u", buf, nh->ifindex);
+  zlog_debug ("\nwith adjuncencies:  %s %u", buf, nh->ifindex);
 }
 
+#if 0
 static void
 nexthops_print (struct list *nhs)
 {
   struct listnode *node;
+  struct isis_nexthop *nh;
 
   for (ALL_LIST_ELEMENTS_RO (nhs, node, nh))
     nexthop_print (nh);
 }
-#endif /* 0 */
+#endif
 
 #ifdef HAVE_IPV6
 static struct isis_nexthop6 *
@@ -211,6 +216,7 @@ nexthop6lookup (struct list *nexthops6, struct in6_addr *ip6,
 }
 
 #ifdef EXTREME_DEBUG
+#if 0
 static void
 nexthop6_print (struct isis_nexthop6 *nh6)
 {
@@ -220,15 +226,19 @@ nexthop6_print (struct isis_nexthop6 *nh6)
 
   zlog_debug ("      %s %u", buf, nh6->ifindex);
 }
+#endif
 
+#if 0
 static void
 nexthops6_print (struct list *nhs6)
 {
   struct listnode *node;
+  struct isis_nexthop6 *nh6;
 
   for (ALL_LIST_ELEMENTS_RO (nhs6, node, nh6))
     nexthop6_print (nh6);
 }
+#endif
 #endif /* EXTREME_DEBUG */
 #endif /* HAVE_IPV6 */
 
@@ -242,6 +252,7 @@ adjinfo2nexthop (struct list *nexthops, struct isis_adjacency *adj)
   if (adj->ipv4_addrs == NULL)
     return;
 
+
   for (ALL_LIST_ELEMENTS (adj->ipv4_addrs, node, nnode, ipv4_addr))
     {
       if (!nexthoplookup (nexthops, ipv4_addr,
@@ -249,6 +260,7 @@ adjinfo2nexthop (struct list *nexthops, struct isis_adjacency *adj)
 	{
 	  nh = isis_nexthop_create (ipv4_addr,
 				    adj->circuit->interface->ifindex);
+          nexthop_print( nh );
 	  listnode_add (nexthops, nh);
 	}
     }
@@ -280,7 +292,7 @@ adjinfo2nexthop6 (struct list *nexthops6, struct isis_adjacency *adj)
 
 static struct isis_route_info *
 isis_route_info_new (uint32_t cost, uint32_t depth, u_char family,
-		     struct list *adjacencies)
+		     struct list *adjacencies,int level)
 {
   struct isis_route_info *rinfo;
   struct isis_adjacency *adj;
@@ -312,6 +324,7 @@ isis_route_info_new (uint32_t cost, uint32_t depth, u_char family,
 
   rinfo->cost = cost;
   rinfo->depth = depth;
+  rinfo->route_type=level;
 
   return rinfo;
 }
@@ -360,6 +373,7 @@ isis_route_info_same (struct isis_route_info *new,
   if (!isis_route_info_same_attrib (new, old))
     return 0;
 
+
   if (family == AF_INET)
     {
       for (ALL_LIST_ELEMENTS (new->nexthops, node, nnode, nexthop))
@@ -387,14 +401,19 @@ isis_route_info_same (struct isis_route_info *new,
     }
 #endif /* HAVE_IPV6 */
 
+  if( new->route_type != old->route_type )
+    return 0;
+
   return 1;
 }
 
+#if 0
 static void
 isis_nexthops_merge (struct list *new, struct list *old)
 {
   struct listnode *node, *nnode;
   struct isis_nexthop *nexthop;
+  
 
   for (ALL_LIST_ELEMENTS (new, node, nnode, nexthop))
     {
@@ -404,8 +423,10 @@ isis_nexthops_merge (struct list *new, struct list *old)
       nexthop->lock++;
     }
 }
+#endif
 
 #ifdef HAVE_IPV6
+#if 0
 static void
 isis_nexthops6_merge (struct list *new, struct list *old)
 {
@@ -420,8 +441,10 @@ isis_nexthops6_merge (struct list *new, struct list *old)
       nexthop6->lock++;
     }
 }
+#endif
 #endif /* HAVE_IPV6 */
 
+#if 0
 static void
 isis_route_info_merge (struct isis_route_info *new,
 		       struct isis_route_info *old, u_char family)
@@ -435,7 +458,9 @@ isis_route_info_merge (struct isis_route_info *new,
 
   return;
 }
+#endif
 
+#if 0
 static int
 isis_route_info_prefer_new (struct isis_route_info *new,
 			    struct isis_route_info *old)
@@ -448,10 +473,11 @@ isis_route_info_prefer_new (struct isis_route_info *new,
 
   return 0;
 }
+#endif
 
 struct isis_route_info *
 isis_route_create (struct prefix *prefix, u_int32_t cost, u_int32_t depth,
-		   struct list *adjacencies, struct isis_area *area)
+		   struct list *adjacencies, struct isis_area *area,int level)
 {
   struct route_node *route_node;
   struct isis_route_info *rinfo_new, *rinfo_old, *route_info = NULL;
@@ -462,7 +488,7 @@ isis_route_create (struct prefix *prefix, u_int32_t cost, u_int32_t depth,
   /* for debugs */
   prefix2str (prefix, (char *) buff, BUFSIZ);
 
-  rinfo_new = isis_route_info_new (cost, depth, family, adjacencies);
+  rinfo_new = isis_route_info_new (cost, depth, family, adjacencies,level);
   if (!rinfo_new)
     {
       zlog_err ("ISIS-Rte (%s): isis_route_create: out of memory!",
@@ -489,54 +515,39 @@ isis_route_create (struct prefix *prefix, u_int32_t cost, u_int32_t depth,
     }
 
   if (isis->debugs & DEBUG_RTE_EVENTS)
-    zlog_debug ("ISIS-Rte (%s) route already exists: %s", area->area_tag,
+    zlog_debug ("ISIS-Rte (%s) route already exists check for type attribute match : %s", area->area_tag,
 	       buff);
-
+   
   if (isis_route_info_same (rinfo_new, rinfo_old, family))
     {
       if (isis->debugs & DEBUG_RTE_EVENTS)
 	zlog_debug ("ISIS-Rte (%s) route unchanged: %s", area->area_tag, buff);
-      isis_route_info_delete (rinfo_new);
-      route_info = rinfo_old;
-    }
-  else if (isis_route_info_same_attrib (rinfo_new, rinfo_old))
-    {
-      /* merge the nexthop lists */
-      if (isis->debugs & DEBUG_RTE_EVENTS)
-	zlog_debug ("ISIS-Rte (%s) route changed (same attribs): %s",
-		   area->area_tag, buff);
-#ifdef EXTREME_DEBUG
-      zlog_debug ("Old nexthops");
-      nexthops6_print (rinfo_old->nexthops6);
-      zlog_debug ("New nexthops");
-      nexthops6_print (rinfo_new->nexthops6);
-#endif /* EXTREME_DEBUG */
-      isis_route_info_merge (rinfo_new, rinfo_old, family);
-      isis_route_info_delete (rinfo_new);
-      route_info = rinfo_old;
+        isis_route_info_delete (rinfo_new);
+        route_info = rinfo_old;
     }
   else
     {
-      if (isis_route_info_prefer_new (rinfo_new, rinfo_old))
-	{
-	  if (isis->debugs & DEBUG_RTE_EVENTS)
-	    zlog_debug ("ISIS-Rte (%s) route changed: %s", area->area_tag,
-			buff);
-	  isis_route_info_delete (rinfo_old);
-	  route_info = rinfo_new;
-	}
-      else
-	{
-	  if (isis->debugs & DEBUG_RTE_EVENTS)
-	    zlog_debug ("ISIS-Rte (%s) route rejected: %s", area->area_tag,
-			buff);
-	  isis_route_info_delete (rinfo_new);
-	  route_info = rinfo_old;
-	}
-    }
+         /* just replace the old route with new route by checking the route_type.
+	    Here route validation for ECMP is not needed because of SPF output is providing 
+            best path route */
+            
+        if( !((rinfo_old->route_type == IS_LEVEL_1) && (rinfo_new->route_type == IS_LEVEL_2)) )
+          {
+              isis_route_info_delete (rinfo_old);
+              route_info = rinfo_new;
+              zlog_debug ("ISIS-Rte (%s) route changed: %s", area->area_tag, buff);
+           }
+         else
+           {
+                isis_route_info_delete (rinfo_new);
+                route_info = rinfo_old;
+                zlog_debug ("ISIS-Rte (%s) route unchanged: %s", area->area_tag, buff);
+           }
+                 
+     }
 
-  SET_FLAG (route_info->flag, ISIS_ROUTE_FLAG_ACTIVE);
-  route_node->info = route_info;
+    SET_FLAG (route_info->flag, ISIS_ROUTE_FLAG_ACTIVE);
+    route_node->info = route_info;
 
   return route_info;
 }

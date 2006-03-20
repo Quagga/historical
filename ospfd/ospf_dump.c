@@ -28,6 +28,7 @@
 #include "command.h"
 #include "stream.h"
 #include "log.h"
+#include "memory.h"
 #include "sockopt.h"
 
 #include "ospfd/ospfd.h"
@@ -114,6 +115,7 @@ struct message ospf_redistributed_proto[] =
   { ZEBRA_ROUTE_OSPF,     "OSPF" },
   { ZEBRA_ROUTE_OSPF6,    "OSPFv3" },
   { ZEBRA_ROUTE_BGP,      "BGP" },
+  { ZEBRA_ROUTE_DEP,      "DEP" },
   { ZEBRA_ROUTE_MAX,	  "Default" },
 };
 int ospf_redistributed_proto_max = ZEBRA_ROUTE_MAX + 1;
@@ -159,9 +161,12 @@ ospf_area_name_string (struct ospf_area *area)
     return "-";
 
   area_id = ntohl (area->area_id.s_addr);
-  snprintf (buf, OSPF_AREA_STRING_MAXLEN, "%d.%d.%d.%d",
-            (area_id >> 24) & 0xff, (area_id >> 16) & 0xff,
-            (area_id >> 8) & 0xff, area_id & 0xff);
+  if (area->format == OSPF_AREA_ID_FORMAT_DECIMAL)
+    snprintf (buf, OSPF_AREA_STRING_MAXLEN, "%u", area_id);
+  else
+    snprintf (buf, OSPF_AREA_STRING_MAXLEN, "%d.%d.%d.%d",
+              (area_id >> 24) & 0xff, (area_id >> 16) & 0xff,
+              (area_id >> 8) & 0xff, area_id & 0xff);
   return buf;
 }
 
@@ -1372,6 +1377,29 @@ DEFUN (no_debug_ospf_nssa,
   return CMD_SUCCESS;
 }
 
+DEFUN (debug_ospf_memory,
+       debug_ospf_memory_cmd,
+       "debug ospf memory",
+       DEBUG_STR
+       OSPF_STR
+       "OSPF memory usages\n")
+{
+  memory_debug(1);
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_debug_ospf_memory,
+       no_debug_ospf_memory_cmd,
+       "no debug ospf memory",
+       NO_STR
+       DEBUG_STR
+       OSPF_STR
+       "OSPF memory usages\n")
+{
+  memory_debug(0);
+  return CMD_SUCCESS;
+}
+
 
 DEFUN (show_debugging_ospf,
        show_debugging_ospf_cmd,
@@ -1596,7 +1624,22 @@ config_write_debug (struct vty *vty)
       write = 1;
     }
 
+  /* debug ospf memory */
+  if (is_memory_debug())
+    vty_out (vty, "debug ospf memory%s", VTY_NEWLINE);
+
   return write;
+}
+
+DEFUN(show_cpu_ospf,
+      show_cpu_ospf_cmd,
+      "show cpu ospf (|[RWTEX])",
+      SHOW_STR
+      "Thread CPU usage\n"
+      OSPF_STR
+      "Display filter (Read, Write, Timer, Event, eXecute)\n")
+{
+  return thread_dumps(vty, argc, argv);
 }
 
 /* Initialize debug commands. */
@@ -1618,6 +1661,7 @@ debug_init ()
   install_element (ENABLE_NODE, &debug_ospf_zebra_sub_cmd);
   install_element (ENABLE_NODE, &debug_ospf_zebra_cmd);
   install_element (ENABLE_NODE, &debug_ospf_event_cmd);
+  install_element (ENABLE_NODE, &debug_ospf_memory_cmd);
   install_element (ENABLE_NODE, &debug_ospf_nssa_cmd);
   install_element (ENABLE_NODE, &no_debug_ospf_packet_send_recv_detail_cmd);
   install_element (ENABLE_NODE, &no_debug_ospf_packet_send_recv_cmd);
@@ -1631,6 +1675,7 @@ debug_init ()
   install_element (ENABLE_NODE, &no_debug_ospf_zebra_sub_cmd);
   install_element (ENABLE_NODE, &no_debug_ospf_zebra_cmd);
   install_element (ENABLE_NODE, &no_debug_ospf_event_cmd);
+  install_element (ENABLE_NODE, &no_debug_ospf_memory_cmd);
   install_element (ENABLE_NODE, &no_debug_ospf_nssa_cmd);
 
   install_element (CONFIG_NODE, &debug_ospf_packet_send_recv_detail_cmd);
@@ -1645,6 +1690,7 @@ debug_init ()
   install_element (CONFIG_NODE, &debug_ospf_zebra_sub_cmd);
   install_element (CONFIG_NODE, &debug_ospf_zebra_cmd);
   install_element (CONFIG_NODE, &debug_ospf_event_cmd);
+  install_element (CONFIG_NODE, &debug_ospf_memory_cmd);
   install_element (CONFIG_NODE, &debug_ospf_nssa_cmd);
   install_element (CONFIG_NODE, &no_debug_ospf_packet_send_recv_detail_cmd);
   install_element (CONFIG_NODE, &no_debug_ospf_packet_send_recv_cmd);
@@ -1658,5 +1704,8 @@ debug_init ()
   install_element (CONFIG_NODE, &no_debug_ospf_zebra_sub_cmd);
   install_element (CONFIG_NODE, &no_debug_ospf_zebra_cmd);
   install_element (CONFIG_NODE, &no_debug_ospf_event_cmd);
+  install_element (CONFIG_NODE, &no_debug_ospf_memory_cmd);
   install_element (CONFIG_NODE, &no_debug_ospf_nssa_cmd);
+
+  install_element (ENABLE_NODE, &show_cpu_ospf_cmd);
 }

@@ -14,19 +14,24 @@
  * into proprietary software; there is no requirement for such software to
  * contain a copyright notice related to this source.
  *
- * $Id: dict.c,v 1.3 2004/11/24 17:14:49 ajs Exp $
+ * $Id: dict.c,v 1.4 2006/01/25 06:43:21 vize Exp $
  * $Name:  $
+ */
+
+/*
+ * Copyright (C) 2006 6WIND
  */
 
 #include <stdlib.h>
 #include <stddef.h>
+#include <string.h>
 #include "zassert.h"
 #define DICT_IMPLEMENTATION
 #include "dict.h"
 
 #ifdef KAZLIB_RCSID
 static const char rcsid[] =
-  "$Id: dict.c,v 1.3 2004/11/24 17:14:49 ajs Exp $";
+  "$Id: dict.c,v 1.4 2006/01/25 06:43:21 vize Exp $";
 #endif
 
 /*
@@ -605,7 +610,7 @@ dict_insert (dict_t * dict, dnode_t * node, const void *key)
   dnode_t *parent = nil, *uncle, *grandpa;
   int result = -1;
 
-  node->key = key;
+  memcpy( node->key, key,ISIS_SYS_ID_LEN + 2);
 
   assert (!dict_isfull (dict));
   assert (!dict_contains (dict, node));
@@ -1180,7 +1185,7 @@ dict_load_next (dict_load_t * load, dnode_t * newnode, const void *key)
     }
 #endif
 
-  newnode->key = key;
+  memcpy( newnode->key, key,ISIS_SYS_ID_LEN + 2);
   nil->right->left = newnode;
   nil->right = newnode;
   newnode->left = nil;
@@ -1346,7 +1351,6 @@ dict_merge (dict_t * dest, dict_t * source)
 #ifdef KAZLIB_TEST_MAIN
 
 #include <stdio.h>
-#include <string.h>
 #include <ctype.h>
 #include <stdarg.h>
 

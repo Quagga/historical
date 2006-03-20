@@ -28,6 +28,8 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "str.h"
 #include "log.h"
 #include "sockunion.h"
+#include "memory.h"
+#include "thread.h"
 
 #include "bgpd/bgpd.h"
 #include "bgpd/bgp_aspath.h"
@@ -549,6 +551,46 @@ ALIAS (no_debug_bgp_update,
        BGP_STR
        "BGP updates\n")
 
+ALIAS (no_debug_bgp_update,
+       no_debug_bgp_update_direct_cmd,
+       "no debug bgp updates (in|out)",
+       NO_STR
+       DEBUG_STR
+       BGP_STR
+       "BGP updates\n"
+       "Inbound updates\n"
+       "Outbound updates\n")
+
+DEFUN (debug_bgp_memory,
+       debug_bgp_memory_cmd,
+       "debug bgp memory",
+       DEBUG_STR
+       BGP_STR
+       "BGP memory usages\n")
+{
+  memory_debug(1);
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_debug_bgp_memory,
+       no_debug_bgp_memory_cmd,
+       "no debug bgp memory",
+       NO_STR
+       DEBUG_STR
+       BGP_STR
+       "BGP memory usages\n")
+{
+  memory_debug(0);
+  return CMD_SUCCESS;
+}
+
+ALIAS (no_debug_bgp_memory,
+       undebug_bgp_memory_cmd,
+       "undebug bgp memory",
+       UNDEBUG_STR
+       BGP_STR
+       "BGP memory usages\n")
+
 DEFUN (debug_bgp_normal,
        debug_bgp_normal_cmd,
        "debug bgp",
@@ -640,6 +682,8 @@ DEFUN (show_debugging_bgp,
     vty_out (vty, "  BGP fsm debugging is on%s", VTY_NEWLINE);
   if (BGP_DEBUG (filter, FILTER))
     vty_out (vty, "  BGP filter debugging is on%s", VTY_NEWLINE);
+  if (is_memory_debug())
+    vty_out (vty, "  BGP memory debugging is on%s", VTY_NEWLINE);
   vty_out (vty, "%s", VTY_NEWLINE);
   return CMD_SUCCESS;
 }
@@ -694,6 +738,11 @@ bgp_config_write_debug (struct vty *vty)
       vty_out (vty, "debug bgp filters%s", VTY_NEWLINE);
       write++;
     }
+  if (is_memory_debug())
+    {
+      vty_out (vty, "debug bgp memory%s", VTY_NEWLINE);
+      write++;
+    }
 
   return write;
 }
@@ -705,12 +754,25 @@ struct cmd_node debug_node =
   1
 };
 
+DEFUN(show_cpu_bgp,
+      show_cpu_bgp_cmd,
+      "show cpu bgp (|[RWTEX])",
+      SHOW_STR
+      "Thread CPU usage\n"
+      BGP_STR
+      "Display filter (Read, Write, Timer, Event, eXecute)\n")
+{
+  return thread_dumps(vty, argc, argv);
+}
+
 void
 bgp_debug_init ()
 {
   install_node (&debug_node, bgp_config_write_debug);
 
   install_element (ENABLE_NODE, &show_debugging_bgp_cmd);
+
+  install_element (ENABLE_NODE, &show_cpu_bgp_cmd);
 
   install_element (ENABLE_NODE, &debug_bgp_fsm_cmd);
   install_element (CONFIG_NODE, &debug_bgp_fsm_cmd);
@@ -726,6 +788,8 @@ bgp_debug_init ()
   install_element (CONFIG_NODE, &debug_bgp_update_direct_cmd);
   install_element (ENABLE_NODE, &debug_bgp_normal_cmd);
   install_element (CONFIG_NODE, &debug_bgp_normal_cmd);
+  install_element (ENABLE_NODE, &debug_bgp_memory_cmd);
+  install_element (CONFIG_NODE, &debug_bgp_memory_cmd);
 
   install_element (ENABLE_NODE, &no_debug_bgp_fsm_cmd);
   install_element (ENABLE_NODE, &undebug_bgp_fsm_cmd);
@@ -747,4 +811,6 @@ bgp_debug_init ()
   install_element (CONFIG_NODE, &no_debug_bgp_normal_cmd);
   install_element (ENABLE_NODE, &no_debug_bgp_all_cmd);
   install_element (ENABLE_NODE, &undebug_bgp_all_cmd);
+  install_element (ENABLE_NODE, &no_debug_bgp_memory_cmd);
+  install_element (CONFIG_NODE, &no_debug_bgp_memory_cmd);
 }

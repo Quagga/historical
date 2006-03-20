@@ -27,16 +27,23 @@
 #include "thread.h"
 #include "filter.h"
 #include "memory.h"
+#include "vty.h"
 #include "prefix.h"
 #include "log.h"
 #include "privs.h"
 #include "sigevent.h"
+
+/* VPN */
+#include "vpn.h"
 
 #include "zebra/rib.h"
 #include "zebra/zserv.h"
 #include "zebra/debug.h"
 #include "zebra/router-id.h"
 #include "zebra/irdp.h"
+
+/* Conssturction of the /temp/.zebra file */
+static char *vpn_id_tmp;
 
 /* Zebra instance */
 struct zebra_t zebrad =
@@ -75,6 +82,7 @@ struct option longopts[] =
   { "vty_addr",    required_argument, NULL, 'A'},
   { "vty_port",    required_argument, NULL, 'P'},
   { "retain",      no_argument,       NULL, 'r'},
+  { "vpn",         required_argument, NULL, 'V'}, /* VPN*/
 #ifdef HAVE_NETLINK
   { "nl-bufsize",  required_argument, NULL, 's'},
 #endif /* HAVE_NETLINK */
@@ -110,7 +118,11 @@ struct zebra_privs_t zserv_privs =
 char config_default[] = SYSCONFDIR DEFAULT_CONFIG_FILE;
 
 /* Process ID saved for use by init system */
-const char *pid_file = PATH_ZEBRA_PID;
+static char pid_file[sizeof (PATH_ZEBRA_PID) + 20] = PATH_ZEBRA_PID;
+static int pid_set = 0;
+
+/* Default VPN id */
+unsigned int vpn_id = 0;
 
 /* Help information display. */
 static void
@@ -134,6 +146,7 @@ usage (char *progname, int status)
 	      "-P, --vty_port     Set vty's port number\n"\
 	      "-r, --retain       When program terminates, retain added route "\
 				  "by zebra.\n"\
+	      "-V, --vpn          Set specific VPN\n"\
 	      "-u, --user         User to run as\n"\
 	      "-g, --group	  Group to run as\n", progname);
 #ifdef HAVE_NETLINK
@@ -183,6 +196,17 @@ sigusr1 (void)
   zlog_rotate (NULL);
 }
 
+void vpn_pid_file_set (char * vpn_path)
+{
+  char fnt[] = ".";
+
+  if (!pid_set)
+  {
+    strncat (pid_file, fnt, sizeof (pid_file));
+    strncat (pid_file, vpn_path, sizeof (pid_file));
+  }
+}
+
 struct quagga_signal_t zebra_signals[] =
 {
   { 
@@ -208,6 +232,8 @@ int
 main (int argc, char **argv)
 {
   char *p;
+  char ptm[] = ".";
+  char zebra_vtysh_path[sizeof (ZEBRA_VTYSH_PATH) +20] = ZEBRA_VTYSH_PATH;
   char *vty_addr = NULL;
   int vty_port = ZEBRA_VTY_PORT;
   int batch_mode = 0;
@@ -224,7 +250,7 @@ main (int argc, char **argv)
   /* preserve my name */
   progname = ((p = strrchr (argv[0], '/')) ? ++p : argv[0]);
 
-  zlog_default = openzlog (progname, ZLOG_ZEBRA,
+  zlog_default = openzlog ("FIB", ZLOG_ZEBRA,
 			   LOG_CONS|LOG_NDELAY|LOG_PID, LOG_DAEMON);
 
   while (1) 
@@ -232,9 +258,9 @@ main (int argc, char **argv)
       int opt;
   
 #ifdef HAVE_NETLINK  
-      opt = getopt_long (argc, argv, "bdklf:i:hA:P:ru:g:vs:", longopts, 0);
+      opt = getopt_long (argc, argv, "bdklf:i:hA:P:V:ru:g:vs:", longopts, 0);
 #else
-      opt = getopt_long (argc, argv, "bdklf:i:hA:P:ru:g:v", longopts, 0);
+      opt = getopt_long (argc, argv, "bdklf:i:hA:P:V:ru:g:v", longopts, 0);
 #endif /* HAVE_NETLINK */
 
       if (opt == EOF)
@@ -262,7 +288,8 @@ main (int argc, char **argv)
 	  vty_addr = optarg;
 	  break;
         case 'i':
-          pid_file = optarg;
+          strncpy (pid_file, optarg, sizeof (pid_file));
+	  pid_set = 1;
           break;
 	case 'P':
 	  /* Deal with atoi() returning 0 on failure, and zebra not
@@ -278,6 +305,16 @@ main (int argc, char **argv)
 	case 'r':
 	  retain_mode = 1;
 	  break;
+	/* VPN - begin */
+	case 'V':
+	  vpn_id = atoi (optarg);
+	  vpn_id_tmp = optarg ; 
+	  vpn_id_set (vpn_id);
+	  vpn_id_zserv_set (vpn_id);
+	  vpn_path_zserv_set (vpn_id_tmp);
+	  vpn_pid_file_set (vpn_id_tmp);
+	  break;
+	/* VPN - end */
 #ifdef HAVE_NETLINK
 	case 's':
 	  nl_rcvbufsize = atoi (optarg);
@@ -369,11 +406,26 @@ main (int argc, char **argv)
   /* Needed for BSD routing socket. */
   pid = getpid ();
 
+  if (vpn_id)
+  {
+    strncat (zebra_vtysh_path, ptm, sizeof (zebra_vtysh_path));
+    strncat (zebra_vtysh_path, vpn_id_tmp, sizeof (zebra_vtysh_path));
+  }
+
   /* Make vty server socket. */
   vty_serv_sock (vty_addr, vty_port, ZEBRA_VTYSH_PATH);
 
   /* Print banner. */
   zlog_notice ("Zebra %s starting: vty@%d", QUAGGA_VERSION, vty_port);
+
+#ifdef notyet
+  /* it should be used to replace the native net-snmp forwarding MIB */
+#if defined(HAVE_SNMP) && defined(FORCE_SMUX)
+  /* smux peer .1.3.6.1.4.1.3317.1.2.1 */
+  if (smux_peer_oid(NULL, ".1.3.6.1.4.1.3317.1.2.1", NULL) == 0)
+    smux_start();
+#endif /* HAVE_SNMP && FORCE_SMUX */
+#endif /* notyet */
 
   while (thread_fetch (zebrad.master, &thread))
     thread_call (&thread);

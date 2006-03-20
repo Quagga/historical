@@ -20,6 +20,7 @@
  */
 
 #include <zebra.h>
+#include <string.h>
 
 #include <lib/version.h>
 #include "getopt.h"
@@ -27,13 +28,22 @@
 #include "command.h"
 #include "memory.h"
 #include "prefix.h"
+#include "vty.h"
+#include "zclient.h"
 #include "filter.h"
 #include "keychain.h"
 #include "log.h"
 #include "privs.h"
 #include "sigevent.h"
 
+#if defined(HAVE_SNMP) && defined(FORCE_SMUX)
+#include <asn1.h>
+#include "smux.h"
+#endif
+
 #include "ripd/ripd.h"
+
+static char rip_vtysh_path[sizeof(RIP_VTYSH_PATH) + 20] = RIP_VTYSH_PATH;
 
 /* ripd options. */
 static struct option longopts[] = 
@@ -45,6 +55,7 @@ static struct option longopts[] =
   { "vty_addr",    required_argument, NULL, 'A'},
   { "vty_port",    required_argument, NULL, 'P'},
   { "retain",      no_argument,       NULL, 'r'},
+  { "vpn",         required_argument, NULL, 'V'},
   { "user",        required_argument, NULL, 'u'},
   { "group",       required_argument, NULL, 'g'},
   { "version",     no_argument,       NULL, 'v'},
@@ -111,6 +122,7 @@ Daemon which manages RIP version 1 and 2.\n\n\
 -A, --vty_addr     Set vty's bind address\n\
 -P, --vty_port     Set vty's port number\n\
 -r, --retain       When program terminates, retain added route by ripd.\n\
+-V, --vpn_id	   Number of the routing table \n\
 -u, --user         User to run as\n\
 -g, --group        Group to run as\n\
 -v, --version      Print program version\n\
@@ -135,7 +147,7 @@ sighup (void)
   vty_read_config (config_file, config_default);
 
   /* Create VTY's socket */
-  vty_serv_sock (vty_addr, vty_port, RIP_VTYSH_PATH);
+  vty_serv_sock (vty_addr, vty_port, rip_vtysh_path);
 
   /* Try to return to normal operation. */
 }
@@ -184,7 +196,10 @@ int
 main (int argc, char **argv)
 {
   char *p;
+  char fnt[] = ".";
+  char *vpn_id_tmp = NULL;
   int daemon_mode = 0;
+  int temp = 0;
   char *progname;
   struct thread thread;
 
@@ -195,7 +210,7 @@ main (int argc, char **argv)
   progname = ((p = strrchr (argv[0], '/')) ? ++p : argv[0]);
 
   /* First of all we need logging init. */
-  zlog_default = openzlog (progname, ZLOG_RIP,
+  zlog_default = openzlog ("RIP", ZLOG_RIP,
 			   LOG_CONS|LOG_NDELAY|LOG_PID, LOG_DAEMON);
 
   /* Command line option parse. */
@@ -203,7 +218,7 @@ main (int argc, char **argv)
     {
       int opt;
 
-      opt = getopt_long (argc, argv, "df:i:hA:P:u:g:rv", longopts, 0);
+      opt = getopt_long (argc, argv, "df:i:hA:P:u:g:V:rv", longopts, 0);
     
       if (opt == EOF)
 	break;
@@ -235,6 +250,13 @@ main (int argc, char **argv)
           vty_port = atoi (optarg);
           vty_port = (vty_port ? vty_port : RIP_VTY_PORT);
 	  break;
+	case 'V' :
+	  vpn_id_tmp = optarg;
+	  temp = atoi (optarg);
+	  vpn_id_set (temp); /* Set vty socket port */
+	  vpn_id_zset (temp); /* Set TCP socket port */
+	  vpn_path_zset (vpn_id_tmp); /* Set unix socket path */
+	  break;
 	case 'r':
 	  retain_mode = 1;
 	  break;
@@ -256,6 +278,13 @@ main (int argc, char **argv)
 	  break;
 	}
     }
+
+/* Set File Name */
+  if(temp)
+  {
+    strncat (rip_vtysh_path, fnt, sizeof(rip_vtysh_path));
+    strncat (rip_vtysh_path, vpn_id_tmp, sizeof(rip_vtysh_path));
+  }
 
   /* Prepare master thread. */
   master = thread_master_create ();
@@ -288,10 +317,16 @@ main (int argc, char **argv)
   pid_output (pid_file);
 
   /* Create VTY's socket */
-  vty_serv_sock (vty_addr, vty_port, RIP_VTYSH_PATH);
+  vty_serv_sock (vty_addr, vty_port, rip_vtysh_path);
 
   /* Print banner. */
   zlog_notice ("RIPd %s starting: vty@%d", QUAGGA_VERSION, vty_port);
+
+#if defined(HAVE_SNMP) && defined(FORCE_SMUX)
+  /* smux peer .1.3.6.1.4.1.3317.1.2.3 */
+  if (smux_peer_oid(NULL, ".1.3.6.1.4.1.3317.1.2.3", NULL) == 0)
+    smux_start();
+#endif /* HAVE_SNMP && FORCE_SMUX */
 
   /* Execute each thread. */
   while (thread_fetch (master, &thread))

@@ -244,8 +244,12 @@ int proto_trans(int type)
       return 1; /* shouldn't happen */
     case ZEBRA_ROUTE_BGP:
       return 14; /* bgp */
+    case ZEBRA_ROUTE_DEP:
+        return 1; /* other */
+    case ZEBRA_ROUTE_NATPT:
+        return 1; /* other */
     default:
-      return 1; /* other */
+        return 1; /* other */
     }
 }
 

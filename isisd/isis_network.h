@@ -20,6 +20,9 @@
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
+/*
+ * Copyright (C) 2006 6WIND
+ */
 
 #ifndef _ZEBRA_ISIS_NETWORK_H
 #define _ZEBRA_ISIS_NETWORK_H
@@ -33,5 +36,7 @@ int isis_recv_pdu_bcast (struct isis_circuit *circuit, u_char * ssnpa);
 int isis_recv_pdu_p2p (struct isis_circuit *circuit, u_char * ssnpa);
 int isis_send_pdu_bcast (struct isis_circuit *circuit, int level);
 int isis_send_pdu_p2p (struct isis_circuit *circuit, int level);
+int isis_multicast_join (int fd, int registerto, int if_num);
+int isis_multicast_unjoin (int fd, int registerto, int if_num);
 
 #endif /* _ZEBRA_ISIS_NETWORK_H */

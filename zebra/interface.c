@@ -276,6 +276,8 @@ if_add_update (struct interface *ifp)
   if (! CHECK_FLAG (ifp->status, ZEBRA_INTERFACE_ACTIVE))
     {
       SET_FLAG (ifp->status, ZEBRA_INTERFACE_ACTIVE);
+      /* Activate link-detect by default */
+      SET_FLAG (ifp->status, ZEBRA_INTERFACE_LINKDETECTION);
 
       if_addr_wakeup (ifp);
 
@@ -860,8 +862,8 @@ struct cmd_node interface_node =
 };
 
 /* Show all or specified interface to vty. */
-DEFUN (show_interface, show_interface_cmd,
-       "show interface [IFNAME]",  
+DEFUN (show_interface, show_interface_ifname_cmd,
+       "show interface IFNAME",  
        SHOW_STR
        "Interface status and configuration\n"
        "Inteface name\n")
@@ -943,6 +945,12 @@ DEFUN (show_interface_desc,
     }
   return CMD_SUCCESS;
 }
+
+ALIAS(show_interface, show_interface_cmd,
+       "show interface",  
+       SHOW_STR
+       "Interface status and configuration\n")
+
 
 DEFUN (multicast,
        multicast_cmd,
@@ -1091,7 +1099,7 @@ DEFUN (bandwidth_if,
        bandwidth_if_cmd,
        "bandwidth <1-10000000>",
        "Set bandwidth informational parameter\n"
-       "Bandwidth in kilobits\n")
+       "Bandwidth in Kbits per second\n")
 {
   struct interface *ifp;   
   unsigned int bandwidth;
@@ -1510,11 +1518,29 @@ if_config_write (struct vty *vty)
       struct listnode *addrnode;
       struct connected *ifc;
       struct prefix *p;
+      int count = 0, exist = 0;
 
       if_data = ifp->info;
+
+      /* Check at the beginning if ZEBRA_IFC_CONFIGURED-flagged connected-interface exists */     
+      for (ALL_LIST_ELEMENTS_RO (ifp->connected, addrnode, ifc))
+	  {
+	    if (CHECK_FLAG (ifc->conf, ZEBRA_IFC_CONFIGURED))
+	      count ++;
+	  }
+ 
+      if (!ifp->desc  &&
+          ifp->bandwidth == 0  &&
+          CHECK_FLAG(ifp->status, ZEBRA_INTERFACE_LINKDETECTION)  &&
+	  count == 0 && 
+          !(if_data && (if_data->shutdown == IF_ZEBRA_SHUTDOWN_ON || 
+            if_data->multicast != IF_ZEBRA_MULTICAST_UNSPEC))
+	  )
+        goto end_loop;
       
       vty_out (vty, "interface %s%s", ifp->name,
 	       VTY_NEWLINE);
+      exist ++;
 
       if (ifp->desc)
 	vty_out (vty, " description %s%s", ifp->desc,
@@ -1525,8 +1551,8 @@ if_config_write (struct vty *vty)
       if (ifp->bandwidth != 0)
 	vty_out(vty, " bandwidth %u%s", ifp->bandwidth, VTY_NEWLINE); 
 
-      if (CHECK_FLAG(ifp->status, ZEBRA_INTERFACE_LINKDETECTION))
-	vty_out(vty, " link-detect%s", VTY_NEWLINE);
+      if (!CHECK_FLAG(ifp->status, ZEBRA_INTERFACE_LINKDETECTION))
+	vty_out(vty, " no link-detect%s", VTY_NEWLINE);
 
       for (ALL_LIST_ELEMENTS_RO (ifp->connected, addrnode, ifc))
 	  {
@@ -1556,12 +1582,14 @@ if_config_write (struct vty *vty)
 		     VTY_NEWLINE);
 	}
 
+end_loop:
+
 #ifdef RTADV
-      rtadv_config_write (vty, ifp);
+      rtadv_config_write (vty, ifp, &exist);
 #endif /* RTADV */
 
 #ifdef HAVE_IRDP
-      irdp_config_write (vty, ifp);
+      irdp_config_write (vty, ifp, &exist);
 #endif /* IRDP */
 
       vty_out (vty, "!%s", VTY_NEWLINE);
@@ -1582,7 +1610,9 @@ zebra_if_init ()
   install_node (&interface_node, if_config_write);
 
   install_element (VIEW_NODE, &show_interface_cmd);
+  install_element (VIEW_NODE, &show_interface_ifname_cmd);
   install_element (ENABLE_NODE, &show_interface_cmd);
+  install_element (ENABLE_NODE, &show_interface_ifname_cmd);
   install_element (ENABLE_NODE, &show_interface_desc_cmd);
   install_element (CONFIG_NODE, &zebra_interface_cmd);
   install_element (CONFIG_NODE, &no_interface_cmd);

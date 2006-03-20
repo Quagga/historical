@@ -1,6 +1,6 @@
 /*
-   $Id: command.c,v 1.47 2005/04/25 16:26:42 paul Exp $
- 
+   $Id: command.c,v 1.22 2006/02/02 14:04:39 shao Exp $
+
    Command interpreter routine for virtual terminal [aka TeletYpe]
    Copyright (C) 1997, 98, 99 Kunihiro Ishiguro
 
@@ -143,17 +143,10 @@ level_match(const char *s)
   return ZLOG_DISABLED;
 }
 
-/* This is called from main when a daemon is invoked with -v or --version. */
-void
-print_version (const char *progname)
-{
-  printf ("%s version %s\n", progname, QUAGGA_VERSION);
-  printf ("%s\n", QUAGGA_COPYRIGHT);
-}
-
 
 /* Utility function to concatenate argv argument into a single string
-   with inserting ' ' character between each argument.  */
+   with inserting ' ' character between each argument.
+   argv is RO, but const cannot be used yet due to bgp_vty.c */
 char *
 argv_concat (const char **argv, int argc, int shift)
 {
@@ -342,7 +335,7 @@ cmd_desc_str (const char **string)
 }
 
 /* New string vector. */
-static vector
+vector
 cmd_make_descvec (const char *string, const char *descstr)
 {
   int multiple = 0;
@@ -513,7 +506,7 @@ zencrypt (const char *passwd)
 
   gettimeofday(&tv,0);
   
-  to64(&salt[0], random(), 3);
+  to64(&salt[0], rand(), 3);
   to64(&salt[3], tv.tv_usec, 3);
   salt[5] = '\0';
 
@@ -521,7 +514,7 @@ zencrypt (const char *passwd)
 }
 
 /* This function write configuration of this host. */
-static int
+int
 config_write_host (struct vty *vty)
 {
   if (host.name)
@@ -609,7 +602,7 @@ config_write_host (struct vty *vty)
 }
 
 /* Utility function for getting command vector. */
-static vector
+vector
 cmd_node_vector (vector v, enum node_type ntype)
 {
   struct cmd_node *cnode = vector_slot (v, ntype);
@@ -826,7 +819,6 @@ cmd_ipv4_prefix_match (const char *str)
 #define STATE_MASK		7
 
 #ifdef HAVE_IPV6
-
 static enum match_type
 cmd_ipv6_match (const char *str)
 {
@@ -1063,8 +1055,7 @@ cmd_ipv6_prefix_match (const char *str)
 
   return exact_match;
 }
-
-#endif /* HAVE_IPV6  */
+#endif /*HAVE_IPV6*/
 
 #define DECIMAL_STRLEN_MAX 10
 
@@ -1114,7 +1105,7 @@ cmd_range_match (const char *range, const char *str)
 }
 
 /* Make completion match and return match type flag. */
-static enum match_type
+enum match_type
 cmd_filter_by_completion (char *command, vector v, unsigned int index)
 {
   unsigned int i;
@@ -1337,7 +1328,7 @@ cmd_filter_by_string (char *command, vector v, unsigned int index)
 }
 
 /* Check ambiguous match */
-static int
+int
 is_cmd_ambiguous (char *command, vector v, int index, enum match_type type)
 {
   unsigned int i;
@@ -1486,7 +1477,7 @@ cmd_entry_function_desc (const char *src, const char *dst)
       else
 	return NULL;
     }
-#endif /* HAVE_IPV6 */
+#endif
 
   if (CMD_IPV4 (dst))
     {
@@ -1763,7 +1754,10 @@ cmd_lcd (char **matched)
   return lcd;
 }
 
-/* Command line completion support. */
+/* Command line completion support.
+ * the array of char that is returned is freed by readline
+ * when vtysh is used.
+ */
 static char **
 cmd_complete_command_real (vector vline, struct vty *vty, int *status)
 {
@@ -1840,7 +1834,8 @@ cmd_complete_command_real (vector vline, struct vty *vty, int *status)
 		       cmd_entry_function (vector_slot (vline, index),
 					   desc->cmd)))
 		    if (cmd_unique_string (matchvec, string))
-		      vector_set (matchvec, XSTRDUP (MTYPE_TMP, string));
+                      vector_set (matchvec, strdup(string)); /* freed by readline, don't set MTYPE */
+
 		}
 	  }
       }
@@ -1885,8 +1880,8 @@ cmd_complete_command_real (vector vline, struct vty *vty, int *status)
 	  if (len < lcd)
 	    {
 	      char *lcdstr;
-
-	      lcdstr = XMALLOC (MTYPE_TMP, lcd + 1);
+	      
+              lcdstr = malloc(lcd + 1); /* freeed by readline, don't set MTYPE */
 	      memcpy (lcdstr, matchvec->index[0], lcd);
 	      lcdstr[lcd] = '\0';
 
@@ -1896,7 +1891,7 @@ cmd_complete_command_real (vector vline, struct vty *vty, int *status)
 	      for (i = 0; i < vector_active (matchvec); i++)
 		{
 		  if (vector_slot (matchvec, i))
-		    XFREE (MTYPE_TMP, vector_slot (matchvec, i));
+		    free (vector_slot (matchvec, i));
 		}
 	      vector_free (matchvec);
 
@@ -2133,11 +2128,16 @@ cmd_execute_command (vector vline, struct vty *vty, struct cmd_element **cmd,
 
   saved_ret = ret = cmd_execute_command_real (vline, vty, cmd);
 
-  if (vtysh)
-    return saved_ret;
+  /*
+   * XXX: VJ, it was added into command.c, 1.34
+   * but:
+   */
+/*  if (vtysh)
+    return saved_ret;*/
 
   /* This assumes all nodes above CONFIG_NODE are childs of CONFIG_NODE */
   while ( ret != CMD_SUCCESS && ret != CMD_WARNING 
+	  && ret != CMD_ERR_AMBIGUOUS && ret != CMD_ERR_INCOMPLETE
 	  && vty->node > CONFIG_NODE )
     {
       try_node = node_parent(try_node);
@@ -2391,6 +2391,7 @@ DEFUN (config_exit,
     case BGP_IPV4_NODE:
     case BGP_IPV4M_NODE:
     case BGP_IPV6_NODE:
+    case BGP_IPV6M_NODE:
       vty->node = BGP_NODE;
       break;
     case KEYCHAIN_KEY_NODE:
@@ -2430,6 +2431,7 @@ DEFUN (config_end,
     case BGP_IPV4_NODE:
     case BGP_IPV4M_NODE:
     case BGP_IPV6_NODE:
+    case BGP_IPV6M_NODE:
     case RMAP_NODE:
     case OSPF_NODE:
     case OSPF6_NODE:
@@ -2732,7 +2734,7 @@ DEFUN (config_hostname,
     }
 
   if (host.name)
-    XFREE (0, host.name);
+    free (host.name); /* allocated by strdup */
     
   host.name = strdup (argv[0]);
   return CMD_SUCCESS;
@@ -2746,7 +2748,7 @@ DEFUN (config_no_hostname,
        "Host name of this router\n")
 {
   if (host.name)
-    XFREE (0, host.name);
+    free (host.name); /* allocated by strdup */
   host.name = NULL;
   return CMD_SUCCESS;
 }
@@ -2771,11 +2773,11 @@ DEFUN (config_password, password_cmd,
       if (*argv[0] == '8')
 	{
 	  if (host.password)
-	    XFREE (0, host.password);
+	    free (host.password);
 	  host.password = NULL;
 	  if (host.password_encrypt)
-	    XFREE (0, host.password_encrypt);
-	  host.password_encrypt = XSTRDUP (0, strdup (argv[1]));
+	    free (host.password_encrypt);
+	  host.password_encrypt = strdup (strdup (argv[1]));
 	  return CMD_SUCCESS;
 	}
       else
@@ -2793,17 +2795,17 @@ DEFUN (config_password, password_cmd,
     }
 
   if (host.password)
-    XFREE (0, host.password);
+    free (host.password);
   host.password = NULL;
 
   if (host.encrypt)
     {
       if (host.password_encrypt)
-	XFREE (0, host.password_encrypt);
-      host.password_encrypt = XSTRDUP (0, zencrypt (argv[0]));
+	free (host.password_encrypt);
+      host.password_encrypt = strdup (zencrypt (argv[0]));
     }
   else
-    host.password = XSTRDUP (0, argv[0]);
+    host.password = strdup (argv[0]);
 
   return CMD_SUCCESS;
 }
@@ -2835,12 +2837,12 @@ DEFUN (config_enable_password, enable_password_cmd,
       if (*argv[0] == '8')
 	{
 	  if (host.enable)
-	    XFREE (0, host.enable);
+	    free (host.enable);
 	  host.enable = NULL;
 
 	  if (host.enable_encrypt)
-	    XFREE (0, host.enable_encrypt);
-	  host.enable_encrypt = XSTRDUP (0, argv[1]);
+	    free (host.enable_encrypt);
+	  host.enable_encrypt = strdup (argv[1]);
 
 	  return CMD_SUCCESS;
 	}
@@ -2859,18 +2861,18 @@ DEFUN (config_enable_password, enable_password_cmd,
     }
 
   if (host.enable)
-    XFREE (0, host.enable);
+    free (host.enable);
   host.enable = NULL;
 
   /* Plain password input. */
   if (host.encrypt)
     {
       if (host.enable_encrypt)
-	XFREE (0, host.enable_encrypt);
-      host.enable_encrypt = XSTRDUP (0, zencrypt (argv[0]));
+	free (host.enable_encrypt);
+      host.enable_encrypt = strdup (zencrypt (argv[0]));
     }
   else
-    host.enable = XSTRDUP (0, argv[0]);
+    host.enable = strdup (argv[0]);
 
   return CMD_SUCCESS;
 }
@@ -2890,11 +2892,11 @@ DEFUN (no_config_enable_password, no_enable_password_cmd,
        "Assign the privileged level password\n")
 {
   if (host.enable)
-    XFREE (0, host.enable);
+    free (host.enable);
   host.enable = NULL;
 
   if (host.enable_encrypt)
-    XFREE (0, host.enable_encrypt);
+    free (host.enable_encrypt);
   host.enable_encrypt = NULL;
 
   return CMD_SUCCESS;
@@ -2914,14 +2916,14 @@ DEFUN (service_password_encrypt,
   if (host.password)
     {
       if (host.password_encrypt)
-	XFREE (0, host.password_encrypt);
-      host.password_encrypt = XSTRDUP (0, zencrypt (host.password));
+	free (host.password_encrypt);
+      host.password_encrypt = strdup (zencrypt (host.password));
     }
   if (host.enable)
     {
       if (host.enable_encrypt)
-	XFREE (0, host.enable_encrypt);
-      host.enable_encrypt = XSTRDUP (0, zencrypt (host.enable));
+	free (host.enable_encrypt);
+      host.enable_encrypt = strdup (zencrypt (host.enable));
     }
 
   return CMD_SUCCESS;
@@ -2940,11 +2942,11 @@ DEFUN (no_service_password_encrypt,
   host.encrypt = 0;
 
   if (host.password_encrypt)
-    XFREE (0, host.password_encrypt);
+    free (host.password_encrypt);
   host.password_encrypt = NULL;
 
   if (host.enable_encrypt)
-    XFREE (0, host.enable_encrypt);
+    free (host.enable_encrypt);
   host.enable_encrypt = NULL;
 
   return CMD_SUCCESS;
@@ -3213,9 +3215,9 @@ set_log_file(struct vty *vty, const char *fname, int loglevel)
     }
 
   if (host.logfile)
-    XFREE (MTYPE_TMP, host.logfile);
+    free (host.logfile);
 
-  host.logfile = XSTRDUP (MTYPE_TMP, fname);
+  host.logfile = strdup (fname);
 
   return CMD_SUCCESS;
 }
@@ -3256,7 +3258,7 @@ DEFUN (no_config_log_file,
   zlog_reset_file (NULL);
 
   if (host.logfile)
-    XFREE (MTYPE_TMP, host.logfile);
+    free (host.logfile);
 
   host.logfile = NULL;
 
@@ -3501,7 +3503,7 @@ cmd_init (int terminal)
   install_node (&enable_node, NULL);
   install_node (&auth_node, NULL);
   install_node (&auth_enable_node, NULL);
-  install_node (&config_node, config_write_host);
+  install_node (&config_node, NULL);
 
   /* Each node's basic commands. */
   install_element (VIEW_NODE, &show_version_cmd);

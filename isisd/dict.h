@@ -14,18 +14,26 @@
  * into proprietary software; there is no requirement for such software to
  * contain a copyright notice related to this source.
  *
- * $Id: dict.h,v 1.2 2004/09/10 20:48:21 hasso Exp $
+ * $Id: dict.h,v 1.4 2006/01/25 06:43:21 vize Exp $
  * $Name:  $
+ */
+
+/*
+ * Copyright (C) 2006 6WIND
  */
 
 #ifndef DICT_H
 #define DICT_H
+
+/* sys/types.h include is needed only for old SNAPGEAR3 */
+#include <sys/types.h>
 
 #include <limits.h>
 #ifdef KAZLIB_SIDEEFFECT_DEBUG
 #include "sfx.h"
 #endif
 
+#include "isis_constants.h"
 /*
  * Blurb for inclusion into C++ translation units
  */
@@ -52,7 +60,7 @@ extern "C"
     struct dnode_t *dict_right;
     struct dnode_t *dict_parent;
     dnode_color_t dict_color;
-    const void *dict_key;
+    u_char dict_key[ISIS_SYS_ID_LEN + 2];
     void *dict_data;
 #else
     int dict_dummy;

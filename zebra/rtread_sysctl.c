@@ -25,6 +25,9 @@
 #include "memory.h"
 #include "log.h"
 
+/*VPN*/
+#include "vpn.h"
+
 /* Kernel routing table read up by sysctl function. */
 int
 route_read ()
@@ -32,7 +35,7 @@ route_read ()
   caddr_t buf, end, ref;
   size_t bufsiz;
   struct rt_msghdr *rtm;
-  void rtm_read (struct rt_msghdr *);
+  void rtm_read (struct rt_msghdr *, int vrf_id, safi_t safi);
   
 #define MIBSIZ 6
   int mib[MIBSIZ] = 
@@ -42,7 +45,7 @@ route_read ()
     0,
     0,
     NET_RT_DUMP,
-    0
+    vpn_id
   };
 		      
   /* Get buffer size. */
@@ -65,8 +68,14 @@ route_read ()
   for (end = buf + bufsiz; buf < end; buf += rtm->rtm_msglen) 
     {
       rtm = (struct rt_msghdr *) buf;
-      rtm_read (rtm);
-    }
+      if (vpn_id)
+        {
+          rtm_read (rtm, vpn_id, SAFI_UNICAST);
+          zlog_warn ("vpn_id = %d", vpn_id);
+        }
+      else 
+        rtm_read (rtm, 0, SAFI_UNICAST);
+   }
 
   /* Free buffer. */
   XFREE (MTYPE_TMP, ref);

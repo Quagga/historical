@@ -29,12 +29,12 @@ extern struct in6_addr allspfrouters6;
 extern struct in6_addr alldrouters6;
 
 /* Function Prototypes */
-void ospf6_set_reuseaddr ();
-void ospf6_reset_mcastloop ();
-void ospf6_set_pktinfo ();
-void ospf6_set_checksum ();
+void ospf6_set_reuseaddr (void);
+void ospf6_reset_mcastloop (void);
+void ospf6_set_pktinfo (void);
+void ospf6_set_checksum (void);
 
-int ospf6_serv_sock ();
+int ospf6_serv_sock (void);
 
 void ospf6_join_allspfrouters (u_int);
 void ospf6_leave_allspfrouters (u_int);

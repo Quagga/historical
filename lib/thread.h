@@ -48,7 +48,7 @@ struct thread_list
   int count;
 };
 
-/* Master of the theads. */
+/* Master of the threads. */
 struct thread_master
 {
   struct thread_list read;
@@ -186,6 +186,9 @@ unsigned long thread_timer_remain_second (struct thread *);
 int thread_should_yield (struct thread *);
 
 extern struct cmd_element show_thread_cpu_cmd;
+
+#include "vty.h"
+int thread_dumps(struct vty *vty, int argc, const char **argv);
 
 /* Returns elapsed real (wall clock) time. */
 extern unsigned long thread_consumed_time(RUSAGE_T *after, RUSAGE_T *before,

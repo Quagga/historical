@@ -22,6 +22,11 @@
  * with this program; if not, write to the Free Software Foundation, Inc., 
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
+
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
 #ifndef _ZEBRA_ISIS_ROUTE_H
 #define _ZEBRA_ISIS_ROUTE_H
 
@@ -48,6 +53,7 @@ struct isis_route_info
   u_char flag;
   u_int32_t cost;
   u_int32_t depth;
+  u_char route_type;   /* L1 route  or L2 route  */
   struct list *nexthops;
 #ifdef HAVE_IPV6
   struct list *nexthops6;
@@ -57,7 +63,7 @@ struct isis_route_info
 struct isis_route_info *isis_route_create (struct prefix *prefix,
 					   u_int32_t cost, u_int32_t depth,
 					   struct list *adjacencies,
-					   struct isis_area *area);
+					   struct isis_area *area, int level);
 
 int isis_route_validate (struct thread *thread);
 

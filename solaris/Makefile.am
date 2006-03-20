@@ -1,5 +1,5 @@
 # Solaris packages automake file
-# $Id: Makefile.am,v 1.5 2005/04/26 02:35:03 paul Exp $
+# $Id: Makefile.am,v 1.2 2005/09/30 12:12:07 vize Exp $
 
 .PHONY: packages
 

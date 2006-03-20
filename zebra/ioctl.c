@@ -47,7 +47,7 @@ if_ioctl (u_long request, caddr_t buffer)
 {
   int sock;
   int ret;
-  int err;
+  int err = 0;
 
   if (zserv_privs.change(ZPRIVS_RAISE))
     zlog (NULL, LOG_ERR, "Can't raise privileges");
@@ -80,7 +80,7 @@ if_ioctl_ipv6 (u_long request, caddr_t buffer)
 {
   int sock;
   int ret;
-  int err;
+  int err = 0;
 
   if (zserv_privs.change(ZPRIVS_RAISE))
     zlog (NULL, LOG_ERR, "Can't raise privileges");
@@ -469,7 +469,11 @@ if_prefix_add_ipv6 (struct interface *ifp, struct connected *ifc)
   p = (struct prefix_ipv6 * ) ifc->address;
 
   memset (&addreq, 0, sizeof addreq);
+#ifdef MUSICA
+  strncpy ((char *)&addreq.ifra6_name, ifp->name, sizeof addreq.ifra6_name);
+#else
   strncpy ((char *)&addreq.ifra_name, ifp->name, sizeof addreq.ifra_name);
+#endif
 
   memset (&addr, 0, sizeof (struct sockaddr_in6));
   addr.sin6_addr = p->prefix;
@@ -477,7 +481,11 @@ if_prefix_add_ipv6 (struct interface *ifp, struct connected *ifc)
 #ifdef HAVE_SIN_LEN
   addr.sin6_len = sizeof (struct sockaddr_in6);
 #endif
+#ifdef MUSICA
+  memcpy (&addreq.ifra6_addr, &addr, sizeof (struct sockaddr_in6));
+#else
   memcpy (&addreq.ifra_addr, &addr, sizeof (struct sockaddr_in6));
+#endif
 
   memset (&mask, 0, sizeof (struct sockaddr_in6));
   masklen2ip6 (p->prefixlen, &mask.sin6_addr);
@@ -485,8 +493,11 @@ if_prefix_add_ipv6 (struct interface *ifp, struct connected *ifc)
 #ifdef HAVE_SIN_LEN
   mask.sin6_len = sizeof (struct sockaddr_in6);
 #endif
+#ifdef MUSICA
+  memcpy (&addreq.ifra6_mask, &mask, sizeof (struct sockaddr_in6));
+#else
   memcpy (&addreq.ifra_prefixmask, &mask, sizeof (struct sockaddr_in6));
-
+#endif
   addreq.ifra_lifetime.ia6t_vltime = 0xffffffff;
   addreq.ifra_lifetime.ia6t_pltime = 0xffffffff;
   
@@ -513,7 +524,11 @@ if_prefix_delete_ipv6 (struct interface *ifp, struct connected *ifc)
   p = (struct prefix_ipv6 *) ifc->address;
 
   memset (&addreq, 0, sizeof addreq);
+#ifdef MUSICA
+  strncpy ((char *)&addreq.ifra6_name, ifp->name, sizeof addreq.ifra6_name);
+#else
   strncpy ((char *)&addreq.ifra_name, ifp->name, sizeof addreq.ifra_name);
+#endif
 
   memset (&addr, 0, sizeof (struct sockaddr_in6));
   addr.sin6_addr = p->prefix;
@@ -521,7 +536,11 @@ if_prefix_delete_ipv6 (struct interface *ifp, struct connected *ifc)
 #ifdef HAVE_SIN_LEN
   addr.sin6_len = sizeof (struct sockaddr_in6);
 #endif
+#ifdef MUSICA
+  memcpy (&addreq.ifra6_addr, &addr, sizeof (struct sockaddr_in6));
+#else
   memcpy (&addreq.ifra_addr, &addr, sizeof (struct sockaddr_in6));
+#endif
 
   memset (&mask, 0, sizeof (struct sockaddr_in6));
   masklen2ip6 (p->prefixlen, &mask.sin6_addr);
@@ -529,7 +548,11 @@ if_prefix_delete_ipv6 (struct interface *ifp, struct connected *ifc)
 #ifdef HAVE_SIN_LEN
   mask.sin6_len = sizeof (struct sockaddr_in6);
 #endif
+#ifdef MUSICA
+  memcpy (&addreq.ifra6_mask, &mask, sizeof (struct sockaddr_in6));
+#else
   memcpy (&addreq.ifra_prefixmask, &mask, sizeof (struct sockaddr_in6));
+#endif
 
 #ifdef HAVE_IFRA_LIFETIME
   addreq.ifra_lifetime.ia6t_pltime = ND6_INFINITE_LIFETIME; 

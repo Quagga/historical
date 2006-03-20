@@ -32,7 +32,7 @@
 #include "stream.h"
 #include "log.h"
 #include "sockopt.h"
-#include "md5-gnu.h"
+#include "md5.h"
 
 #include "ospfd/ospfd.h"
 #include "ospfd/ospf_network.h"
@@ -220,7 +220,7 @@ ospf_packet_dup (struct ospf_packet *op)
   struct ospf_packet *new;
 
   if (stream_get_endp(op->s) != op->length)
-    zlog_warn ("ospf_packet_dup stream %ld ospf_packet %d size mismatch",
+    zlog_warn ("ospf_packet_dup stream %d ospf_packet %d size mismatch",
 	       STREAM_SIZE(op->s), op->length);
 
   /* Reserve space for MD5 authentication that may be added later. */
@@ -250,7 +250,7 @@ ospf_packet_max (struct ospf_interface *oi)
 {
   int max;
 
-  max = oi->ifp->mtu - ospf_packet_authspace(oi);
+  max = OSPF_MTU(oi) - ospf_packet_authspace(oi);
 
   max -= (OSPF_HEADER_SIZE + sizeof (struct ip));
 
@@ -263,7 +263,7 @@ ospf_check_md5_digest (struct ospf_interface *oi, struct stream *s,
                        u_int16_t length)
 {
   unsigned char *ibuf;
-  struct md5_ctx ctx;
+  MD5_CTX ctx;
   unsigned char digest[OSPF_AUTH_MD5_SIZE];
   unsigned char *pdigest;
   struct crypt_key *ck;
@@ -300,10 +300,11 @@ ospf_check_md5_digest (struct ospf_interface *oi, struct stream *s,
     }
       
   /* Generate a digest for the ospf packet - their digest + our digest. */
-  md5_init_ctx (&ctx);
-  md5_process_bytes (ibuf, length, &ctx);
-  md5_process_bytes (ck->auth_key, OSPF_AUTH_MD5_SIZE, &ctx);
-  md5_finish_ctx (&ctx, digest);
+  memset(&ctx, 0, sizeof(ctx));
+  MD5Init(&ctx);
+  MD5Update(&ctx, ibuf, length);
+  MD5Update(&ctx, ck->auth_key, OSPF_AUTH_MD5_SIZE);
+  MD5Final(digest, &ctx);
 
   /* compare the two */
   if (memcmp (pdigest, digest, OSPF_AUTH_MD5_SIZE))
@@ -327,7 +328,7 @@ ospf_make_md5_digest (struct ospf_interface *oi, struct ospf_packet *op)
 {
   struct ospf_header *ospfh;
   unsigned char digest[OSPF_AUTH_MD5_SIZE];
-  struct md5_ctx ctx;
+  MD5_CTX ctx;
   void *ibuf;
   u_int32_t t;
   struct crypt_key *ck;
@@ -341,8 +342,8 @@ ospf_make_md5_digest (struct ospf_interface *oi, struct ospf_packet *op)
 
   /* We do this here so when we dup a packet, we don't have to
      waste CPU rewriting other headers. */
-  t = (time(NULL) & 0xFFFFFFFF);
-  oi->crypt_seqnum = ( t > oi->crypt_seqnum ? t : oi->crypt_seqnum++);
+  t = (time(0) & 0xFFFFFFFF);
+  oi->crypt_seqnum = ( t > oi->crypt_seqnum ? t : oi->crypt_seqnum + 1);
   ospfh->u.crypt.crypt_seqnum = htonl (oi->crypt_seqnum); 
 
   /* Get MD5 Authentication key from auth_key list. */
@@ -355,10 +356,11 @@ ospf_make_md5_digest (struct ospf_interface *oi, struct ospf_packet *op)
     }
 
   /* Generate a digest for the entire packet + our secret key. */
-  md5_init_ctx (&ctx);
-  md5_process_bytes (ibuf, ntohs (ospfh->length), &ctx);
-  md5_process_bytes (auth_key, OSPF_AUTH_MD5_SIZE, &ctx);
-  md5_finish_ctx (&ctx, digest);
+  memset(&ctx, 0, sizeof(ctx));
+  MD5Init(&ctx);
+  MD5Update(&ctx, ibuf, ntohs (ospfh->length));
+  MD5Update(&ctx, auth_key, OSPF_AUTH_MD5_SIZE);
+  MD5Final(digest, &ctx);
 
   /* Append md5 digest to the end of the stream. */
   stream_put (op->s, digest, OSPF_AUTH_MD5_SIZE);
@@ -367,7 +369,7 @@ ospf_make_md5_digest (struct ospf_interface *oi, struct ospf_packet *op)
   op->length = ntohs (ospfh->length) + OSPF_AUTH_MD5_SIZE;
 
   if (stream_get_endp(op->s) != op->length)
-    zlog_warn("ospf_make_md5_digest: length mismatch stream %ld ospf_packet %d", stream_get_endp(op->s), op->length);
+    zlog_warn("ospf_make_md5_digest: length mismatch stream %d ospf_packet %d", stream_get_endp(op->s), op->length);
 
   return OSPF_AUTH_MD5_SIZE;
 }
@@ -598,12 +600,17 @@ ospf_write (struct thread *thread)
 #endif /* WANT_OSPF_WRITE_FRAGMENT */
 
   /* convenience - max OSPF data per packet */
-  maxdatasize = oi->ifp->mtu - sizeof (struct ip);
+  maxdatasize = OSPF_MTU(oi) - sizeof (struct ip);
   
   /* Get one packet from queue. */
   op = ospf_fifo_head (oi->obuf);
   assert (op);
   assert (op->length >= OSPF_HEADER_SIZE);
+
+  if (oi->connected == NULL && !IN_MULTICAST(ntohl(op->dst.s_addr))) {
+    /* on unnumbered interfaces, always use a multicast destination */
+    op->dst.s_addr = htonl (OSPF_ALLSPFROUTERS);
+  }
 
   if (op->dst.s_addr == htonl (OSPF_ALLSPFROUTERS)
       || op->dst.s_addr == htonl (OSPF_ALLDROUTERS))
@@ -659,7 +666,8 @@ ospf_write (struct thread *thread)
     iph.ip_ttl = OSPF_IP_TTL;
   iph.ip_p = IPPROTO_OSPFIGP;
   iph.ip_sum = 0;
-  iph.ip_src.s_addr = oi->address->u.prefix4.s_addr;
+  if (oi->connected)
+    iph.ip_src.s_addr = oi->address->u.prefix4.s_addr;
   iph.ip_dst.s_addr = op->dst.s_addr;
 
   memset (&msg, 0, sizeof (msg));
@@ -672,13 +680,13 @@ ospf_write (struct thread *thread)
   iov[1].iov_base = STREAM_PNT (op->s);
   iov[1].iov_len = op->length;
   
-  /* Sadly we can not rely on kernels to fragment packets because of either
+  /* Sadly we cannot rely on kernels to fragment packets because of either
    * IP_HDRINCL and/or multicast destination being set.
    */
 #ifdef WANT_OSPF_WRITE_FRAGMENT
   if ( op->length > maxdatasize )
     ospf_write_frags (ospf->fd, op, &iph, &msg, maxdatasize, 
-                      oi->ifp->mtu, flags, type);
+                      OSPF_MTU(oi), flags, type);
 #endif /* WANT_OSPF_WRITE_FRAGMENT */
 
   /* send final fragment (could be first) */
@@ -1112,11 +1120,11 @@ ospf_db_desc (struct ip *iph, struct ospf_header *ospfh,
     }
 
   /* Check MTU. */
-  if (ntohs (dd->mtu) > oi->ifp->mtu)
+  if ((OSPF_IF_PARAM(oi, mtu_ignore) == 0) && (ntohs (dd->mtu) > OSPF_MTU(oi)))
     {
       zlog_warn ("Packet[DD]: Neighbor %s MTU %u is larger than [%s]'s MTU %u",
 		 inet_ntoa (nbr->router_id), ntohs (dd->mtu),
-		 IF_NAME (oi), oi->ifp->mtu);
+		 IF_NAME (oi), OSPF_MTU(oi));
       return;
     }
 
@@ -2382,6 +2390,10 @@ ospf_read (struct thread *thread)
   /* associate packet with ospf interface */
   oi = ospf_if_lookup_recv_if (ospf, iph->ip_src);
 
+  /* maybe packet is coming from an unnumbered interface */
+  if (oi == NULL)
+    oi = ospf_get_unnumbered_if(ospf, ifp->ifindex);
+
   /* if no local ospf_interface, 
    * or header area is backbone but ospf_interface is not
    * check for VLINK interface
@@ -2676,7 +2688,7 @@ ospf_make_db_desc (struct ospf_interface *oi, struct ospf_neighbor *nbr,
   if (oi->type == OSPF_IFTYPE_VIRTUALLINK)
     stream_putw (s, 0);
   else
-    stream_putw (s, oi->ifp->mtu);
+    stream_putw (s, OSPF_MTU(oi));
 
   /* Set Options. */
   options = OPTIONS (oi);
@@ -2942,7 +2954,7 @@ ospf_hello_send_sub (struct ospf_interface *oi, struct in_addr *addr)
   struct ospf_packet *op;
   u_int16_t length = OSPF_HEADER_SIZE;
 
-  op = ospf_packet_new (oi->ifp->mtu);
+  op = ospf_packet_new (OSPF_MTU(oi));
 
   /* Prepare OSPF common header. */
   ospf_make_header (OSPF_MSG_HELLO, oi, op->s);
@@ -3045,7 +3057,7 @@ ospf_hello_send (struct ospf_interface *oi)
   if (OSPF_IF_PARAM (oi, passive_interface) == OSPF_IF_PASSIVE)
     return;
 
-  op = ospf_packet_new (oi->ifp->mtu);
+  op = ospf_packet_new (OSPF_MTU(oi));
 
   /* Prepare OSPF common header. */
   ospf_make_header (OSPF_MSG_HELLO, oi, op->s);
@@ -3128,7 +3140,7 @@ ospf_db_desc_send (struct ospf_neighbor *nbr)
   u_int16_t length = OSPF_HEADER_SIZE;
 
   oi = nbr->oi;
-  op = ospf_packet_new (oi->ifp->mtu);
+  op = ospf_packet_new (OSPF_MTU(oi));
 
   /* Prepare OSPF common header. */
   ospf_make_header (OSPF_MSG_DB_DESC, oi, op->s);
@@ -3182,7 +3194,7 @@ ospf_ls_req_send (struct ospf_neighbor *nbr)
   u_int16_t length = OSPF_HEADER_SIZE;
 
   oi = nbr->oi;
-  op = ospf_packet_new (oi->ifp->mtu);
+  op = ospf_packet_new (OSPF_MTU(oi));
 
   /* Prepare OSPF common header. */
   ospf_make_header (OSPF_MSG_LS_REQ, oi, op->s);
@@ -3270,11 +3282,11 @@ ospf_ls_upd_packet_new (struct list *update, struct ospf_interface *oi)
        * Allocate just enough to fit this LSA only, to avoid including other
        * LSAs in fragmented LSA Updates.
        */
-      size = ntohs (lsa->data->length) + (oi->ifp->mtu - ospf_packet_max (oi))
+      size = ntohs (lsa->data->length) + (OSPF_MTU(oi) - ospf_packet_max (oi))
              + OSPF_LS_UPD_MIN_SIZE;
     }
   else
-    size = oi->ifp->mtu;
+    size = OSPF_MTU(oi);
 
   /* XXX Should this be - sizeof(struct ip)?? -gdt */
   if (size > OSPF_MAX_PACKET_SIZE)
@@ -3438,7 +3450,7 @@ ospf_ls_ack_send_list (struct ospf_interface *oi, struct list *ack,
   struct ospf_packet *op;
   u_int16_t length = OSPF_HEADER_SIZE;
 
-  op = ospf_packet_new (oi->ifp->mtu);
+  op = ospf_packet_new (OSPF_MTU(oi));
 
   /* Prepare OSPF common header. */
   ospf_make_header (OSPF_MSG_LS_ACK, oi, op->s);

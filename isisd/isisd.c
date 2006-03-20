@@ -20,6 +20,10 @@
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
 #include <string.h>
 #include <zebra.h>
 
@@ -58,9 +62,18 @@
 #include "spgrid.h"
 u_char DEFAULT_TOPOLOGY_BASEIS[6] = { 0xFE, 0xED, 0xFE, 0xED, 0x00, 0x00 };
 #endif /* TOPOLOGY_GENERATE */
+#define VNL VTY_NEWLINE
 
 struct isis *isis = NULL;
 extern struct thread_master *master;
+
+const char *zroute_name[] =
+{ "system", "kernel", "connected", "static",
+  "rip", "ripng", "ospf", "ospf6", "isis", "bgp", "unknown" };
+
+#define ZROUTE_NAME(x)                                     \
+  (0 < (x) && (x) < ZEBRA_ROUTE_MAX ? zroute_name[(x)] :   \
+   zroute_name[ZEBRA_ROUTE_MAX])
 
 void
 isis_new (unsigned long process_id)
@@ -71,7 +84,6 @@ isis_new (unsigned long process_id)
    * Default values
    */
   isis->max_area_addrs = 3;
-
   isis->process_id = process_id;
   isis->area_list = list_new ();
   isis->init_circ_list = list_new ();
@@ -80,10 +92,12 @@ isis_new (unsigned long process_id)
 #ifdef HAVE_IPV6
   isis->nexthops6 = list_new ();
 #endif /* HAVE_IPV6 */
+  isis->metric_default = DEFAULT_CIRCUIT_METRICS;
   /*
    * uncomment the next line for full debugs
    */
-  /* isis->debugs = 0xFFFF; */
+  /*isis->debugs = 0xFFFF;  I don't want full debug. I has to be configured */
+  isis->zero_age_lifetime = ZERO_AGE_LIFETIME;
 }
 
 struct isis_area *
@@ -135,7 +149,7 @@ isis_area_create ()
 #endif /* TOPOLOGY_GENERATE */
 
   /* FIXME: Think of a better way... */
-  area->min_bcast_mtu = 1497;
+  area->lsp_mtu = area->min_bcast_mtu = MTU_DEFAULT;
 
   return area;
 }
@@ -963,6 +977,129 @@ DEFUN (show_database_detail,
   return CMD_SUCCESS;
 }
 
+void show_isis_routes (struct vty *vty, int level)
+{
+  struct listnode *anode, *vnode, *adnode;
+  struct isis_area *area;
+  struct isis_vertex *vertex;
+  struct isis_dynhn *nh_dyn = NULL;
+  struct isis_adjacency *adj;
+  char buf[BUFSIZ];
+
+  for (ALL_LIST_ELEMENTS_RO (isis->area_list, anode, area))
+    {
+      for (ALL_LIST_ELEMENTS_RO (area->spftree[level]->paths, vnode, vertex))
+        {
+          if (vertex->type > VTYPE_ES)
+            {
+              prefix2str (&vertex->N.prefix, (char *) buf, BUFSIZ);
+              if (vertex->depth > 1)
+                {
+                  vty_out (vty, "%u %s [%u] via ", vertex->depth, buf, vertex->d_N);
+                  for (ALL_LIST_ELEMENTS_RO (vertex->Adj_N, adnode, adj))
+                    {
+                      nh_dyn = dynhn_find_by_id (adj->sysid);
+                      vty_out (vty, "%s, %s%s",(nh_dyn != NULL) ? nh_dyn->name.name :
+                               (u_char *) rawlspid_print (adj->sysid),
+                               adj->circuit->interface->name, VTY_NEWLINE);
+                    }
+                }
+              else
+                {
+                  vty_out (vty, "%s is directly connected%s",  buf,
+                        /*vertex->lsp->adj->circuit->interface->name,*/ VTY_NEWLINE);
+                }
+            }
+        }
+    }
+}
+
+DEFUN (show_ip_route_isis,
+       show_ip_route_isis_cmd,
+       "show ip route isis",
+       SHOW_STR
+       "ip routes information\n")
+{
+/*  struct listnode *node, *nnode, *nhnode;
+  struct isis_area *area;
+  struct route_table *table;
+  struct isis_nexthop *nh;
+  char buf[BUFSIZ];
+  struct isis_route_info *rinfo;
+  struct route_node *rode;*/
+
+  if (isis->area_list->count == 0)
+    return CMD_SUCCESS;
+
+  vty_out (vty, "============ IS-IS routing table ============%s",
+	    VTY_NEWLINE);
+  
+  vty_out (vty, "Level-1:%s", VTY_NEWLINE);
+  show_isis_routes (vty, 0);
+  vty_out (vty, "Level-2:%s", VTY_NEWLINE);
+  show_isis_routes (vty, 1);
+  return CMD_SUCCESS;
+}
+
+/*
+ * 'zero-age-lifetime' command
+ */
+DEFUN (zero_age_lifetime,
+       zero_age_lifetime_cmd,
+       "zero-age-lifetime WORD",
+       "Zero Age Lifetime for LSPs")
+{
+  isis->zero_age_lifetime = atoi(argv[0]);   
+  return CMD_SUCCESS; 
+}
+/*
+ * 'no zero-age-lifetime' command
+ */
+DEFUN (no_zero_age_lifetime,
+       no_zero_age_lifetime_cmd,
+       "no zero-age-lifetime WORD",
+       NO_STR 
+       "Zero Age Lifetime for LSPs")
+{
+  isis->zero_age_lifetime = 60;    
+  return CMD_SUCCESS; 
+}
+
+
+/*
+ * 'max-area-addresses' command
+ */
+DEFUN (max_area_addresses,
+       max_area_addresses_cmd,
+       "max-area-addresses WORD",
+       "Maximum are addresses for IS")
+{
+  int i=atoi(argv[0]);
+  if ((i>=0)&&(i<255))
+    {
+      isis->max_area_addrs=i;
+      return CMD_SUCCESS;
+    }
+  else
+    {
+      vty_out (vty, "maxiumumAreaAddresses should be in range 0-254%s", VTY_NEWLINE);
+      return CMD_WARNING;
+    }
+}
+/*
+ * 'no max-area-addresses' command
+ */
+DEFUN (no_max_area_addresses,
+       no_max_area_addresses_cmd,
+       "no max-area-addresses WORD",
+       NO_STR
+       "Maximum are addresses for IS")
+{
+  isis->max_area_addrs = 3; /*default*/
+  return CMD_SUCCESS;
+}
+
+
 /* 
  * 'router isis' command 
  */
@@ -1658,6 +1795,122 @@ DEFUN (no_topology_baseis,
 
 #endif /* TOPOLOGY_GENERATE */
 
+DEFUN (lsp_mtu,
+       lsp_mtu_cmd,
+       "lsp-mtu WORD",
+       "Maximum LSP MTU\n")
+{
+  struct isis_area *area;
+
+  area = vty->index;
+  assert (area);
+  area->lsp_mtu = atoi(argv[0]);  
+  #ifdef EXTREME_DEBUG
+  zlog_debug("lsp-mtu: %d", area->lsp_mtu);
+  #endif
+
+  return CMD_SUCCESS;
+}
+
+
+DEFUN (no_lsp_mtu,
+       no_lsp_mtu_cmd,
+       "no lsp-mtu",
+       NO_STR
+       "Maximum LSP MTU\n")
+{
+  struct isis_area *area;
+
+  area = vty->index;
+  assert (area);
+  area->lsp_mtu = MTU_DEFAULT;  
+  return CMD_SUCCESS;
+}
+
+/* 
+ *Sec. 7.3.21 : maximumLSPGenerationInterval 
+ */
+DEFUN (lsp_refresh_interval,
+       lsp_refresh_interval_cmd,
+       "lsp-refresh-interval WORD",
+       "Maximum LSP generation interval in seconds\n")
+{
+  struct isis_area *area;
+  int max_interval;
+
+  area = vty->index;
+  assert (area);  
+  max_interval = atoi (argv[0]);
+  if (max_interval > MAX_AGE)
+    {
+      vty_out (vty, "lsp-refresh-interval can not be greater than %d%s", 
+      		MAX_AGE, VTY_NEWLINE);
+      return CMD_WARNING;
+    }	
+  area->lsp_refresh[0] = area->lsp_refresh[1] = atoi (argv[0]);
+
+  if (area->t_lsp_refresh[0])
+    {
+      thread_cancel (area->t_lsp_refresh[0]);
+      thread_execute (master, lsp_refresh_l1, area, 0);
+    }
+
+  if (area->t_lsp_refresh[1])
+    {
+      thread_cancel (area->t_lsp_refresh[1]);
+      thread_execute (master, lsp_refresh_l2, area, 0);
+    }
+
+  return CMD_SUCCESS;  
+}
+
+DEFUN (no_lsp_refresh_interval,
+       no_lsp_refresh_interval_cmd,
+       "no lsp-refresh-interval WORD",
+       NO_STR  
+       "Maximum LSP generation interval in seconds\n")
+{
+  struct isis_area *area;
+
+  area = vty->index;
+  assert (area);
+  area->lsp_refresh[0] = area->lsp_refresh[1] = MAX_LSP_GEN_INTERVAL;
+
+  return CMD_SUCCESS;  
+}
+
+/*
+ *Default circuit metric
+ */
+DEFUN (metric,
+       metric_cmd,
+       "no metric WORD",
+       NO_STR
+       "Default Metric 0-63")
+{
+  int imetric = atoi(argv[0]);
+  if ((imetric >= 0) && (imetric < 64))
+    {
+      isis->metric_default = imetric;
+      return CMD_SUCCESS;
+    }
+  else
+    {
+      zlog_warn ("metric value should be in range 0-63");
+      return CMD_WARNING;
+    }
+}
+
+DEFUN (no_metric,
+       no_metric_cmd,
+       "no metric WORD",
+       NO_STR
+       "Default Metric")
+{
+  isis->metric_default = DEFAULT_CIRCUIT_METRICS;
+  return CMD_SUCCESS;
+}
+
 DEFUN (lsp_lifetime,
        lsp_lifetime_cmd,
        "lsp-lifetime <380-65535>",
@@ -1833,6 +2086,170 @@ ALIAS (no_lsp_lifetime_l2,
        "Maximum LSP lifetime for Level 2 only\n"
        "LSP lifetime for Level 2 only in seconds\n")
 
+
+
+/* Redistribute route command. */
+DEFUN (isis_redistribute_ipv4,
+       isis_redistribute_ipv4_cmd,
+       "redistribute (static|kernel|connected|bgp|ospf|rip) ipv4",
+       "Redistribute\n"
+       "Static route\n"
+       "Kernel route\n"
+       "Connected route\n"
+       "BGP route (ipv4)\n"
+       "OSPF route (ipv4)\n"
+       "RIP route (ipv4)\n"
+      )
+{
+  int type = 0;
+  struct isis_area *area;
+
+  area = vty->index;
+  assert (area);
+
+  type = isis_str2route_type (AFI_IP, argv[0]);
+
+  if (! type)
+    {
+      vty_out (vty, "%% Invalid route type%s", VTY_NEWLINE);
+      return CMD_WARNING;
+    }
+  
+  isis_redistribute_unset (AFI_IP, type);
+  isis_routemap_unset (type);
+  return isis_redistribute_set (AFI_IP, type);
+}
+
+/* No redistribute route command */
+DEFUN (no_isis_redistribute_ipv4,
+       no_isis_redistribute_ipv4_cmd,
+       "no redistribute (static|kernel|connected|bgp|ospf|rip) ipv4",
+       NO_STR
+       "Redistribute\n"
+       "Static route\n"
+       "Kernel route\n"
+       "Connected route\n"
+       "BGP route (ipv4)\n"
+       "OSPF route (ipv4)\n"
+       "RIP route (ipv4)\n"
+      )
+{
+  int type = 0;
+  struct isis_area *area;
+  
+  area = vty->index;
+  assert (area);
+
+  type = isis_str2route_type (AFI_IP, argv[0]);
+  
+  if (! type)
+    {
+      vty_out (vty, "%% Invalid route type%s", VTY_NEWLINE);
+      return CMD_WARNING;
+    }
+  
+  isis_redistribute_unset (AFI_IP, type);
+  isis_routemap_unset (type);
+  
+  return CMD_SUCCESS;
+}
+
+//#ifdef HAVE_IPV6
+DEFUN (isis_redistribute_ipv6,
+       isis_redistribute_ipv6_cmd,
+       "redistribute (static|kernel|connected|bgp|ospf6|ripng) ipv6",
+       "Redistribute (ipv6)\n"
+       "Static route(ipv6)\n"
+       "Kernel route (ipv6)\n"
+       "Connected route (ipv6)\n"
+       "BGP route (ipv6)\n" 
+       "OSPFv3 (ipv6)\n"
+       "RIPng (ipv6)\n"
+       )
+{
+  int type = 0;
+  struct isis_area *area;
+  
+  area = vty->index;
+  assert (area);
+
+  type = isis_str2route_type (AFI_IP6, argv[0]);
+  
+  if (! type)
+    {
+      vty_out (vty, "%% Invalid route type%s", VTY_NEWLINE);
+      return CMD_WARNING;
+    }
+  return isis_redistribute_set (AFI_IP6, type);
+} 
+
+DEFUN (no_isis_redistribute_ipv6,
+       no_isis_redistribute_ipv6_cmd,
+       "no redistribute (static|kernel|connected|bgp|ospf6|ripng) ipv6)",
+       NO_STR
+       "Redistribute\n"
+       "Static route (ipv6)"
+       "Kernel route (ipv6)\n"
+       "Connected route (ipv6)\n"
+       "BGP (ipv6)\n"
+       "OSPFv3 (ipv6)\n"
+       "RIPng (ipv6)\n"
+      )
+{
+  int type = 0;
+  struct isis_area *area;
+  
+  area = vty->index;
+  assert (area);
+  
+  type = isis_str2route_type (AFI_IP6, argv[0]);
+  
+  if (! type)
+    {
+      vty_out (vty, "%% Invalid route type%s", VTY_NEWLINE);
+      return CMD_WARNING;
+    }
+  return isis_redistribute_unset (AFI_IP6, type);
+}
+//#endif
+
+/* Route-map command. */
+DEFUN (isis_redistribute_routemap,
+       isis_redistribute_routemap_cmd,
+       "redistribute (static|kernel|connected|rip|ospf|bgp) ipv4 route-map WORD",
+       "Redistribute ipv4 routes\n"
+       "Static ipv4 routes\n"
+       "Kernel ipv4 routes\n"
+       "Connected ipv4 routes\n"
+       "RIP ipv4 routes\n"
+       "BGP ipv4 routes\n"
+       "Route map reference\n"
+       "Route map name\n"
+      )
+{
+  int type = 0;
+
+  if (strncmp (argv[0], "sta", 3) == 0)
+    type = ZEBRA_ROUTE_STATIC;
+  else if (strncmp (argv[0], "ker", 3) == 0)
+    type = ZEBRA_ROUTE_KERNEL;
+  else if (strncmp (argv[0], "con", 3) == 0)
+    type = ZEBRA_ROUTE_CONNECT;
+  else if (strncmp (argv[0], "rip", 3) == 0)
+    type = ZEBRA_ROUTE_RIP;
+  else if (strncmp (argv[0], "osp", 3) == 0)
+    type = ZEBRA_ROUTE_OSPF;
+  else if (strncmp (argv[0], "bgp", 3) == 0)
+    type = ZEBRA_ROUTE_BGP;
+
+  isis_redistribute_unset (AFI_IP, type);
+  isis_routemap_set (type, argv[1]);
+  
+  return isis_redistribute_set (AFI_IP, type);
+
+}
+
+
 /* IS-IS configuration write function */
 int
 isis_config_write (struct vty *vty)
@@ -1841,6 +2258,7 @@ isis_config_write (struct vty *vty)
 
   if (isis != NULL)
     {
+      int type;
       struct isis_area *area;
       struct listnode *node, *nnode;
       struct listnode *node2, *nnode2;
@@ -1875,21 +2293,68 @@ isis_config_write (struct vty *vty)
 	    vty_out (vty, " metric-style wide%s", VTY_NEWLINE);
 	    write++;
 	  }
+
+
+
+
+
 	/* ISIS - Area is-type (level-1-2 is default) */
-	if (area->is_type == IS_LEVEL_1)
-	  {
-	    vty_out (vty, " is-type level-1%s", VTY_NEWLINE);
-	    write++;
-	  }
-	else
-	  {
-	    if (area->is_type == IS_LEVEL_2)
-	      {
-		vty_out (vty, " is-type level-2-only%s", VTY_NEWLINE);
-		write++;
-	      }
-	  }
-	/* ISIS - Lsp generation interval */
+	switch (area->is_type)
+          {
+            case IS_LEVEL_1:
+              vty_out (vty, " is-type level-1%s", VTY_NEWLINE);
+              write++;
+              break;
+            case IS_LEVEL_2:
+              vty_out (vty, " is-type level-2%s", VTY_NEWLINE);
+              write++;
+              break;
+            case IS_LEVEL_1_AND_2:
+              vty_out (vty, " is-type level-1-2%s", VTY_NEWLINE);
+              write++;
+              break;
+            default:
+              break;
+          }
+ 
+        /* ISIS - Redistribute (type) route-map WORD.*/
+        for (type = 0; type < ZEBRA_ROUTE_MAX; type++)
+          {
+            if (type == ZEBRA_ROUTE_ISIS)
+              continue;
+            
+            if (! isis_zebra_is_redistribute(type))
+              continue;
+
+            if (isis->redist[AFI_IP][type])
+              {
+                if (isis->rmap[type].name)
+                vty_out (vty, " redistribute %s ipv4 route-map %s%s",
+                       ZROUTE_NAME (type), isis->rmap[type].name, VNL);
+                else
+                vty_out (vty, " redistribute %s ipv4%s",
+                         ZROUTE_NAME (type), VNL);
+              }
+            else
+              {
+                if (isis->redist[AFI_IP6][type])
+                  {
+                    if (isis->rmap[type].name)
+                      vty_out (vty, " redistribute %s ipv6 route-map %s%s",
+                               ZROUTE_NAME (type), isis->rmap[type].name, VNL);
+                    else
+                      vty_out (vty, " redistribute %s ipv6%s",
+                               ZROUTE_NAME (type), VNL);
+ 
+                  }
+              }
+          }
+
+
+
+	
+
+	/* ISIS - lsp generation interval, ie, minimumLSPGenerationInterval */
 	if (area->lsp_gen_interval[0] == area->lsp_gen_interval[1])
 	  {
 	    if (area->lsp_gen_interval[0] != LSP_GEN_INTERVAL_DEFAULT)
@@ -1914,6 +2379,33 @@ isis_config_write (struct vty *vty)
 		write++;
 	      }
 	  }
+	/* ISIS - lsp refresh  interval, ie, maximumLSPGenerationInterval */
+	if (area->lsp_refresh[0] == area->lsp_refresh[1])
+	  {
+	    if (area->lsp_refresh[0] != MAX_LSP_GEN_INTERVAL)
+	      {
+		vty_out (vty, " lsp-gen-interval %d%s",
+			 area->lsp_refresh[0], VTY_NEWLINE);
+		write++;
+	      }
+	  }
+	else
+	  {
+	    if (area->lsp_refresh[0] != MAX_LSP_GEN_INTERVAL)
+	      {
+		vty_out (vty, " lsp-gen-interval level-1 %d%s",
+			 area->lsp_refresh[0], VTY_NEWLINE);
+		write++;
+	      }
+	    if (area->lsp_refresh[1] != MAX_LSP_GEN_INTERVAL)
+	      {
+		vty_out (vty, " lsp-gen-interval level-2 %d%s",
+			 area->lsp_refresh[1], VTY_NEWLINE);
+		write++;
+	      }
+	  }
+
+	  
 	/* ISIS - LSP lifetime */
 	if (area->max_lsp_lifetime[0] == area->max_lsp_lifetime[1])
 	  {
@@ -1939,6 +2431,21 @@ isis_config_write (struct vty *vty)
 		write++;
 	      }
 	  }
+	
+	if (area->lsp_mtu != MTU_DEFAULT)
+	  {
+	    vty_out (vty, " lsp-mtu %d%s",
+		     area->lsp_mtu, VTY_NEWLINE);
+	    write++;
+	  }
+	
+	if (isis->metric_default != DEFAULT_CIRCUIT_METRICS)
+	  {
+	    vty_out (vty, " metric %d%s",
+		     isis->metric_default, VTY_NEWLINE);
+	    write++;
+	  }
+	  
 	/* Authentication passwords. */
 	if (area->area_passwd.len > 0)
 	  {
@@ -2007,7 +2514,9 @@ isis_init ()
   install_element (VIEW_NODE, &show_isis_neighbors_cmd);
   install_element (VIEW_NODE, &show_clns_neighbors_detail_cmd);
   install_element (VIEW_NODE, &show_isis_neighbors_detail_cmd);
-
+ 
+  install_element (VIEW_NODE, &show_ip_route_isis_cmd);
+  
   install_element (VIEW_NODE, &show_hostname_cmd);
   install_element (VIEW_NODE, &show_database_cmd);
   install_element (VIEW_NODE, &show_database_detail_cmd);
@@ -2073,10 +2582,20 @@ isis_init ()
   install_element (CONFIG_NODE, &router_isis_cmd);
   install_element (CONFIG_NODE, &no_router_isis_cmd);
 
-  install_default (ISIS_NODE);
+  install_element (ISIS_NODE, &max_area_addresses_cmd);
+  install_element (ISIS_NODE, &no_max_area_addresses_cmd);
+
+  install_element (ISIS_NODE, &zero_age_lifetime_cmd);
+  install_element (ISIS_NODE, &no_zero_age_lifetime_cmd);
 
   install_element (ISIS_NODE, &net_cmd);
   install_element (ISIS_NODE, &no_net_cmd);
+
+  install_element (ISIS_NODE, &lsp_mtu_cmd);
+  install_element (ISIS_NODE, &no_lsp_mtu_cmd);
+  
+  install_element (ISIS_NODE, &metric_cmd);
+  install_element (ISIS_NODE, &no_metric_cmd);
 
   install_element (ISIS_NODE, &is_type_cmd);
   install_element (ISIS_NODE, &no_is_type_cmd);
@@ -2098,6 +2617,9 @@ isis_init ()
   install_element (ISIS_NODE, &lsp_gen_interval_l2_cmd);
   install_element (ISIS_NODE, &no_lsp_gen_interval_l2_cmd);
   install_element (ISIS_NODE, &no_lsp_gen_interval_l2_arg_cmd);
+
+  install_element (ISIS_NODE, &lsp_refresh_interval_cmd);
+  install_element (ISIS_NODE, &no_lsp_refresh_interval_cmd);
 
   install_element (ISIS_NODE, &spf_interval_cmd);
   install_element (ISIS_NODE, &no_spf_interval_cmd);
@@ -2136,4 +2658,5 @@ isis_init ()
   isis_circuit_init ();
   isis_zebra_init ();
   isis_spf_cmds_init ();
+  isis_route_map_init ();
 }

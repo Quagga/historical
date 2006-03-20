@@ -19,6 +19,10 @@
  * Boston, MA 02111-1307, USA.  
  */
 
+/*
+ * Copyright (C) 2005 6WIND  
+ */
+
 #include <zebra.h>
 
 #include "log.h"
@@ -54,19 +58,28 @@ ospf6_prefix_apply_mask (struct ospf6_prefix *op)
 
 void
 ospf6_prefix_options_printbuf (u_int8_t prefix_options, char *buf, int size)
-{
-  snprintf (buf, size, "xxx");
+{ 
+  const char *p, *mc, *la, *nu;
+
+  p = (CHECK_FLAG (prefix_options, OSPF6_PREFIX_OPTION_P) ? "P" : "-");
+  mc = (CHECK_FLAG (prefix_options, OSPF6_PREFIX_OPTION_MC) ? "MC" : "-");
+  la = (CHECK_FLAG (prefix_options, OSPF6_PREFIX_OPTION_LA) ? "LA" : "-");
+  nu = (CHECK_FLAG (prefix_options, OSPF6_PREFIX_OPTION_NU) ? "NU" : "-");
+  snprintf (buf, size, "%s|%s|%s|%s", p, mc, la, nu);
 }
 
 void
 ospf6_capability_printbuf (char capability, char *buf, int size)
 {
   char w, v, e, b;
+  const char *Nt;
+
+  Nt = (capability & OSPF6_ROUTER_BIT_NT ? "Nt" : "--");
   w = (capability & OSPF6_ROUTER_BIT_W ? 'W' : '-');
   v = (capability & OSPF6_ROUTER_BIT_V ? 'V' : '-');
   e = (capability & OSPF6_ROUTER_BIT_E ? 'E' : '-');
   b = (capability & OSPF6_ROUTER_BIT_B ? 'B' : '-');
-  snprintf (buf, size, "----%c%c%c%c", w, v, e, b);
+  snprintf (buf, size, "---%s%c%c%c%c", Nt, w, v, e, b);
 }
 
 void

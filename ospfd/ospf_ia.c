@@ -643,8 +643,13 @@ ospf_ia_routing (struct ospf *ospf,
                     OSPF_EXAMINE_TRANSIT_SUMMARIES_ALL (area, rt, rtrs);
             }
           else
-	    if (IS_DEBUG_OSPF_EVENT)
-	      zlog_debug ("ospf_ia_routing():backbone area NOT found");
+            {
+              if (IS_DEBUG_OSPF_EVENT)
+                zlog_debug ("ospf_ia_routing():backbone area NOT found");
+
+              for (ALL_LIST_ELEMENTS_RO (ospf->areas, node, area))
+                OSPF_EXAMINE_SUMMARIES_ALL (area, rt, rtrs);
+            }
           break;
         case OSPF_ABR_IBM:
         case OSPF_ABR_CISCO:

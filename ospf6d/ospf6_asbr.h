@@ -22,6 +22,9 @@
 #ifndef OSPF6_ASBR_H
 #define OSPF6_ASBR_H
 
+#define EXTERNAL_METRIC_TYPE_1      1
+#define EXTERNAL_METRIC_TYPE_2      2
+
 /* Debug option */
 extern unsigned char conf_debug_ospf6_asbr;
 #define OSPF6_DEBUG_ASBR_ON() \
@@ -63,6 +66,20 @@ struct ospf6_as_external_lsa
   { (E)->bits_metric &= htonl (0xff000000); \
     (E)->bits_metric |= htonl (0x00ffffff) & htonl (C); }
 
+#define OSPF6_REDISTRIBUTE_HELPSTR \
+       "Redistribute information from another routing protocol\n" \
+       "Static routes\n" \
+       "Kernel routes\n" \
+       "Connected\n" \
+       "Routing Information Protocol (RIP) for IPv6\n" \
+       BGP_STR \
+       "DElegated Prefixes (DEP)\n" \
+       "Network Address Translation Protocol Translation (NAT-PT)\n"
+
+struct ospf6_lsa*
+ospf6_external_lsa_create (struct ospf6_route *route);
+void ospf6_asbr_route_from_external_lsa (struct ospf6_lsa *lsa,
+                                         struct ospf6_route *route);
 void ospf6_asbr_lsa_add (struct ospf6_lsa *lsa);
 void ospf6_asbr_lsa_remove (struct ospf6_lsa *lsa);
 void ospf6_asbr_lsentry_add (struct ospf6_route *asbr_entry);
@@ -74,13 +91,22 @@ ospf6_asbr_redistribute_add (int type, int ifindex, struct prefix *prefix,
                              u_int nexthop_num, struct in6_addr *nexthop);
 void
 ospf6_asbr_redistribute_remove (int type, int ifindex, struct prefix *prefix);
+void ospf6_asbr_external_info_add (int type, struct prefix *prefix);
+void ospf6_as_external_lsa_originate (struct ospf6_route *route);
 
 int ospf6_redistribute_config_write (struct vty *vty);
+int ospf6_config_write_dio (struct vty *vty);
+int ospf6_asbr_redistribute_default_set (int type, int mtype, int mvalue);
+struct ospf6_route *
+ospf6_asbr_default_external_info (struct prefix *p, struct ospf6_dio *dio);
 
 void ospf6_asbr_init ();
+void ospf6_dio_init ();
 
 int config_write_ospf6_debug_asbr (struct vty *vty);
 void install_element_ospf6_debug_asbr ();
+
+int ospf6_str2route_type (const char *);
 
 #endif /* OSPF6_ASBR_H */
 

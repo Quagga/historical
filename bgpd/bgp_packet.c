@@ -1382,7 +1382,8 @@ bgp_open_receive (struct peer *peer, bgp_size_t size)
   else
     peer->v_holdtime = send_holdtime;
 
-  peer->v_keepalive = peer->v_holdtime / 3;
+  if (peer->v_keepalive >  peer->v_holdtime / 3)
+    peer->v_keepalive = peer->v_holdtime / 3;
 
   /* Open option part parse. */
   capability = 0;

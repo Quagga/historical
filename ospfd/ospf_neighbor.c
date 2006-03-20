@@ -143,7 +143,7 @@ ospf_nbr_delete (struct ospf_neighbor *nbr)
   if (oi->type == OSPF_IFTYPE_VIRTUALLINK)
     p.u.prefix4 = nbr->router_id;
   else
-  p.u.prefix4 = nbr->src;
+    p.u.prefix4 = nbr->src;
 
   rn = route_node_lookup (oi->nbrs, &p);
   if (rn)
@@ -181,27 +181,49 @@ ospf_nbr_bidirectional (struct in_addr *router_id,
   return 0;
 }
 
-/* Add self to nbr list. */
+/* Initialize self and add to nbr list. */
 void
-ospf_nbr_add_self (struct ospf_interface *oi)
+ospf_nbr_self (struct ospf_interface *oi)
 {
-  struct ospf_neighbor *nbr;
   struct prefix p;
   struct route_node *rn;
 
   p.family = AF_INET;
-  p.prefixlen = 32;
-  p.u.prefix4 = oi->address->u.prefix4;
+  p.prefixlen = IPV4_MAX_BITLEN;
+
+  /* vlinks are indexed by router-id */
+  if (oi->type == OSPF_IFTYPE_VIRTUALLINK)
+    p.u.prefix4 = oi->ospf->router_id;
+  else
+    p.u.prefix4 = oi->address->u.prefix4;
 
   rn = route_node_get (oi->nbrs, &p);
+
+  /* If there is already a pseudo neighbor, route_node_get put an extra lock */
   if (rn->info)
+    route_unlock_node (rn);
+
+  oi->nbr_self->address = *oi->address;
+  oi->nbr_self->priority = OSPF_IF_PARAM (oi, priority);
+
+  oi->nbr_self->router_id = oi->ospf->router_id;
+  oi->nbr_self->src = oi->address->u.prefix4;
+
+  if (oi->area->external_routing != OSPF_AREA_DEFAULT)
+    UNSET_FLAG (oi->nbr_self->options, OSPF_OPTION_E);
+
+  /* Set area flag. */
+  switch (oi->area->external_routing)
     {
-      /* There is already pseudo neighbor. */
-      nbr = rn->info;
-      route_unlock_node (rn);
+    case OSPF_AREA_DEFAULT:
+      SET_FLAG (oi->nbr_self->options, OSPF_OPTION_E);
+      break;
+    case OSPF_AREA_NSSA:
+      SET_FLAG (oi->nbr_self->options, OSPF_OPTION_NP);
+      break;
     }
-  else
-    rn->info = oi->nbr_self;
+
+  rn->info = oi->nbr_self;
 }
 
 /* Get neighbor count by status.
@@ -418,4 +440,4 @@ ospf_nbr_get (struct ospf_interface *oi, struct ospf_header *ospfh,
 
   return nbr;
 }
-  
+

@@ -50,3 +50,4 @@ int bgp_multiaccess_check_v4 (struct in_addr, char *);
 int bgp_config_write_scan_time (struct vty *);
 int bgp_nexthop_check_ebgp (afi_t, struct attr *);
 int bgp_nexthop_self (afi_t, struct attr *);
+void vpn_path_set(char *);

@@ -335,12 +335,17 @@ irdp_if_no_shutdown(struct interface *ifp)
 
 /* Write configuration to user */
 
-void irdp_config_write (struct vty *vty, struct interface *ifp)
+void irdp_config_write (struct vty *vty, struct interface *ifp, int *title)
 {
   struct zebra_if *zi=ifp->info;
   struct irdp_interface *irdp=&zi->irdp;
   struct Adv *adv;
   struct listnode *node;
+
+  if (*title == 0) {
+    vty_out (vty, "interface %s%s", ifp->name, VTY_NEWLINE);
+    *title ++;
+  }
 
   if(irdp->flags & IF_ACTIVE || irdp->flags & IF_SHUTDOWN) {
 

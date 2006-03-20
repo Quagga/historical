@@ -94,7 +94,7 @@ struct ospf_neighbor *ospf_nbr_new (struct ospf_interface *);
 void ospf_nbr_free (struct ospf_neighbor *);
 void ospf_nbr_delete (struct ospf_neighbor *);
 int ospf_nbr_bidirectional (struct in_addr *, struct in_addr *, int);
-void ospf_nbr_add_self (struct ospf_interface *);
+void ospf_nbr_self (struct ospf_interface *);
 int ospf_nbr_count (struct ospf_interface *, int);
 #ifdef HAVE_OPAQUE_LSA
 int ospf_nbr_count_opaque_capable (struct ospf_interface *);

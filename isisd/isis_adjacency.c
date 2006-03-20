@@ -21,6 +21,10 @@
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
 #include <stdio.h>
 #include <limits.h>
 #include <string.h>
@@ -46,6 +50,7 @@
 #include "isisd/isis_dr.h"
 #include "isisd/isis_dynhn.h"
 #include "isisd/isis_pdu.h"
+#include "isisd/isis_events.h"
 
 extern struct isis *isis;
 
@@ -141,13 +146,20 @@ isis_delete_adj (struct isis_adjacency *adj, struct list *adjdb)
 
       listnode_delete (adjdb, adj);
     }
+  isis_free_adj(adj);
+}
 
+void isis_free_adj (void *adj_val)
+{
+  struct isis_adjacency *adj = (struct isis_adjacency *)adj_val;
   if (adj->ipv4_addrs)
     list_delete (adj->ipv4_addrs);
 #ifdef HAVE_IPV6
   if (adj->ipv6_addrs)
     list_delete (adj->ipv6_addrs);
 #endif
+  if (adj->t_expire)
+      THREAD_TIMER_OFF (adj->t_expire);
   if (adj)
     {
       XFREE (MTYPE_ISIS_ADJACENCY, adj);
@@ -156,9 +168,8 @@ isis_delete_adj (struct isis_adjacency *adj, struct list *adjdb)
     {
       zlog_warn ("tried to delete a non-existent adjacency");
     }
-
-  return;
 }
+
 
 void
 isis_adj_state_change (struct isis_adjacency *adj, enum isis_adj_state state,
@@ -276,7 +287,7 @@ isis_adj_expire (struct thread *thread)
   adj->t_expire = NULL;
 
   /* trigger the adj expire event */
-  isis_adj_state_change (adj, ISIS_ADJ_DOWN, "holding time expired");
+  isis_event_adjacency_state_change (adj, ISIS_ADJ_DOWN, "holding time expired");
 
   return 0;
 }

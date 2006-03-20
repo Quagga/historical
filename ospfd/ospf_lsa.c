@@ -48,6 +48,7 @@
 #include "ospfd/ospf_route.h"
 #include "ospfd/ospf_ase.h"
 #include "ospfd/ospf_zebra.h"
+#include "ospfd/ospf_abr.h"
 
 
 u_int32_t
@@ -436,13 +437,14 @@ router_lsa_flags (struct ospf_area *area)
 	  area->shortcut_configured == OSPF_SHORTCUT_ENABLE)
 	SET_FLAG (flags, ROUTER_LSA_SHORTCUT);
 
-  /* ASBR can't exit in stub area. */
-  if (area->external_routing == OSPF_AREA_STUB)
-    UNSET_FLAG (flags, ROUTER_LSA_EXTERNAL);
-  /* If ASBR set External flag */
-  else if (IS_OSPF_ASBR (area->ospf))
+  if ((area->external_routing != OSPF_AREA_STUB) &&
+      (IS_OSPF_ASBR (area->ospf) ||
+       (IS_OSPF_ABR (area->ospf) && area->ospf->anyNSSA)))
     SET_FLAG (flags, ROUTER_LSA_EXTERNAL);
+  else
+    UNSET_FLAG (flags, ROUTER_LSA_EXTERNAL);
 
+  UNSET_FLAG (flags, ROUTER_LSA_NT);
   /* Set ABR dependent flags */
   if (IS_OSPF_ABR (area->ospf))
     {
@@ -451,7 +453,7 @@ router_lsa_flags (struct ospf_area *area)
        * set Nt bit to inform other routers.
        */
       if ( (area->external_routing == OSPF_AREA_NSSA)
-           && (area->NSSATranslatorRole == OSPF_NSSA_ROLE_ALWAYS))
+           && (area->NSSATranslatorState == OSPF_NSSA_TRANSLATE_ENABLED))
         SET_FLAG (flags, ROUTER_LSA_NT);
     }
   return flags;
@@ -517,27 +519,31 @@ lsa_link_ptop_set (struct stream *s, struct ospf_interface *oi)
 	links++;
       }
 
-  if (CONNECTED_DEST_HOST(oi->connected))
+  if (oi->connected)
     {
-      /* Option 1:
-	 link_type = LSA_LINK_TYPE_STUB;
-	 link_id = nbr->address.u.prefix4;
-	 link_data.s_addr = 0xffffffff;
-	 link_cost = o->output_cost; */
-      
-      id.s_addr = oi->connected->destination->u.prefix4.s_addr;
-      mask.s_addr = 0xffffffff;
-      link_info_set (s, id, mask, LSA_LINK_TYPE_STUB, 0, oi->output_cost);
+      /* numbered ptp link */
+      if (CONNECTED_DEST_HOST(oi->connected))
+        {
+          /* Option 1:
+             link_type = LSA_LINK_TYPE_STUB;
+             link_id = nbr->address.u.prefix4;
+             link_data.s_addr = 0xffffffff;
+             link_cost = o->output_cost; */
+
+          id.s_addr = oi->connected->destination->u.prefix4.s_addr;
+          mask.s_addr = 0xffffffff;
+          link_info_set (s, id, mask, LSA_LINK_TYPE_STUB, 0, oi->output_cost);
+        }
+      else
+        {
+           /* Option 2:  We need to include link to a stub
+              network regardless of the state of the neighbor */
+           masklen2ip (oi->address->prefixlen, &mask);
+           id.s_addr = oi->address->u.prefix4.s_addr & mask.s_addr;
+           link_info_set (s, id, mask, LSA_LINK_TYPE_STUB, 0, oi->output_cost);
+        }
+        links++;
     }
-  else
-    {
-       /* Option 2:  We need to include link to a stub
-	 network regardless of the state of the neighbor */
-      masklen2ip (oi->address->prefixlen, &mask);
-      id.s_addr = oi->address->u.prefix4.s_addr & mask.s_addr;
-      link_info_set (s, id, mask, LSA_LINK_TYPE_STUB, 0, oi->output_cost);
-    }
-  links++;
 
   return links;
 }
@@ -585,6 +591,9 @@ lsa_link_loopback_set (struct stream *s, struct ospf_interface *oi)
   /* Describe Type 3 Link. */
   if (oi->state != ISM_Loopback)
     return 0;
+
+  if (oi->address->u.prefix4.s_addr == htonl (INADDR_LOOPBACK))
+     return 0;
 
   mask.s_addr = 0xffffffff;
   id.s_addr = oi->address->u.prefix4.s_addr;
@@ -1291,7 +1300,7 @@ ospf_summary_asbr_lsa_new (struct ospf_area *area, struct prefix *p,
   int length;
 
   if (IS_DEBUG_OSPF (lsa, LSA_GENERATE))
-    zlog_debug ("LSA[Type3]: Create summary-LSA instance");
+    zlog_info ("LSA[Type4]: Create ASBR summary-LSA instance");
 
   /* Create new stream for LSA. */
   s = stream_new (OSPF_MAX_LSA_SIZE);
@@ -1607,6 +1616,102 @@ ospf_external_lsa_new (struct ospf *ospf,
   return new;
 }
 
+/* Originate nssa default. */
+struct ospf_lsa *
+ospf_nssa_default_lsa_originate (struct ospf_area *area)
+{
+  struct ospf_lsa *new;
+  struct external_info ei;
+  
+  ei.p.family = AF_INET;
+  ei.p.prefix.s_addr = OSPF_DEFAULT_DESTINATION;
+  ei.p.prefixlen = 0;
+  ei. nexthop.s_addr = 0;
+  ei.ifindex = IFINDEX_INTERNAL;
+  ei.route_map_set.metric = area->default_cost;
+  ei.route_map_set.metric_type = area->default_metric_type;
+  ei.tag = 0;
+
+  /* Create new nssa default LSA instance. */
+  if ((new = ospf_external_lsa_new (area->ospf, &ei, NULL)) == NULL)
+    {
+      if (IS_DEBUG_OSPF_EVENT)
+        zlog_debug ("LSA[Type7:%s]: Could not originate nssa default-LSA",
+                   inet_ntoa (ei.p.prefix));
+      return NULL;
+    }
+  new->area = area;
+  new->data->type = OSPF_AS_NSSA_LSA;
+  ospf_lsa_checksum (new->data);
+
+  /* Instlal LSA to LSDB. */
+  new = ospf_lsa_install (area->ospf, NULL, new);
+
+  /* Update LSA origination count. */
+  area->ospf->lsa_originate_count++;
+
+  /* Flooding new LSA through area. */
+  ospf_flood_through_area (area, NULL, new);
+
+  if (IS_DEBUG_OSPF (lsa, LSA_GENERATE))
+    {
+      zlog_debug ("LSA[Type%d:%s]: Originate nssa default-LSA %p",
+		 new->data->type, inet_ntoa (new->data->id), new);
+      ospf_lsa_header_dump (new->data);
+    }
+
+  return new;
+}
+
+struct ospf_lsa*
+ospf_nssa_default_lsa_refresh (struct ospf_area *area, struct ospf_lsa *lsa)
+{
+  struct ospf_lsa *new;
+  struct external_info ei;
+  
+  ei.p.family = AF_INET;
+  ei.p.prefix.s_addr = OSPF_DEFAULT_DESTINATION;
+  ei.p.prefixlen = 0;
+  ei. nexthop.s_addr = 0;
+  ei.ifindex = IFINDEX_INTERNAL;
+  ei.route_map_set.metric = area->default_cost;
+  ei.route_map_set.metric_type = area->default_metric_type;
+  ei.tag = 0;
+ 
+  /* Sanity check. */
+  assert (lsa->data);
+
+  if ((new = ospf_external_lsa_new (area->ospf, &ei, &lsa->data->id)) == NULL)
+    {
+      if (IS_DEBUG_OSPF_EVENT)
+        zlog_debug ("LSA[Type7:%s]: Could not originate nssa default-LSA",
+                   inet_ntoa (ei.p.prefix));
+      return NULL;
+    }
+  new->area = area;
+  new->data->type = OSPF_AS_NSSA_LSA;
+  new->data->ls_seqnum = lsa_seqnum_increment (lsa);
+  
+  /* Re-calculate checksum. */
+  ospf_lsa_checksum (new->data);
+
+  ospf_lsa_install (area->ospf, NULL, new);
+  
+  /* Flood LSA through AS. */
+  ospf_flood_through_area (new->area, NULL, new);
+
+  /* Debug logging. */
+  if (IS_DEBUG_OSPF (lsa, LSA_GENERATE))
+    {
+      zlog_debug ("LSA[Type%d:%s]: nssa default-LSA refresh",
+		 new->data->type, inet_ntoa (new->data->id));
+      ospf_lsa_header_dump (new->data);
+    }
+  
+  return new;
+}
+
+
 /* As Type-7 */
 void
 ospf_install_flood_nssa (struct ospf *ospf, 
@@ -1650,11 +1755,15 @@ ospf_install_flood_nssa (struct ospf *ospf,
       new->area = area;
       new->data->type = OSPF_AS_NSSA_LSA;
 
-      /* set P-bit if not ABR */
+      /* set P-bit if this ABR is not a translator and
+       * also based on user "no propagate" command settings
+       */
+      if (! area->nssa_no_propagate &&
+          area->NSSATranslatorState != OSPF_NSSA_TRANSLATE_ENABLED)
+         SET_FLAG(new->data->options, OSPF_OPTION_NP);
+
       if (! IS_OSPF_ABR (ospf))
         {
-	  SET_FLAG(new->data->options, OSPF_OPTION_NP);
-       
 	  /* set non-zero FWD ADDR
        
 	  draft-ietf-ospf-nssa-update-09.txt
@@ -1728,6 +1837,7 @@ ospf_lsa_translated_nssa_new (struct ospf *ospf,
   extnew = (struct as_external_lsa *)(new->data);
    
   /* copy over Type-7 data to new */
+  memcpy (extnew->e[0].metric,ext->e[0].metric,3);
   extnew->e[0].tos = ext->e[0].tos;
   extnew->e[0].route_tag = ext->e[0].route_tag;
   extnew->e[0].fwd_addr.s_addr = ext->e[0].fwd_addr.s_addr;
@@ -1736,46 +1846,8 @@ ospf_lsa_translated_nssa_new (struct ospf *ospf,
   /* add translated flag, checksum and lock new lsa */
   SET_FLAG (new->flags, OSPF_LSA_LOCAL_XLT); /* Translated from 7  */   
   ospf_lsa_checksum (new->data);
-  new = ospf_lsa_lock (new);
   
   return new; 
-}
-
-/* compare type-5 to type-7
- * -1: err, 0: same, 1: different
- */
-int
-ospf_lsa_translated_nssa_compare (struct ospf_lsa *t7, struct ospf_lsa *t5)
-{
-
-  struct as_external_lsa *e5 = (struct as_external_lsa *)t5, 
-                         *e7 = (struct as_external_lsa *)t7;
-  
-  
-  /* sanity checks */
-  if (! ((t5->data->type == OSPF_AS_EXTERNAL_LSA)
-         && (t7->data->type == OSPF_AS_NSSA_LSA)))
-    return -1;
-
-  if (t5->data->id.s_addr != t7->data->id.s_addr)
-    return -1;
-
-  if (t5->data->ls_seqnum != t7->data->ls_seqnum)
-    return LSA_REFRESH_FORCE;
-
-  if (e5->mask.s_addr != e7->mask.s_addr)
-    return LSA_REFRESH_FORCE;
-    
-  if (e5->e[0].fwd_addr.s_addr != e7->e[0].fwd_addr.s_addr)
-    return LSA_REFRESH_FORCE;
-
-  if (e5->e[0].route_tag != e7->e[0].route_tag)
-    return LSA_REFRESH_FORCE;
-    
-  if (GET_METRIC (e5->e[0].metric) != GET_METRIC (e7->e[0].metric))
-    return LSA_REFRESH_FORCE;
-    
-  return LSA_REFRESH_IF_CHANGED;
 }
 
 /* Originate Translated Type-5 for supplied Type-7 NSSA LSA */
@@ -1825,106 +1897,39 @@ ospf_translated_nssa_originate (struct ospf *ospf, struct ospf_lsa *type7)
 }
 
 /* Refresh Translated from NSSA AS-external-LSA. */
-struct ospf_lsa *
-ospf_translated_nssa_refresh (struct ospf *ospf, struct ospf_lsa *type7, 
-                              struct ospf_lsa *type5)
+struct ospf_lsa*
+ospf_translated_nssa_refresh (struct ospf *ospf, struct ospf_lsa *lsa)
 {
-  struct ospf_lsa *new = NULL;
-  
-  /* Sanity checks. */
-  assert (type7 || type5);
-  if (type7)
-    assert (type7->data);
-  if (type5)
-    assert (type5->data);
-  assert (ospf->anyNSSA);
+  struct ospf_lsa *new;
 
-  /* get required data according to what has been given */
-  if (type7 && type5 == NULL)
-    {
-      /* find the translated Type-5 for this Type-7 */
-      struct as_external_lsa *ext = (struct as_external_lsa *)(type7->data);
-      struct prefix_ipv4 p = 
-        { 
-          .prefix = type7->data->id,
-          .prefixlen = ip_masklen (ext->mask),
-          .family = AF_INET,
-        };
-
-      type5 = ospf_external_info_find_lsa (ospf, &p);
-    }
-  else if (type5 && type7 == NULL)
-    {
-      /* find the type-7 from which supplied type-5 was translated,
-       * ie find first type-7 with same LSA Id.
-       */
-      struct listnode *ln, *lnn;
-      struct route_node *rn;
-      struct ospf_lsa *lsa;
-      struct ospf_area *area;
-          
-      for (ALL_LIST_ELEMENTS (ospf->areas, ln, lnn, area))
-        {
-          if (area->external_routing != OSPF_AREA_NSSA 
-              && !type7)
-            continue;
-            
-          LSDB_LOOP (NSSA_LSDB(area), rn, lsa)
-            {
-              if (lsa->data->id.s_addr == type5->data->id.s_addr)
-                {
-                  type7 = lsa;
-                  break;
-                }
-            }
-        }
-    }
-
-  /* do we have type7? */
-  if (!type7)
-    {
-      if (IS_DEBUG_OSPF_NSSA)
-        zlog_debug ("ospf_translated_nssa_refresh(): no Type-7 found for "
-                   "Type-5 LSA Id %s",
-                   inet_ntoa (type7->data->id));
-      return NULL;
-    }
-
-  /* do we have valid translated type5? */
-  if (type5 == NULL || !CHECK_FLAG (type5->flags, OSPF_LSA_LOCAL_XLT) )
-    {
-      if (IS_DEBUG_OSPF_NSSA)
-        zlog_debug ("ospf_translated_nssa_refresh(): No translated Type-5 "
-                   "found for Type-7 with Id %s",
-                   inet_ntoa (type7->data->id));
-      return NULL;
-    }
-
-  /* Delete LSA from neighbor retransmit-list. */
-  ospf_ls_retransmit_delete_nbr_as (ospf, type5);
-  
-  /* create new translated LSA */
-  if ( (new = ospf_lsa_translated_nssa_new (ospf, type7)) == NULL)
+    /* create new translated LSA */
+  if ( (new = ospf_lsa_translated_nssa_new (ospf, lsa)) == NULL)
     {
       if (IS_DEBUG_OSPF_NSSA)
         zlog_debug ("ospf_translated_nssa_refresh(): Could not translate "
                    "Type-7 for %s to Type-5",
-                   inet_ntoa (type7->data->id));
+                   inet_ntoa (lsa->data->id));
       return NULL;
     }
-
-  if ( !(new = ospf_lsa_install (ospf, NULL, new)) )
-    {
-      if (IS_DEBUG_OSPF_NSSA)
-        zlog_debug ("ospf_translated_nssa_refresh(): Could not install "
-                   "translated LSA, Id %s",
-                   inet_ntoa (new->data->id));
-      return NULL;
-    }
+ 
+  new->data->ls_seqnum = lsa_seqnum_increment (lsa);
   
-  /* Flood LSA through area. */
+  /* Re-calculate checksum. */
+  ospf_lsa_checksum (new->data);
+
+  ospf_lsa_install (ospf, NULL, new);
+  
+  /* Flood LSA through AS. */
   ospf_flood_through_as (ospf, NULL, new);
 
+  /* Debug logging. */
+  if (IS_DEBUG_OSPF (lsa, LSA_GENERATE))
+    {
+      zlog_debug ("LSA[Type%d:%s]: translated nssa refresh",
+		 new->data->type, inet_ntoa (new->data->id));
+      ospf_lsa_header_dump (new->data);
+    }
+  
   return new;
 }
 
@@ -2273,6 +2278,17 @@ ospf_external_lsa_refresh (struct ospf *ospf, struct ospf_lsa *lsa,
       return;
     }
 
+  if ( CHECK_FLAG (lsa->flags, OSPF_LSA_LOCAL_XLT) )
+    {
+      new = ospf_external_lsa_new (ospf, ei, &lsa->data->id);
+      int ret;
+      ret = ospf_abr_existing_local_type5_more_preferred (new, lsa);
+      ospf_lsa_discard (new);
+      /* if Existing Type7 lsa is more preferred than this Type5 then return */
+      if (ret > 0) 
+        return;
+    }
+
   /* Delete LSA from neighbor retransmit-list. */
   ospf_ls_retransmit_delete_nbr_as (ospf, lsa);
 
@@ -2339,6 +2355,12 @@ ospf_router_lsa_install (struct ospf *ospf,
      the shortest path calculations for each area (not just the
      area whose link-state database has changed). 
   */
+
+  /* Check the NT bit in the recieved router lsa, for nssa
+   * translator election by scheduling the abr task
+   */
+  ospf_schedule_abr_task (ospf);
+
   if (rt_recalc)
     ospf_spf_calculate_schedule (ospf);
 
@@ -2490,10 +2512,10 @@ ospf_external_lsa_install (struct ospf *ospf, struct ospf_lsa *new,
         return new;
       else
         {
-          /* Try refresh type-5 translated LSA for this LSA, if one exists.
-           * New translations will be taken care of by the abr_task.
-           */ 
-          ospf_translated_nssa_refresh (ospf, new, NULL);
+          /* try to translate the new installed type7 lsa by scheduling
+           * the abr task
+           */
+          ospf_schedule_abr_task (ospf);
         }
     }
 
@@ -2501,7 +2523,13 @@ ospf_external_lsa_install (struct ospf *ospf, struct ospf_lsa *new,
    * Leave Translated LSAs alone if NSSA is enabled
    */
   if (IS_LSA_SELF (new) && !CHECK_FLAG (new->flags, OSPF_LSA_LOCAL_XLT ) )
-    ospf_refresher_register_lsa (ospf, new);
+    {
+      ospf_refresher_register_lsa (ospf, new);
+      /* calculate cost and type of type7 aggregate based on the
+       * the locally originated type5 lsa by scheduling the abr task
+       */
+      ospf_schedule_abr_task (ospf);
+    }
 
   return new;
 }
@@ -3596,11 +3624,11 @@ ospf_refresher_register_lsa (struct ospf *ospf, struct ospf_lsa *lsa)
       if (LS_AGE (lsa) == 0 &&
 	  ntohl (lsa->data->ls_seqnum) == OSPF_INITIAL_SEQUENCE_NUMBER)
 	/* Randomize first update by  OSPF_LS_REFRESH_SHIFT factor */ 
-	delay = OSPF_LS_REFRESH_SHIFT + (random () % OSPF_LS_REFRESH_TIME);
+	delay = OSPF_LS_REFRESH_SHIFT + (rand () % OSPF_LS_REFRESH_TIME);
       else
 	/* Randomize another updates by +-OSPF_LS_REFRESH_JITTER factor */
 	delay = OSPF_LS_REFRESH_TIME - LS_AGE (lsa) - OSPF_LS_REFRESH_JITTER
-	  + (random () % (2*OSPF_LS_REFRESH_JITTER)); 
+	  + (rand () % (2*OSPF_LS_REFRESH_JITTER)); 
 
       if (delay < 0)
 	delay = 0;

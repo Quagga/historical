@@ -21,13 +21,13 @@ Boston, MA 02111-1307, USA.  */
 int bgp_if_update_all ();
 int bgp_config_write_redistribute (struct vty *, struct bgp *, afi_t, safi_t,
 				   int *);
-void bgp_zebra_announce (struct prefix *, struct bgp_info *, struct bgp *);
-void bgp_zebra_withdraw (struct prefix *, struct bgp_info *);
+void bgp_zebra_announce (struct prefix *, struct bgp_info *, struct bgp *, safi_t);
+void bgp_zebra_withdraw (struct prefix *, struct bgp_info *, safi_t);
 
-int bgp_redistribute_set (struct bgp *, afi_t, int);
+int bgp_redistribute_set (struct bgp *, afi_t, int, int, safi_t);
 int bgp_redistribute_rmap_set (struct bgp *, afi_t, int, const char *);
 int bgp_redistribute_metric_set (struct bgp *, afi_t, int, u_int32_t);
-int bgp_redistribute_unset (struct bgp *, afi_t, int);
+int bgp_redistribute_unset (struct bgp *, afi_t, int, int, safi_t);
 int bgp_redistribute_routemap_unset (struct bgp *, afi_t, int);
 int bgp_redistribute_metric_unset (struct bgp *, afi_t, int);
 

@@ -77,7 +77,7 @@ ospf_router_id_update_zebra (int command, struct zclient *zclient,
   return 0;
 }
 
-/* Inteface addition message from zebra. */
+/* Interface addition message from zebra. */
 int
 ospf_interface_add (int command, struct zclient *zclient, zebra_size_t length)
 {
@@ -258,6 +258,10 @@ ospf_interface_address_add (int command, struct zclient *zclient,
   if (c == NULL)
     return 0;
 
+  if (c->address->family == AF_INET
+      && !CHECK_FLAG(c->flags,ZEBRA_IFA_SECONDARY))
+    IF_OSPF_IF_INFO (c->ifp)->ipv4_addr_count++;
+
   ospf = ospf_lookup ();
   if (ospf != NULL)
     ospf_if_update (ospf);
@@ -289,9 +293,15 @@ ospf_interface_address_delete (int command, struct zclient *zclient,
   p = *c->address;
   p.prefixlen = IPV4_MAX_PREFIXLEN;
 
+  if (c->address->family == AF_INET
+      && !CHECK_FLAG(c->flags,ZEBRA_IFA_SECONDARY))
+    IF_OSPF_IF_INFO (c->ifp)->ipv4_addr_count--;
+
   rn = route_node_lookup (IF_OIFS (ifp), &p);
-  if (!rn)
+  if (!rn) {
+    connected_free (c);
     return 0;
+  }
 
   assert (rn->info);
   oi = rn->info;
@@ -465,7 +475,7 @@ ospf_zebra_add_discard (struct prefix_ipv4 *p)
   if (zclient->redist[ZEBRA_ROUTE_OSPF])
     {
       api.type = ZEBRA_ROUTE_OSPF;
-      api.flags = ZEBRA_FLAG_BLACKHOLE;
+      api.flags = ZEBRA_FLAG_REJECT;
       api.message = 0;
       SET_FLAG (api.message, ZAPI_MESSAGE_NEXTHOP);
       api.nexthop_num = 0;
@@ -483,7 +493,7 @@ ospf_zebra_delete_discard (struct prefix_ipv4 *p)
   if (zclient->redist[ZEBRA_ROUTE_OSPF])
     {
       api.type = ZEBRA_ROUTE_OSPF;
-      api.flags = ZEBRA_FLAG_BLACKHOLE;
+      api.flags = ZEBRA_FLAG_REJECT;
       api.message = 0;
       SET_FLAG (api.message, ZAPI_MESSAGE_NEXTHOP);
       api.nexthop_num = 0;
@@ -614,9 +624,10 @@ ospf_redistribute_default_set (struct ospf *ospf, int originate,
                metric_type (ospf, DEFAULT_ROUTE),
                metric_value (ospf, DEFAULT_ROUTE));
 
-  if (ospf->router_id.s_addr == 0)
-    ospf->external_origin |= (1 << DEFAULT_ROUTE);
-  else
+  if (! CHECK_FLAG (ospf->external_origin, (1 << DEFAULT_ROUTE)))
+    SET_FLAG (ospf->external_origin, (1 << DEFAULT_ROUTE));
+
+  if (ospf->router_id.s_addr != 0)
     thread_add_timer (master, ospf_default_originate_timer,
                       &ospf->default_originate, 1);
 
@@ -836,30 +847,33 @@ ospf_zebra_read_ipv4 (int command, struct zclient *zclient,
         
       ei = ospf_external_info_add (api.type, p, ifindex, nexthop);
 
-      if (ospf->router_id.s_addr == 0)
-        /* Set flags to generate AS-external-LSA originate event
-           for each redistributed protocols later. */
-        ospf->external_origin |= (1 << api.type);
-      else
-        {
-          if (ei)
-            {
-              if (is_prefix_default (&p))
-                ospf_external_lsa_refresh_default (ospf);
-              else
-                {
-                  struct ospf_lsa *current;
+      /* Set flags to generate AS-external-LSA originate event 
+         for each redistributed protocols later. */
+      if (! CHECK_FLAG (ospf->external_origin, (1 << api.type)))
+        SET_FLAG (ospf->external_origin, (1 << api.type));
 
-                  current = ospf_external_info_find_lsa (ospf, &ei->p);
-                  if (!current)
-                    ospf_external_lsa_originate (ospf, ei);
-                  else if (IS_LSA_MAXAGE (current))
-                    ospf_external_lsa_refresh (ospf, current,
-                                               ei, LSA_REFRESH_FORCE);
-                  else
-                    zlog_warn ("ospf_zebra_read_ipv4() : %s already exists",
-                               inet_ntoa (p.prefix));
-                }
+      if (ei && ospf->router_id.s_addr != 0)
+        {
+          if (IS_DEBUG_OSPF_EVENT)
+            zlog_debug ("ospf_zebra_read_ipv4 : ei info type - %d, Prefix - %s",
+                       ei->type, inet_ntoa (ei->p.prefix));
+
+          if (is_prefix_default (&p))
+            ospf_external_lsa_refresh_default (ospf);
+          else
+            {
+              struct ospf_lsa *current;
+
+              current = ospf_external_info_find_lsa (ospf, &ei->p);
+              if (!current)
+                ospf_external_lsa_originate (ospf, ei);
+              else if (IS_LSA_MAXAGE (current) ||
+                       CHECK_FLAG (current->flags, OSPF_LSA_LOCAL_XLT))
+                ospf_external_lsa_refresh (ospf, current, ei, 
+                                           LSA_REFRESH_FORCE);
+              else
+                zlog_warn ("ospf_zebra_read_ipv4() : %s already exists",
+                           inet_ntoa (p.prefix));
             }
         }
     }
@@ -1076,21 +1090,39 @@ ospf_prefix_list_update (struct prefix_list *plist)
     {
       /* Update filter-list in. */
       if (PREFIX_NAME_IN (area))
-        if (strcmp (PREFIX_NAME_IN (area), plist->name) == 0)
-          {
-            PREFIX_LIST_IN (area) =
+        {
+          if (plist == NULL)
+            {
+              PREFIX_LIST_IN (area) =
               prefix_list_lookup (AFI_IP, PREFIX_NAME_IN (area));
-            abr_inv++;
-          }
-
+              if (PREFIX_LIST_IN (area) == NULL)
+                abr_inv++;
+            }
+          else if (strcmp (PREFIX_NAME_IN (area), plist->name) == 0)
+            {
+              PREFIX_LIST_IN (area) =
+              prefix_list_lookup (AFI_IP, PREFIX_NAME_IN (area));
+              abr_inv++;
+            }
+        }
       /* Update filter-list out. */
       if (PREFIX_NAME_OUT (area))
-        if (strcmp (PREFIX_NAME_OUT (area), plist->name) == 0)
-          {
-            PREFIX_LIST_IN (area) =
+        {
+          if (plist == NULL)
+            {
+              PREFIX_LIST_OUT (area) =
               prefix_list_lookup (AFI_IP, PREFIX_NAME_OUT (area));
-            abr_inv++;
-          }
+              if (PREFIX_LIST_OUT (area) == NULL)
+                abr_inv++;
+            }
+
+          else if (strcmp (PREFIX_NAME_OUT (area), plist->name) == 0)
+            {
+              PREFIX_LIST_OUT (area) =
+              prefix_list_lookup (AFI_IP, PREFIX_NAME_OUT (area));
+              abr_inv++;
+            }
+        }
     }
 
   /* Schedule ABR task. */

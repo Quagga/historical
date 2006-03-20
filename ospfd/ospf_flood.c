@@ -187,7 +187,8 @@ ospf_process_self_originated_lsa (struct ospf *ospf,
        if ( (new->data->type == OSPF_AS_EXTERNAL_LSA)
              && CHECK_FLAG (new->flags, OSPF_LSA_LOCAL_XLT))
          {
-           ospf_translated_nssa_refresh (ospf, NULL, new);
+           /* schedule the abr task to refresh the nssa translated lsa */
+           ospf_schedule_abr_task (ospf);
            return;
          }
       ei = ospf_external_info_check (new);

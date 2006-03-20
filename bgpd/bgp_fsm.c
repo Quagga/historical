@@ -68,7 +68,7 @@ bgp_start_jitter (int time)
   return ((rand () % (time + 1)) - (time / 2));
 }
 
-/* Hook function called after bgp event is occered.  And vty's
+/* Hook function called after bgp event is occured.  And vty's
    neighbor command invoke this function after making neighbor
    structure. */
 void
@@ -102,7 +102,7 @@ bgp_timer_set (struct peer *peer)
       break;
 
     case Connect:
-      /* After start timer is expired, the peer moves to Connnect
+      /* After start timer is expired, the peer moves to Connect
          status.  Make sure start timer is off and connect timer is
          on. */
       BGP_TIMER_OFF (peer->t_start);
@@ -424,7 +424,7 @@ bgp_stop (struct peer *peer)
 			  peer->host, peer->bgp->stalepath_time);
 	    }
 	  BGP_TIMER_ON (peer->t_gr_restart, bgp_graceful_restart_timer_expire,
-			peer->v_gr_restart);
+			peer->bgp->restart_time);
 	  BGP_TIMER_ON (peer->t_gr_stale, bgp_graceful_stale_timer_expire,
 			peer->bgp->stalepath_time);
 	}
@@ -787,7 +787,10 @@ bgp_establish (struct peer *peer)
       }
 
   if (nsf_af_count)
-    SET_FLAG (peer->sflags, PEER_STATUS_NSF_MODE);
+    {
+    	SET_FLAG (peer->sflags, PEER_STATUS_NSF_MODE);
+	SET_FLAG (peer->sflags, PEER_STATUS_NSF_WAIT);
+    }
   else
     {
       UNSET_FLAG (peer->sflags, PEER_STATUS_NSF_MODE);

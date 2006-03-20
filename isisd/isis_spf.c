@@ -21,6 +21,10 @@
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
+/*
+ * Copyright (C) 2006 6WIND
+ */
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <zebra.h>
@@ -461,7 +465,7 @@ isis_spf_add_local (struct isis_spftree *spftree, enum vertextype vtype,
 		    int family)
 {
   struct isis_vertex *vertex;
-
+  
   vertex = isis_find_vertex (spftree->tents, id, vtype);
 
   if (vertex)
@@ -491,14 +495,14 @@ add2tent:
 
 static void
 process_N (struct isis_spftree *spftree, enum vertextype vtype, void *id,
-	   u_int16_t dist, u_int16_t depth, struct isis_adjacency *adj,
+	   u_int16_t dist, u_int16_t depth, struct list *Adj_N,
 	   int family)
 {
   struct isis_vertex *vertex;
 #ifdef EXTREME_DEBUG
   u_char buff[255];
 #endif
-
+  
   /* C.2.6 b)    */
   if (dist > MAX_PATH_METRIC)
     return;
@@ -525,8 +529,7 @@ process_N (struct isis_spftree *spftree, enum vertextype vtype, void *id,
 #endif /* EXTREME_DEBUG */
       if (vertex->d_N == dist)
 	{
-	  if (adj)
-	    listnode_add (vertex->Adj_N, adj);
+	    list_add_list (vertex->Adj_N, Adj_N);
 	  /*      2) */
 	  if (listcount (vertex->Adj_N) > ISIS_MAX_PATH_SPLITS)
 	    remove_excess_adjs (vertex->Adj_N);
@@ -544,7 +547,8 @@ process_N (struct isis_spftree *spftree, enum vertextype vtype, void *id,
 	}
     }
 
-  isis_spf_add2tent (spftree, vtype, id, adj, dist, depth, family);
+  vertex = isis_spf_add2tent (spftree, vtype, id, NULL, dist, depth, family);
+  list_add_list (vertex->Adj_N, Adj_N);  
   return;
 }
 
@@ -553,7 +557,7 @@ process_N (struct isis_spftree *spftree, enum vertextype vtype, void *id,
  */
 static int
 isis_spf_process_lsp (struct isis_spftree *spftree, struct isis_lsp *lsp,
-		      uint16_t cost, uint16_t depth, int family)
+		      struct isis_vertex *vertex , int family)
 {
   struct listnode *node, *fragnode = NULL;
   u_int16_t dist;
@@ -565,9 +569,8 @@ isis_spf_process_lsp (struct isis_spftree *spftree, struct isis_lsp *lsp,
   struct ipv6_reachability *ip6reach;
 #endif /* HAVE_IPV6 */
 
-
-  if (!lsp->adj)
-    return ISIS_WARNING;
+  if (lsp->purged)
+    return ISIS_OK;	
   if (lsp->tlv_data.nlpids == NULL || !speaks (lsp->tlv_data.nlpids, family))
     return ISIS_OK;
 
@@ -589,11 +592,11 @@ lspfragloop:
 	      /* Two way connectivity */
 	      if (!memcmp (is_neigh->neigh_id, isis->sysid, ISIS_SYS_ID_LEN))
 		continue;
-	      dist = cost + is_neigh->metrics.metric_default;
+	      dist = vertex->d_N + is_neigh->metrics.metric_default;
 	      vtype = LSP_PSEUDO_ID (is_neigh->neigh_id) ? VTYPE_PSEUDO_IS
 		: VTYPE_NONPSEUDO_IS;
 	      process_N (spftree, vtype, (void *) is_neigh->neigh_id, dist,
-			 depth + 1, lsp->adj, family);
+			 vertex->depth + 1, vertex->Adj_N, family);
 	    }
 	}
       if (family == AF_INET && lsp->tlv_data.ipv4_int_reachs)
@@ -602,12 +605,12 @@ lspfragloop:
           for (ALL_LIST_ELEMENTS_RO (lsp->tlv_data.ipv4_int_reachs, 
                                      node, ipreach))
 	    {
-	      dist = cost + ipreach->metrics.metric_default;
+	      dist = vertex->d_N + ipreach->metrics.metric_default;
 	      vtype = VTYPE_IPREACH_INTERNAL;
 	      prefix.u.prefix4 = ipreach->prefix;
 	      prefix.prefixlen = ip_masklen (ipreach->mask);
-	      process_N (spftree, vtype, (void *) &prefix, dist, depth + 1,
-			 lsp->adj, family);
+	      process_N (spftree, vtype, (void *) &prefix, dist, vertex->depth + 1,
+			 vertex->Adj_N, family);
 	    }
 	}
 
@@ -617,12 +620,12 @@ lspfragloop:
           for (ALL_LIST_ELEMENTS_RO (lsp->tlv_data.ipv4_ext_reachs,
                                      node, ipreach))
 	    {
-	      dist = cost + ipreach->metrics.metric_default;
+	      dist = vertex->d_N + ipreach->metrics.metric_default;
 	      vtype = VTYPE_IPREACH_EXTERNAL;
 	      prefix.u.prefix4 = ipreach->prefix;
 	      prefix.prefixlen = ip_masklen (ipreach->mask);
-	      process_N (spftree, vtype, (void *) &prefix, dist, depth + 1,
-			 lsp->adj, family);
+	      process_N (spftree, vtype, (void *) &prefix, dist, vertex->depth + 1,
+			 vertex->Adj_N, family);
 	    }
 	}
 #ifdef HAVE_IPV6
@@ -632,14 +635,14 @@ lspfragloop:
           for (ALL_LIST_ELEMENTS_RO (lsp->tlv_data.ipv6_reachs, 
                                      node, ip6reach))
 	    {
-	      dist = cost + ip6reach->metric;
+	      dist = vertex->d_N + ntohl(ip6reach->metric);
 	      vtype = (ip6reach->control_info & CTRL_INFO_DISTRIBUTION) ?
 		VTYPE_IP6REACH_EXTERNAL : VTYPE_IP6REACH_INTERNAL;
 	      prefix.prefixlen = ip6reach->prefix_len;
 	      memcpy (&prefix.u.prefix6.s6_addr, ip6reach->prefix,
 		      PSIZE (ip6reach->prefix_len));
-	      process_N (spftree, vtype, (void *) &prefix, dist, depth + 1,
-			 lsp->adj, family);
+	      process_N (spftree, vtype, (void *) &prefix, dist, vertex->depth + 1,
+			 vertex->Adj_N, family);
 	    }
 	}
 #endif /* HAVE_IPV6 */
@@ -667,6 +670,9 @@ isis_spf_process_pseudo_lsp (struct isis_spftree *spftree,
   struct listnode *node, *nnode, *fragnode = NULL;
   struct is_neigh *is_neigh;
   enum vertextype vtype;
+
+  if (lsp->purged)
+      return 0;
 
 pseudofragloop:
 
@@ -899,7 +905,7 @@ isis_spf_preload_tent (struct isis_spftree *spftree,
  */
 static void
 add_to_paths (struct isis_spftree *spftree, struct isis_vertex *vertex,
-	      struct isis_area *area)
+	      struct isis_area *area, int level)
 {
 #ifdef EXTREME_DEBUG
   u_char buff[BUFSIZ];
@@ -915,7 +921,7 @@ add_to_paths (struct isis_spftree *spftree, struct isis_vertex *vertex,
     {
       if (listcount (vertex->Adj_N) > 0)
 	isis_route_create ((struct prefix *) &vertex->N.prefix,
-			   vertex->d_N, vertex->depth, vertex->Adj_N, area);
+			   vertex->d_N, vertex->depth, vertex->Adj_N, area, level);
       else if (isis->debugs & DEBUG_SPF_EVENTS)
 	zlog_debug ("ISIS-Spf: no adjacencies do not install route");
     }
@@ -980,7 +986,7 @@ isis_run_spf (struct isis_area *area, int level, int family)
       list_delete_node (spftree->tents, node);
       if (isis_find_vertex (spftree->paths, vertex->N.id, vertex->type))
 	continue;
-      add_to_paths (spftree, vertex, area);
+      add_to_paths (spftree, vertex, area, level);
       if (vertex->type == VTYPE_PSEUDO_IS ||
 	  vertex->type == VTYPE_NONPSEUDO_IS)
 	{
@@ -997,8 +1003,7 @@ isis_run_spf (struct isis_area *area, int level, int family)
 		}
 	      else
 		{
-		  isis_spf_process_lsp (spftree, lsp, vertex->d_N,
-					vertex->depth, family);
+		  isis_spf_process_lsp (spftree, lsp, vertex, family);
 		}
 	    }
 	  else

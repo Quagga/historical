@@ -23,17 +23,18 @@
 #ifndef _ZEBRA_RT_H
 #define _ZEBRA_RT_H
 
-int kernel_add_ipv4 (struct prefix *, struct rib *);
-int kernel_delete_ipv4 (struct prefix *, struct rib *);
+int kernel_add_ipv4 (struct prefix *, struct rib *, int vrf_id, safi_t safi);
+int kernel_delete_ipv4 (struct prefix *, struct rib *, int vrf_id, safi_t safi);
 int kernel_add_route (struct prefix_ipv4 *, struct in_addr *, int, int);
 int kernel_address_add_ipv4 (struct interface *, struct connected *);
 int kernel_address_delete_ipv4 (struct interface *, struct connected *);
 
 #ifdef HAVE_IPV6
-int kernel_add_ipv6 (struct prefix *, struct rib *);
-int kernel_delete_ipv6 (struct prefix *, struct rib *);
+int kernel_add_ipv6 (struct prefix *, struct rib *, int vrf_id, safi_t safi);
+int kernel_delete_ipv6 (struct prefix *, struct rib *, int vrf_id, safi_t safi);
 int kernel_delete_ipv6_old (struct prefix_ipv6 *dest, struct in6_addr *gate,
-			    unsigned int index, int flags, int table);
+			    unsigned int index, int flags, int table, 
+			    safi_t safi);
 
 #endif /* HAVE_IPV6 */
 

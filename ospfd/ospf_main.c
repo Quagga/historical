@@ -21,6 +21,7 @@
  */
 
 #include <zebra.h>
+#include <string.h>
 
 #include <lib/version.h>
 #include "getopt.h"
@@ -36,8 +37,14 @@
 #include "stream.h"
 #include "log.h"
 #include "memory.h"
+#include "zclient.h"
 #include "privs.h"
 #include "sigevent.h"
+
+#if defined(HAVE_SNMP) && defined(FORCE_SMUX)
+#include <asn1.h>
+#include "smux.h"
+#endif
 
 #include "ospfd/ospfd.h"
 #include "ospfd/ospf_interface.h"
@@ -48,6 +55,9 @@
 #include "ospfd/ospf_dump.h"
 #include "ospfd/ospf_zebra.h"
 #include "ospfd/ospf_vty.h"
+
+/* OSPF file name */
+static char ospf_vtysh_path[sizeof(OSPF_VTYSH_PATH) + 20] = OSPF_VTYSH_PATH;
 
 /* ospfd privileges */
 zebra_capabilities_t _caps_p [] = 
@@ -85,6 +95,7 @@ struct option longopts[] =
   { "help",        no_argument,       NULL, 'h'},
   { "vty_addr",    required_argument, NULL, 'A'},
   { "vty_port",    required_argument, NULL, 'P'},
+  { "vpn",         required_argument, NULL, 'V'},
   { "user",        required_argument, NULL, 'u'},
   { "group",       required_argument, NULL, 'g'},
   { "apiserver",   no_argument,       NULL, 'a'},
@@ -123,6 +134,7 @@ Daemon which manages OSPF.\n\n\
 -g, --group        Group to run as\n\
 -a. --apiserver    Enable OSPF apiserver\n\
 -v, --version      Print program version\n\
+-V, --vpn_id       Number of the routing table\n\
 -h, --help         Display this help and exit\n\
 \n\
 Report bugs to %s\n", progname, ZEBRA_BUG_ADDRESS);
@@ -180,9 +192,12 @@ int
 main (int argc, char **argv)
 {
   char *p;
+  char fnt[] = ".";
+  char *vpn_id_tmp = NULL;
   char *vty_addr = NULL;
   int vty_port = OSPF_VTY_PORT;
   int daemon_mode = 0;
+  int temp = 0;
   char *config_file = NULL;
   char *progname;
   struct thread thread;
@@ -201,7 +216,7 @@ main (int argc, char **argv)
       exit (1);
     }
 
-  zlog_default = openzlog (progname, ZLOG_OSPF,
+  zlog_default = openzlog ("OSPF", ZLOG_OSPF,
 			   LOG_CONS|LOG_NDELAY|LOG_PID, LOG_DAEMON);
 
   /* OSPF master init. */
@@ -216,7 +231,7 @@ main (int argc, char **argv)
     {
       int opt;
 
-      opt = getopt_long (argc, argv, "dlf:i:hA:P:u:g:av", longopts, 0);
+      opt = getopt_long (argc, argv, "dlf:i:hA:P:u:g:V:av", longopts, 0);
     
       if (opt == EOF)
 	break;
@@ -254,6 +269,13 @@ main (int argc, char **argv)
 	case 'g':
 	  ospfd_privs.group = optarg;
 	  break;
+	case 'V':
+	  temp = atoi (optarg);
+	  vpn_id_tmp = optarg;
+	  vpn_id_set (temp);
+	  vpn_id_zset (temp);
+	  vpn_path_zset (vpn_id_tmp);
+          break;
 #ifdef SUPPORT_OSPF_API
 	case 'a':
 	  ospf_apiserver_enable = 1;
@@ -271,6 +293,13 @@ main (int argc, char **argv)
 	  break;
 	}
     }
+
+/* Set File name */
+  if(temp)
+  {
+    strncat (ospf_vtysh_path, fnt, sizeof (ospf_vtysh_path));
+    strncat (ospf_vtysh_path, vpn_id_tmp, sizeof (ospf_vtysh_path));
+  }
 
   /* Initializations. */
   master = om->master;
@@ -315,10 +344,16 @@ main (int argc, char **argv)
   pid_output (pid_file);
 
   /* Create VTY socket */
-  vty_serv_sock (vty_addr, vty_port, OSPF_VTYSH_PATH);
+  vty_serv_sock (vty_addr, vty_port, ospf_vtysh_path);
 
   /* Print banner. */
   zlog_notice ("OSPFd %s starting: vty@%d", QUAGGA_VERSION, vty_port);
+
+#if defined(HAVE_SNMP) && defined(FORCE_SMUX)
+  /* smux peer .1.3.6.1.4.1.3317.1.2.5 */
+  if (smux_peer_oid(NULL, ".1.3.6.1.4.1.3317.1.2.5", NULL) == 0)
+    smux_start();
+#endif /* HAVE_SNMP && FORCE_SMUX */
 
   /* Fetch next active thread. */
   while (thread_fetch (master, &thread))

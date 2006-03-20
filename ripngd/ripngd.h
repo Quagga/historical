@@ -28,6 +28,9 @@
 #define RIPNG_PORT_DEFAULT             521
 #define RIPNG_VTY_PORT                2603
 #define RIPNG_MAX_PACKET_SIZE         1500
+/* Process up to 10K routes into a loop, see recvmsg() */
+#define RIPNG_MAX_RECV_BUFFER_SIZE    ((10000 / 20) * RIPNG_MAX_PACKET_SIZE)
+
 #define RIPNG_PRIORITY_DEFAULT           0
 
 /* RIPng commands. */
@@ -85,6 +88,14 @@
 #define IFMINMTU    576
 #endif /* IFMINMTU */
 
+#define RIPNG_TRIGGERED_UPDATE_ENABLE      0
+#define RIPNG_TRIGGERED_UPDATE_DISABLE    -1
+
+/* RIPng-ECMP Multipath Limit */
+#ifndef RIPNG_MULTI_PATH_LIMIT
+#define RIPNG_MULTI_PATH_LIMIT       1
+#endif 
+
 /* RIPng structure. */
 struct ripng 
 {
@@ -125,6 +136,12 @@ struct ripng
   int trigger;
   struct thread *t_triggered_update;
   struct thread *t_triggered_interval;
+
+  /* RIPng global default administrative distance. */
+  u_char distance;
+
+  /* RIPng ECMP limit */
+  unsigned int ecmp;
 
   /* For redistribute route map. */
   struct
@@ -189,6 +206,9 @@ struct ripng_info
   /* Garbage collect timer. */
   struct thread *t_timeout;
   struct thread *t_garbage_collect;
+
+  /* Administrative distance of the RIB's entry */
+  u_char distance;
 
   /* Route-map features - this variables can be changed. */
   struct in6_addr nexthop_out;
@@ -300,6 +320,7 @@ struct ripng_peer
   /* Statistics. */
   int recv_badpackets;
   int recv_badroutes;
+  int recv_receivedpackets;
 
   /* Timeout thread. */
   struct thread *t_timeout;
@@ -383,8 +404,10 @@ void ripng_redistribute_withdraw (int type);
 void ripng_distribute_update_interface (struct interface *);
 void ripng_if_rmap_update_interface (struct interface *);
 
-void ripng_zebra_ipv6_add (struct prefix_ipv6 *p, struct in6_addr *nexthop, unsigned int ifindex);
-void ripng_zebra_ipv6_delete (struct prefix_ipv6 *p, struct in6_addr *nexthop, unsigned int ifindex);
+void ripng_zebra_ipv6_add (struct prefix_ipv6 *p, struct in6_addr *nexthop, unsigned int ifindex,
+			u_int32_t metric, u_char distance, void *);
+void ripng_zebra_ipv6_delete (struct prefix_ipv6 *p, struct in6_addr *nexthop, unsigned int ifindex,
+			u_int32_t metric, void *);
 
 void ripng_redistribute_clean ();
 
@@ -395,5 +418,15 @@ int ripng_send_packet (caddr_t buf, int bufsize, struct sockaddr_in6 *to,
 
 void ripng_packet_dump (struct ripng_packet *packet, int size, const char *sndrcv);
 
+
+int 
+ripng_enable_network_lookup_if(struct interface *);
+
+int
+ripng_passive_interface_lookup (const char *); 
+
+int ripng_enable_if_lookup (const char *ifname);
+
+void ripng_peer_received_packet (struct sockaddr_in6 *from);
 
 #endif /* _ZEBRA_RIPNG_RIPNGD_H */

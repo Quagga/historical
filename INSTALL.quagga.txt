@@ -1,4 +1,4 @@
-# $Id: INSTALL.quagga.txt,v 1.9 2005/04/02 17:13:33 paul Exp $
+# $Id: INSTALL.quagga.txt,v 1.4 2005/09/30 12:12:05 vize Exp $
 
 --------------------------------------------------------------------------
 Building and Installing Quagga from releases or snapshots:

@@ -76,5 +76,8 @@ void ospf_schedule_asbr_check ();
 void ospf_asbr_route_install_lsa (struct ospf_lsa *);
 struct ospf_lsa *ospf_external_info_find_lsa (struct ospf *,
 					      struct prefix_ipv4 *p);
-
+void ospf_redistribute_max_prefix_set (const char *num_str,
+                                       const char *threshold_str, int warning);
+void ospf_redistribute_max_prefix_unset ();
+int ospf_limit_redistribution (struct prefix_ipv4);
 #endif /* _ZEBRA_OSPF_ASBR_H */

@@ -52,7 +52,6 @@ extern struct zebra_privs_t ripngd_privs;
 /* Static utility function. */
 static void ripng_enable_apply (struct interface *);
 static void ripng_passive_interface_apply (struct interface *);
-int ripng_enable_if_lookup (const char *ifname);
 int ripng_enable_network_lookup2 (struct connected *connected);
 void ripng_enable_apply_all ();
 
@@ -177,13 +176,16 @@ int
 ripng_if_down (struct interface *ifp)
 {
   struct route_node *rp;
-  struct ripng_info *rinfo;
+  struct ripng_info *rinfo = NULL;
   struct ripng_interface *ri;
+  struct list *list = NULL;
+  struct listnode *listnode = NULL;
 
   if (ripng)
     {
       for (rp = route_top (ripng->table); rp; rp = route_next (rp))
-	if ((rinfo = rp->info) != NULL)
+	if ((list = rp->info) != NULL)
+          for (ALL_LIST_ELEMENTS_RO(list, listnode, rinfo))
 	  {
 	    /* Routes got through this interface. */
 	    if (rinfo->ifindex == ifp->ifindex
@@ -192,7 +194,8 @@ ripng_if_down (struct interface *ifp)
 	      {
 		ripng_zebra_ipv6_delete ((struct prefix_ipv6 *) &rp->p,
 					 &rinfo->nexthop,
-					 rinfo->ifindex);
+					 rinfo->ifindex,
+					 rinfo->metric, list);
 
 		ripng_redistribute_delete (rinfo->type, rinfo->sub_type,
 					   (struct prefix_ipv6 *)&rp->p,
@@ -213,6 +216,9 @@ ripng_if_down (struct interface *ifp)
     }
 
   ri = ifp->info;
+
+  ri->enable_interface = 0;
+  ri->enable_network = 0;
   
   if (ri->running)
    {
@@ -228,7 +234,7 @@ ripng_if_down (struct interface *ifp)
   return 0;
 }
 
-/* Inteface link up message processing. */
+/* Interface link up message processing. */
 int
 ripng_interface_up (int command, struct zclient *zclient, zebra_size_t length)
 {
@@ -258,7 +264,7 @@ ripng_interface_up (int command, struct zclient *zclient, zebra_size_t length)
   return 0;
 }
 
-/* Inteface link down message processing. */
+/* Interface link down message processing. */
 int
 ripng_interface_down (int command, struct zclient *zclient,
 		      zebra_size_t length)
@@ -282,7 +288,7 @@ ripng_interface_down (int command, struct zclient *zclient,
   return 0;
 }
 
-/* Inteface addition message from zebra. */
+/* Interface addition message from zebra. */
 int
 ripng_interface_add (int command, struct zclient *zclient, zebra_size_t length)
 {
@@ -409,13 +415,9 @@ ripng_apply_address_add (struct connected *ifc) {
   address.prefixlen = p->prefixlen;
   apply_mask_ipv6(&address);
 
-  /* Check if this interface is RIP enabled or not
-     or  Check if this address's prefix is RIP enabled */
-  if ((ripng_enable_if_lookup(ifc->ifp->name) >= 0) ||
-      (ripng_enable_network_lookup2(ifc) >= 0))
-    ripng_redistribute_add(ZEBRA_ROUTE_CONNECT, RIPNG_ROUTE_INTERFACE,
-                           &address, ifc->ifp->ifindex, NULL);
-
+  /* Check if this interface is RIPng enabled or not. Turn it on if necessary
+   * redistribute new address if necessary */
+  ripng_enable_apply (ifc->ifp);
 }
 
 int
@@ -1040,10 +1042,11 @@ DEFUN (no_ripng_network,
 
 DEFUN (ipv6_ripng_split_horizon,
        ipv6_ripng_split_horizon_cmd,
-       "ipv6 ripng split-horizon",
+       "ipv6 ripng split-horizon simple",
        IPV6_STR
        "Routing Information Protocol\n"
-       "Perform split horizon\n")
+       "Perform split horizon\n"
+       "Simple mode without poisoned-reverse\n")
 {
   struct interface *ifp;
   struct ripng_interface *ri;
@@ -1075,11 +1078,12 @@ DEFUN (ipv6_ripng_split_horizon_poisoned_reverse,
 
 DEFUN (no_ipv6_ripng_split_horizon,
        no_ipv6_ripng_split_horizon_cmd,
-       "no ipv6 ripng split-horizon",
+       "no ipv6 ripng split-horizon simple",
        NO_STR
        IPV6_STR
        "Routing Information Protocol\n"
-       "Perform split horizon\n")
+       "Perform split horizon\n"
+       "Simple mode without poisoned-reverse\n")
 {
   struct interface *ifp;
   struct ripng_interface *ri;
@@ -1091,7 +1095,7 @@ DEFUN (no_ipv6_ripng_split_horizon,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_ipv6_ripng_split_horizon,
+DEFUN (no_ipv6_ripng_split_horizon_poisoned_reverse,
        no_ipv6_ripng_split_horizon_poisoned_reverse_cmd,
        "no ipv6 ripng split-horizon poisoned-reverse",
        NO_STR
@@ -1099,6 +1103,22 @@ ALIAS (no_ipv6_ripng_split_horizon,
        "Routing Information Protocol\n"
        "Perform split horizon\n"
        "With poisoned-reverse\n")
+{
+  struct interface *ifp;
+  struct ripng_interface *ri;
+
+  ifp = vty->index;
+  ri = ifp->info;
+ 
+  switch( ri->split_horizon )
+  {
+	case RIPNG_SPLIT_HORIZON_POISONED_REVERSE:
+		ri->split_horizon = RIPNG_SPLIT_HORIZON; 
+	default:
+		break;
+  }
+  return CMD_SUCCESS;
+}
 
 DEFUN (ripng_passive_interface,
        ripng_passive_interface_cmd,
@@ -1182,7 +1202,7 @@ interface_config_write (struct vty *vty)
 	{
           switch (ri->split_horizon) {
           case RIPNG_SPLIT_HORIZON:
-            vty_out (vty, " ipv6 ripng split-horizon%s", VTY_NEWLINE);
+            vty_out (vty, " ipv6 ripng split-horizon simple%s", VTY_NEWLINE);
             break;
           case RIPNG_SPLIT_HORIZON_POISONED_REVERSE:
             vty_out (vty, " ipv6 ripng split-horizon poisoned-reverse%s",
@@ -1190,7 +1210,7 @@ interface_config_write (struct vty *vty)
             break;
           case RIPNG_NO_SPLIT_HORIZON:
           default:
-            vty_out (vty, " no ipv6 ripng split-horizon%s", VTY_NEWLINE);
+            vty_out (vty, " no ipv6 ripng split-horizon simple%s", VTY_NEWLINE);
             break;
           }
 	}

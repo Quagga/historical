@@ -170,6 +170,8 @@ cpu_record_print(struct vty *vty, unsigned char filter)
   vty_out(vty, "%21s %18s %18s%s",
   	  "", "CPU (user+system):", "Real (wall-clock):", VTY_NEWLINE);
 #endif
+  vty_out(vty, "R: Read, W: Write, T: Timer, E: Event, X: eXecute%s%s",
+	  VTY_NEWLINE, VTY_NEWLINE);
   vty_out(vty, "Runtime(ms)   Invoked Avg uSec Max uSecs");
 #ifdef HAVE_RUSAGE
   vty_out(vty, " Avg uSec Max uSecs");
@@ -190,6 +192,12 @@ DEFUN(show_thread_cpu,
       "Thread information\n"
       "Thread CPU usage\n"
       "Display filter (rwtexb)\n")
+{
+  return thread_dumps(vty, argc, argv);
+}
+
+int
+thread_dumps(struct vty *vty, int argc, const char **argv)
 {
   int i = 0;
   unsigned char filter = 0xff;

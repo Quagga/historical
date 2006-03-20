@@ -3,7 +3,7 @@
 # Copyright 2001,2003 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# $Id: quagga.init.in,v 1.2 2005/04/26 02:35:03 paul Exp $
+# $Id: quagga.init.in,v 1.2 2005/09/30 12:12:09 vize Exp $
 #
 # Starts/stops the appropriate daemon
 
