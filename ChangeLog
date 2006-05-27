@@ -1,3 +1,18 @@
+2006-05-27 Paul Jakma <paul.jakma@sun.com>
+
+	* configure.ac: General cleanup of header and type checks, introducing
+	  an internal define, QUAGGA_INCLUDES, to build up a list of
+	  stuff to include so as to avoid 'present but cant be compiled'
+	  warnings.
+	  Misc additional checks of things missing according to autoscan.
+	  Add LIBM, for bgpd's use of libm, so as to avoid burdening
+	  LIBS, and all the binaries, with libm linkage.
+	  Remove the bad practice of using m4 changequote(), just
+	  quote the []'s in the case statements properly.
+	* */*.{c,h}: Update all HAVE_* to the standard autoconf namespaced
+	  HAVE_* defines. I.e. HAVE_SA_LEN -> HAVE_STRUCT_SOCKADDR_SA_LEN,
+	* bgpd/Makefile.am: Add LIBM to bgpd's LDADD, for pow().
+
 2006-05-10 Paul Jakma <paul.jakma@sun.com>
 
 	* configure.ac: Bump to 0.99.4

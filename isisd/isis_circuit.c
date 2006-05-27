@@ -372,7 +372,7 @@ isis_circuit_if_add (struct isis_circuit *circuit, struct interface *ifp)
       /*
        * Get the Hardware Address
        */
-#ifdef HAVE_SOCKADDR_DL
+#ifdef HAVE_STRUCT_SOCKADDR_DL
       if (circuit->interface->sdl.sdl_alen != ETHER_ADDR_LEN)
 	zlog_warn ("unsupported link layer");
       else
@@ -393,7 +393,7 @@ isis_circuit_if_add (struct isis_circuit *circuit, struct interface *ifp)
 		 snpa_print (circuit->u.bc.snpa));
 
 #endif /* EXTREME_DEBUG */
-#endif /* HAVE_SOCKADDR_DL */
+#endif /* HAVE_STRUCT_SOCKADDR_DL */
     }
   else if (if_is_pointopoint (ifp))
     {
@@ -438,7 +438,7 @@ isis_circuit_update_params (struct isis_circuit *circuit,
   /*
    * Get the Hardware Address
    */
-#ifdef HAVE_SOCKADDR_DL
+#ifdef HAVE_STRUCT_SOCKADDR_DL
   if (circuit->interface->sdl.sdl_alen != ETHER_ADDR_LEN)
     zlog_warn ("unsupported link layer");
   else
