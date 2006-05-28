@@ -1,3 +1,13 @@
+2006-05-28 Paul Jakma <paul.jakma@sun.com>
+
+	* configure.ac: Update SOS CFLAGS, Xt shouldn't be used and
+	  enable debug options.
+	  Add a check for GNU Make and warn the user if it does not appear
+	  to be the make used.
+	  Check for Sun libc printstack(), add a general HAVE_STACK_TRACE
+	  define for lib/log.c, if any supported stack symbol dumping
+	  function is found (glibc backtrace/sun libc printstack).
+
 2006-05-27 Paul Jakma <paul.jakma@sun.com>
 
 	* configure.ac: General cleanup of header and type checks, introducing

@@ -1,3 +1,20 @@
+2006-05-28 Paul Jakma <paul.jakma@sun.com>
+
+	* zebra.h: Include inttypes.h rather than stdint.h, best practice
+	  according to the autoconf manual.
+	  Add UINT*_MAX defines for older platforms lacking these (FBSD 4)
+	* memory.c: malloc.h is deprecated in favour of stdlib.h, however
+	  we still need it on GNU Libc for mallinfo().
+	* vty.c: (vty_log/vty_log_fixed) dont crash if called when vty
+	  hasn't been initiliased.
+	* log.c: (general) Add support for Sun libc printstack().
+	  (hex_append) make the cpp conditional on general HAVE_STACK_TRACE
+	  define.
+	  (zlog_backtrace_sigsafe) Ditto. Add printstack() version of the
+	  the DUMP macro in this function.
+	* memory.h: Experimental, have XFREE macro NULL out the freed
+	  pointer.
+
 2006-05-21 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
 
 	* if.h: (struct connected) Document the meaning of the
