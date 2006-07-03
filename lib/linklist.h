@@ -49,6 +49,8 @@ struct list
 #define listcount(X) ((X)->count)
 #define list_isempty(X) ((X)->head == NULL && (X)->tail == NULL)
 #define getdata(X) ((X)->data)
+#define listgetdata getdata
+#define listnextnode nextnode
 
 /* Prototypes. */
 struct list *list_new();
@@ -71,6 +73,27 @@ void list_delete_node (struct list *, struct listnode *);
 void list_add_node_prev (struct list *, struct listnode *, void *);
 void list_add_node_next (struct list *, struct listnode *, void *);
 void list_add_list (struct list *, struct list *);
+
+/* List iteration macro. 
+ * Usage: for (ALL_LIST_ELEMENTS (...) { ... }
+ * It is safe to delete the listnode using this macro.
+ */
+#define ALL_LIST_ELEMENTS(list,node,nextnode,data) \
+  (node) = listhead(list); \
+  (node) != NULL && \
+    ((data) = listgetdata(node),(nextnode) = listnextnode(node), 1); \
+  (node) = (nextnode)
+
+/* read-only list iteration macro.
+ * Usage: as per ALL_LIST_ELEMENTS, but not safe to delete the listnode Only
+ * use this macro when it is *immediately obvious* the listnode is not
+ * deleted in the body of the loop. Does not have forward-reference overhead
+ * of previous macro.
+ */
+#define ALL_LIST_ELEMENTS_RO(list,node,data) \
+  (node) = listhead(list); \
+  (node) != NULL && ((data) = listgetdata(node), 1); \
+  (node) = listnextnode(node)
 
 /* List iteration macro. */
 #define LIST_LOOP(L,V,N) \

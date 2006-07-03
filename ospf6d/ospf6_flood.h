@@ -54,8 +54,15 @@ void ospf6_flood_clear (struct ospf6_lsa *lsa);
 void ospf6_flood (struct ospf6_neighbor *from, struct ospf6_lsa *lsa);
 
 /* receive & install */
+#ifdef WOSPF
+void ospf6_receive_lsa (struct ospf6_neighbor *from,
+                        struct ospf6_lsa_header *header,
+			struct in6_addr *);
+#else
 void ospf6_receive_lsa (struct ospf6_neighbor *from,
                         struct ospf6_lsa_header *header);
+#endif
+
 void ospf6_install_lsa (struct ospf6_lsa *lsa);
 
 int config_write_ospf6_debug_flood (struct vty *vty);

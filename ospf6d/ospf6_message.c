@@ -33,6 +33,7 @@
 #include "ospf6_lsdb.h"
 #include "ospf6_network.h"
 #include "ospf6_message.h"
+#include "ospf6d.h"
 
 #include "ospf6_top.h"
 #include "ospf6_area.h"
@@ -41,6 +42,14 @@
 
 #include "ospf6_flood.h"
 #include "ospf6d.h"
+
+#include "wospf_flood.h"
+#include "wospf_aor.h"
+#include "wospf_ack_cache.h"
+#include "wospf_protocol.h"
+#include "wospf_defs.h"
+#include "wospf_top.h"
+#include "wospf_lls.h"
 
 unsigned char conf_debug_ospf6_message[6] = {0x03, 0, 0, 0, 0, 0};
 const char *ospf6_message_type_str[] =
@@ -324,8 +333,10 @@ ospf6_hello_recv (struct in6_addr *src, struct in6_addr *dst,
       on->priority = hello->priority;
       on->ifindex = ntohl (hello->interface_id);
       memcpy (&on->linklocal_addr, src, sizeof (struct in6_addr));
+    
     }
-
+  
+  
   /* TwoWay check */
   for (p = (char *) ((caddr_t) hello + sizeof (struct ospf6_hello));
        p + sizeof (u_int32_t) <= OSPF6_MESSAGE_END (oh);
@@ -390,6 +401,184 @@ ospf6_hello_recv (struct in6_addr *src, struct in6_addr *dst,
   if (neighborchange)
     thread_add_event (master, neighbor_change, oi, 0);
 }
+
+#ifdef WOSPF
+
+void wospf_hello_recv (struct in6_addr *src, struct in6_addr *dst,
+		       struct ospf6_interface *oi, struct ospf6_header *oh,
+		       u_char *buffer) {
+
+  struct ospf6_hello *hello;
+  struct ospf6_neighbor *on;
+  char *p;
+  int twoway = 0;
+  int neighborchange = 0;
+  int backupseen = 0;
+  struct list *neighbor_list;
+  struct id_container *id_con;
+  struct wospf_neighbor_entry *neighbor = NULL;
+
+  if (ospf6_header_examin (src, dst, oi, oh) != MSG_OK)
+    return;
+
+  hello = (struct ospf6_hello *)
+    ((caddr_t) oh + sizeof (struct ospf6_header));
+  
+  /* HelloInterval check */
+  if (ntohs (hello->hello_interval) != oi->hello_interval)
+    {
+      if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
+        zlog_debug ("HelloInterval mismatch");
+      return;
+    }
+
+  /* RouterDeadInterval check */
+  if (ntohs (hello->dead_interval) != oi->dead_interval)
+    {
+      if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
+        zlog_debug ("RouterDeadInterval mismatch");
+      return;
+    }
+
+  /* E-bit check */
+  if (OSPF6_OPT_ISSET (hello->options, OSPF6_OPT_E) !=
+      OSPF6_OPT_ISSET (oi->area->options, OSPF6_OPT_E))
+    {
+      if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
+        zlog_debug ("E-bit mismatch");
+      return;
+    }
+
+  wospf_bool supportsAOR = WOSPF_FALSE;
+  wospf_bool supportsIncrHello = WOSPF_FALSE;
+  
+  char *name = WOSPF_ID(&oh->router_id);
+  if (WOSPF_OPT_ISSET (hello->options, WOSPF_OPT_F)) {
+    supportsAOR = WOSPF_TRUE;
+  } 
+  if (WOSPF_OPT_ISSET (hello->options, WOSPF_OPT_I)) {
+    supportsIncrHello = WOSPF_TRUE;
+    WOSPF_PRINTF(6, "Got an Hello from %s with the I bit set", name);
+  }
+  
+  
+
+  /* Find neighbor, create if not exist */
+  on = ospf6_neighbor_lookup (oh->router_id, oi);
+  if (on == NULL)
+    {
+      on = ospf6_neighbor_create (oh->router_id, oi);
+      on->prev_drouter = on->drouter = hello->drouter;
+      on->prev_bdrouter = on->bdrouter = hello->bdrouter;
+      on->priority = hello->priority;
+      on->ifindex = ntohl (hello->interface_id);
+      memcpy (&on->linklocal_addr, src, sizeof (struct in6_addr));
+    
+    }
+
+  /* Update neighbor entry */
+  else if ((neighbor = wospf_lookup_neighbor_table(on->router_id)) != NULL) { 
+    wospf_update_neighbor_entry(on->router_id, supportsAOR, supportsIncrHello);
+
+  }
+
+  neighbor_list = list_new();
+  
+  /* TwoWay check */
+  for (p = (char *) ((caddr_t) hello + sizeof (struct ospf6_hello));
+       p + sizeof (u_int32_t) <= OSPF6_MESSAGE_END (oh);
+       p += sizeof (u_int32_t))
+    {
+      u_int32_t *router_id = (u_int32_t *) p;
+
+      id_con = wospf_malloc(sizeof(struct id_container), "Neighbor list entry");
+      id_con->router_id = *router_id;
+      listnode_add(neighbor_list, id_con);
+
+      if (*router_id == oi->area->ospf6->router_id)
+        twoway++;
+    }
+
+  if (p != OSPF6_MESSAGE_END (oh))
+    {
+      if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
+        zlog_debug ("Trailing garbage ignored");
+    }
+
+  /* RouterPriority check */
+  if (on->priority != hello->priority)
+    {
+      on->priority = hello->priority;
+      neighborchange++;
+    }
+
+  /* DR check */
+  if (on->drouter != hello->drouter)
+    {
+      on->prev_drouter = on->drouter;
+      on->drouter = hello->drouter;
+      if (on->prev_drouter == on->router_id || on->drouter == on->router_id)
+        neighborchange++;
+    }
+
+  /* BDR check */
+  if (on->bdrouter != hello->bdrouter)
+    {
+      on->prev_bdrouter = on->bdrouter;
+      on->bdrouter = hello->bdrouter;
+      if (on->prev_bdrouter == on->router_id || on->bdrouter == on->router_id)
+        neighborchange++;
+    }
+
+  /* BackupSeen check */
+  if (oi->state == OSPF6_INTERFACE_WAITING)
+    {
+      if (hello->bdrouter == on->router_id)
+        backupseen++;
+      else if (hello->drouter == on->router_id && hello->bdrouter == htonl (0))
+        backupseen++;
+    }
+
+  /* Execute neighbor events */
+  thread_execute (master, hello_received, on, 0);
+
+  if (neighbor != NULL) {
+    thread_execute (master, twoway_received, on, 0);
+  }
+
+  else {
+
+    WOSPF_PRINTF(3, "Got a Hello from a non-WOSPF-OR neighbor");
+
+    if (twoway) {
+      WOSPF_PRINTF(99, "   - Execute TWO-WAY");
+      thread_execute (master, twoway_received, on, 0);
+    }
+    else {
+      WOSPF_PRINTF(99, "   - Execute ONE-WAY");
+      thread_execute (master, oneway_received, on, 0);
+    }
+  }
+  
+  /* Schedule interface events */
+  if (backupseen)
+    thread_add_event (master, backup_seen, oi, 0);
+  if (neighborchange)
+    thread_add_event (master, neighbor_change, oi, 0);
+
+  
+  //struct wospf_lls_message *lls_message = 
+  // wospf_parse_lls_block(OSPF6_MESSAGE_END (oh)); 
+  struct wospf_lls_message *lls_message = 
+   wospf_parse_lls_block(OSPF6_MESSAGE_END(oh));
+  
+  wospf_process_tlvs(on->router_id, lls_message, neighbor_list);
+
+  list_delete(neighbor_list);
+
+}
+
+#endif
 
 static void
 ospf6_dbdesc_recv_master (struct ospf6_header *oh,
@@ -1014,7 +1203,11 @@ ospf6_lsupdate_recv (struct in6_addr *src, struct in6_addr *dst,
           break;
         }
 
+#ifdef WOSPF
+      ospf6_receive_lsa (on, (struct ospf6_lsa_header *) p, dst);
+#else
       ospf6_receive_lsa (on, (struct ospf6_lsa_header *) p);
+#endif
       num--;
     }
 
@@ -1112,6 +1305,28 @@ ospf6_lsack_recv (struct in6_addr *src, struct in6_addr *dst,
       /* Find database copy */
       mine = ospf6_lsdb_lookup (his->header->type, his->header->id,
                                 his->header->adv_router, lsdb);
+
+#ifdef WOSPF
+      if (oi->is_wospf_interface) {
+
+	/* If the neighbor acks an LSA I haven't received (I have no
+	   copy, or the copy is less recent than the one being acked),
+	   add the ack to the neighbors ack cache
+	*/
+	if (mine == NULL || 
+	    ospf6_lsa_compare (his, mine) == -1) {
+
+	  wospf_register_ack(on->router_id, his, oi);
+	  
+	}
+	
+	THREAD_OFF(on->inactivity_timer);
+	on->inactivity_timer = thread_add_timer(master, inactivity_timer, on, on->ospf6_if->dead_interval);
+	WOSPF_PRINTF(33, "LS Ack received -> resetting %s's inactivity timer", WOSPF_ID(&on->router_id));
+
+      }
+#endif
+
       if (mine == NULL)
         {
           if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
@@ -1131,6 +1346,13 @@ ospf6_lsack_recv (struct in6_addr *src, struct in6_addr *dst,
           continue;
         }
 
+#ifdef WOSPF
+      if (oi->is_wospf_interface) {
+        /* This neighbor has acked an LSA - remove from BackupWait lists */
+        wospf_remove_bwn_list(on, his, on->ospf6_if, WOSPF_FALSE);
+      }
+#endif /* WOSPF */
+
       if (ospf6_lsa_compare (his, mine) != 0)
         {
           /* Log this questionable acknowledgement,
@@ -1144,6 +1366,10 @@ ospf6_lsack_recv (struct in6_addr *src, struct in6_addr *dst,
       if (IS_OSPF6_DEBUG_MESSAGE (oh->type, RECV))
         zlog_debug ("Acknowledged, remove from %s's retrans-list",
 		    on->name);
+
+#ifdef WOSPF
+      WOSPF_PRINTF(3, "%s acked %s - remove from retrans-list", WOSPF_ID(&on->router_id), mine->name);
+#endif	
 
       if (OSPF6_LSA_IS_MAXAGE (mine))
         ospf6_maxage_remove (on->ospf6_if->area->ospf6);
@@ -1167,7 +1393,7 @@ unsigned int iobuflen = 0;
 int
 ospf6_iobuf_size (unsigned int size)
 {
-  char *recvnew, *sendnew;
+  u_char *recvnew, *sendnew;
 
   if (size <= iobuflen)
     return iobuflen;
@@ -1286,8 +1512,28 @@ ospf6_receive (struct thread *thread)
   switch (oh->type)
     {
       case OSPF6_MESSAGE_TYPE_HELLO:
+
+#ifdef WOSPF
+	if (oi->is_wospf_interface) {
+	  
+	  struct ospf6_hello *hello = (struct ospf6_hello *)
+	    ((caddr_t) oh + sizeof (struct ospf6_header));
+	  
+	  if (WOSPF_OPT_ISSET (hello->options, WOSPF_OPT_L)) {
+	    
+	    wospf_hello_recv (&src, &dst, oi, oh, iovector[0].iov_base);
+	  }
+	  else { 
+	    ospf6_hello_recv (&src, &dst, oi, oh);
+	  }
+	}
+	else ospf6_hello_recv (&src, &dst, oi, oh);
+
+#else
         ospf6_hello_recv (&src, &dst, oi, oh);
-        break;
+#endif
+	
+   break;
 
       case OSPF6_MESSAGE_TYPE_DBDESC:
         ospf6_dbdesc_recv (&src, &dst, oi, oh);
@@ -1321,6 +1567,7 @@ ospf6_send (struct in6_addr *src, struct in6_addr *dst,
   int len;
   char srcname[64], dstname[64];
   struct iovec iovector[2];
+  ssize_t extra_length = 0;
 
   /* initialize */
   iovector[0].iov_base = (caddr_t) oh;
@@ -1375,10 +1622,72 @@ ospf6_send (struct in6_addr *src, struct in6_addr *dst,
         }
     }
 
+#ifdef WOSPF
+  if (oi->is_wospf_interface &&
+      oh->type == OSPF6_MESSAGE_TYPE_HELLO) { 
+    
+    if (changes_neighborhood) {
+      wospf_calculate_aor();
+      wospf_print_aor_set();
+      wospf_print_neighborhood();
+    }
+
+    char *end = (char *)OSPF6_MESSAGE_END(oh);
+    char *new_end = wospf_append_lls(end, oi);
+    extra_length = new_end - end;
+    
+    if (extra_length > 0) {
+      int words = (extra_length / 4) - 1; /* Exclude LLS header */
+      int length_in_bytes = extra_length - 4;
+      WOSPF_PRINTF(33, "LLS data block size: %d words (%d bytes)", words, length_in_bytes);
+    }
+
+    iovector[0].iov_len = extra_length + iovector[0].iov_len;
+      
+    if (extra_length > 0) {
+	
+      if (oh->type == OSPF6_MESSAGE_TYPE_HELLO) {
+	struct ospf6_hello *hello = (struct ospf6_hello *)((caddr_t) oh + sizeof (struct ospf6_header));
+	WOSPF_OPT_SET(hello->options, WOSPF_OPT_L);
+      }
+      else if (oh->type == OSPF6_MESSAGE_TYPE_DBDESC) {
+	struct ospf6_dbdesc *dd = (struct ospf6_dbdesc *)((caddr_t) oh + sizeof (struct ospf6_dbdesc));
+	WOSPF_OPT_SET(dd->options, WOSPF_OPT_L);
+      }
+      
+    }
+    
+    changes_neighborhood = WOSPF_FALSE;
+    
+  }
+
+
+#endif
+
   /* send message */
   len = ospf6_sendmsg (src, dst, &oi->interface->ifindex, iovector);
+
+#ifdef WOSPF
+  if (oi->is_wospf_interface) {
+    
+    /* The header length does not include the LLS block*/
+    if (len != ntohs(oh->length) + extra_length) {
+      //zlog_err ("WOSPF-OR interface: Could not send entire message");
+    }
+  }
+
+  else {
+    
+    if (len != ntohs (oh->length))
+      zlog_err ("Could not send entire message");
+    
+  }
+  
+#else
   if (len != ntohs (oh->length))
     zlog_err ("Could not send entire message");
+#endif
+
 }
 
 int
@@ -1420,7 +1729,25 @@ ospf6_hello_send (struct thread *thread)
   hello->drouter = oi->drouter;
   hello->bdrouter = oi->bdrouter;
 
-  p = (char *)((caddr_t) hello + sizeof (struct ospf6_hello));
+#ifdef WOSPF
+  if (oi->support_incr_hellos) {
+    WOSPF_OPT_SET(hello->options, WOSPF_OPT_I);
+    WOSPF_OPT_SET(hello->options, WOSPF_OPT_F);
+  }
+
+  wospf_bool omit = WOSPF_FALSE;
+  int counter;
+  
+  /* Omit FS TLV? */
+  counter = listcount(lls_message->fs_for_message->fs_for_neighbors);
+  if (counter > 0 && counter >= wospf_count_adjacencies(oi->neighbor_list) * DROP_FS_TLV_THRESHOLD) {
+    omit = WOSPF_TRUE;
+    WOSPF_PRINTF(3, "Omitting the FS TLV - including ALL neighbors");
+  }
+
+#endif
+
+  p = ((u_char *) hello + sizeof (struct ospf6_hello));
 
   for (node = listhead (oi->neighbor_list); node; nextnode (node))
     {
@@ -1436,12 +1763,62 @@ ospf6_hello_send (struct thread *thread)
           break;
         }
 
+#ifdef WOSPF
+      struct wospf_neighbor_entry *neighbor; /* (Redundant) */
+      wospf_bool new = WOSPF_FALSE;
+  
+
+      if (oi->support_incr_hellos) {
+	
+	/* Must be an incremental Hellos capable WOSPF-OR neighbor */
+	if ((neighbor = wospf_lookup_neighbor_table(on->router_id)) != NULL &&
+	    neighbor->supports_incr_hello == WOSPF_TRUE) {
+	  
+	  if (wospf_lookup_id_list(added_neighbors, neighbor->router_id))
+	    new = WOSPF_TRUE;
+	  
+	  /* If the neighbor is not requesting full state, don't
+	     include in the Hello packet's neighbor list */
+	  if (wospf_lookup_pers_list(lls_message->fs_for_message->fs_for_neighbors, 
+				     (ID)on->router_id) == NULL &&
+	      new == WOSPF_FALSE) {
+
+	    /* If I'm omitting the FS TLV, full state for ALL neighbor
+	       must be included */
+	    if (omit == WOSPF_FALSE) {
+
+	      WOSPF_PRINTF(99, "Neighbor list: Omitting %s (new or not in FS TLV)", neighbor->name);
+	      continue;
+	    }
+	    
+	  }
+	  
+	  /* DEBUG */
+	  if(wospf_lookup_pers_list(lls_message->fs_for_message->fs_for_neighbors, 
+				    (ID)on->router_id) != NULL) {
+	    WOSPF_PRINTF(3, "Neighbor list: %s is requesting full state", neighbor->name);
+	  }
+	
+	  if (new == WOSPF_TRUE) {
+	    wospf_delete_id_list(added_neighbors, neighbor->router_id);
+	  }
+	  
+	  
+	
+	} /* The neighbor is not registered with the neighbor table  */
+	
+      } /* Incremental Hellos not supported on this interface */
+#endif
+
+      WOSPF_PRINTF(3, "Neighbor list: Including %s", WOSPF_ID(&on->router_id));
       memcpy (p, &on->router_id, sizeof (u_int32_t));
       p += sizeof (u_int32_t);
     }
 
   oh->type = OSPF6_MESSAGE_TYPE_HELLO;
   oh->length = htons (p - sendbuf);
+
+
 
   ospf6_send (oi->linklocal_addr, &allspfrouters6, oi, oh);
   return 0;
@@ -1495,7 +1872,7 @@ ospf6_dbdesc_send (struct thread *thread)
   dbdesc->seqnum = htonl (on->dbdesc_seqnum);
 
   /* if this is not initial one, set LSA headers in dbdesc */
-  p = (char *)((caddr_t) dbdesc + sizeof (struct ospf6_dbdesc));
+  p = ((u_char *) dbdesc + sizeof (struct ospf6_dbdesc));
   if (! CHECK_FLAG (on->dbdesc_bits, OSPF6_DBDESC_IBIT))
     {
       for (lsa = ospf6_lsdb_head (on->dbdesc_list); lsa;
@@ -1601,7 +1978,7 @@ ospf6_lsreq_send (struct thread *thread)
   oh = (struct ospf6_header *) sendbuf;
 
   /* set Request entries in lsreq */
-  p = (char *)((caddr_t) oh + sizeof (struct ospf6_header));
+  p = ((u_char *) oh + sizeof (struct ospf6_header));
   for (lsa = ospf6_lsdb_head (on->request_list); lsa;
        lsa = ospf6_lsdb_next (lsa))
     {
@@ -1663,10 +2040,20 @@ ospf6_lsupdate_send_neighbor (struct thread *thread)
   memset (sendbuf, 0, iobuflen);
   oh = (struct ospf6_header *) sendbuf;
   lsupdate = (struct ospf6_lsupdate *)
-    ((caddr_t) oh + sizeof (struct ospf6_header));
+    ((u_char *) oh + sizeof (struct ospf6_header));
 
-  p = (char *)((caddr_t) lsupdate + sizeof (struct ospf6_lsupdate));
+  p = ((u_char *) lsupdate + sizeof (struct ospf6_lsupdate));
   num = 0;
+
+#ifdef WOSPF
+  int counter = 0;
+  
+  if (on->ospf6_if->is_wospf_interface &&
+      on->lsupdate_list->count > 0) {
+    WOSPF_PRINTF(3, "    ");
+    WOSPF_PRINTF(3, "Sending LSAs to neighbor %s:", WOSPF_ID(&on->router_id));
+  }
+#endif
 
   /* lsupdate_list lists those LSA which doesn't need to be
      retransmitted. remove those from the list */
@@ -1681,6 +2068,12 @@ ospf6_lsupdate_send_neighbor (struct thread *thread)
           break;
         }
 
+#ifdef WOSPF
+      if (on->ospf6_if->is_wospf_interface) {
+	WOSPF_PRINTF(3, "     %d: %s", ++counter, lsa->name);
+      }
+#endif
+
       ospf6_lsa_age_update_to_send (lsa, on->ospf6_if->transdelay);
       memcpy (p, lsa->header, OSPF6_LSA_SIZE (lsa->header));
       p += OSPF6_LSA_SIZE (lsa->header);
@@ -1689,6 +2082,16 @@ ospf6_lsupdate_send_neighbor (struct thread *thread)
       assert (lsa->lock == 2);
       ospf6_lsdb_remove (lsa, on->lsupdate_list);
     }
+
+  
+#ifdef WOSPF
+  counter = 0;
+  
+  if (on->ospf6_if->is_wospf_interface &&
+      on->retrans_list->count > 0) {
+    WOSPF_PRINTF(3, "Retransmitting LSAs to neighbor %s:", WOSPF_ID(&on->router_id));
+  }
+#endif
 
   for (lsa = ospf6_lsdb_head (on->retrans_list); lsa;
        lsa = ospf6_lsdb_next (lsa))
@@ -1700,6 +2103,12 @@ ospf6_lsupdate_send_neighbor (struct thread *thread)
           ospf6_lsa_unlock (lsa);
           break;
         }
+
+#ifdef WOSPF
+      if (on->ospf6_if->is_wospf_interface) {
+	WOSPF_PRINTF(3, "     %d: %s", ++counter, lsa->name);
+      }
+#endif
 
       ospf6_lsa_age_update_to_send (lsa, on->ospf6_if->transdelay);
       memcpy (p, lsa->header, OSPF6_LSA_SIZE (lsa->header));
@@ -1760,8 +2169,16 @@ ospf6_lsupdate_send_interface (struct thread *thread)
   lsupdate = (struct ospf6_lsupdate *)((caddr_t) oh +
                                        sizeof (struct ospf6_header));
 
-  p = (char *)((caddr_t) lsupdate + sizeof (struct ospf6_lsupdate));
+  p = ((u_char *) lsupdate + sizeof (struct ospf6_lsupdate));
   num = 0;
+
+#ifdef WOSPF
+  int counter = 0;
+  
+  if (oi->is_wospf_interface) {
+    WOSPF_PRINTF(3, "Sending LSA on interface:");
+  }
+#endif
 
   for (lsa = ospf6_lsdb_head (oi->lsupdate_list); lsa;
        lsa = ospf6_lsdb_next (lsa))
@@ -1773,6 +2190,12 @@ ospf6_lsupdate_send_interface (struct thread *thread)
           ospf6_lsa_unlock (lsa);
           break;
         }
+
+#ifdef WOSPF
+      if (oi->is_wospf_interface) {
+	WOSPF_PRINTF(3, "   %d: %s", ++counter, lsa->name);
+      }
+#endif
 
       ospf6_lsa_age_update_to_send (lsa, oi->transdelay);
       memcpy (p, lsa->header, OSPF6_LSA_SIZE (lsa->header));
@@ -1787,12 +2210,24 @@ ospf6_lsupdate_send_interface (struct thread *thread)
 
   oh->type = OSPF6_MESSAGE_TYPE_LSUPDATE;
   oh->length = htons (p - sendbuf);
+  
+#ifdef WOSPF
+  
+  if (oi->is_wospf_interface) 
+    ospf6_send (oi->linklocal_addr, &allspfrouters6, oi, oh);
+  
+  else {
+#endif
 
   if (oi->state == OSPF6_INTERFACE_DR ||
       oi->state == OSPF6_INTERFACE_BDR)
     ospf6_send (oi->linklocal_addr, &allspfrouters6, oi, oh);
   else
     ospf6_send (oi->linklocal_addr, &alldrouters6, oi, oh);
+
+#ifdef WOSPF
+  }
+#endif
 
   if (oi->lsupdate_list->count > 0)
     {
@@ -1829,7 +2264,15 @@ ospf6_lsack_send_neighbor (struct thread *thread)
   memset (sendbuf, 0, iobuflen);
   oh = (struct ospf6_header *) sendbuf;
 
-  p = (char *)((caddr_t) oh + sizeof (struct ospf6_header));
+  p = ((u_char *) oh + sizeof (struct ospf6_header));
+
+#ifdef WOSPF
+  int counter = 0;
+
+  if (on->ospf6_if->is_wospf_interface) {
+    WOSPF_PRINTF(3, "Sending acks (multicast) to %s:", WOSPF_ID(&on->router_id));
+  }
+#endif
 
   for (lsa = ospf6_lsdb_head (on->lsack_list); lsa;
        lsa = ospf6_lsdb_next (lsa))
@@ -1847,6 +2290,12 @@ ospf6_lsack_send_neighbor (struct thread *thread)
           break;
         }
 
+#ifdef WOSPF
+	  if (on->ospf6_if->is_wospf_interface) {
+	    WOSPF_PRINTF(3, "     %d: %s ", ++counter, lsa->name);
+	  }
+#endif
+
       ospf6_lsa_age_update_to_send (lsa, on->ospf6_if->transdelay);
       memcpy (p, lsa->header, sizeof (struct ospf6_lsa_header));
       p += sizeof (struct ospf6_lsa_header);
@@ -1858,9 +2307,22 @@ ospf6_lsack_send_neighbor (struct thread *thread)
   oh->type = OSPF6_MESSAGE_TYPE_LSACK;
   oh->length = htons (p - sendbuf);
 
-  ospf6_send (on->ospf6_if->linklocal_addr, &on->linklocal_addr,
+  
+#ifdef WOSPF
+  if (on->ospf6_if->is_wospf_interface) {
+    ospf6_send (on->ospf6_if->linklocal_addr, &allspfrouters6, on->ospf6_if, oh);
+    
+    /* Reset Hello interval here */
+    
+  }
+  else {
+#endif
+    ospf6_send (on->ospf6_if->linklocal_addr, &on->linklocal_addr,
               on->ospf6_if, oh);
-  return 0;
+#ifdef WOSPF
+  }
+#endif
+    return 0;
 }
 
 int
@@ -1889,7 +2351,15 @@ ospf6_lsack_send_interface (struct thread *thread)
   memset (sendbuf, 0, iobuflen);
   oh = (struct ospf6_header *) sendbuf;
 
-  p = (char *)((caddr_t) oh + sizeof (struct ospf6_header));
+  p = ((u_char *) oh + sizeof (struct ospf6_header));
+  
+#ifdef WOSPF
+  int counter = 0;
+
+  if (oi->is_wospf_interface) {
+    WOSPF_PRINTF(3, "Sending acks on interface: ");
+  }
+#endif
 
   for (lsa = ospf6_lsdb_head (oi->lsack_list); lsa;
        lsa = ospf6_lsdb_next (lsa))
@@ -1907,6 +2377,12 @@ ospf6_lsack_send_interface (struct thread *thread)
           break;
         }
 
+#ifdef WOSPF
+	  if (oi->is_wospf_interface) {
+	    WOSPF_PRINTF(3, "     %d: %s ", ++counter, lsa->name);
+	  }
+#endif
+
       ospf6_lsa_age_update_to_send (lsa, oi->transdelay);
       memcpy (p, lsa->header, sizeof (struct ospf6_lsa_header));
       p += sizeof (struct ospf6_lsa_header);
@@ -1917,12 +2393,34 @@ ospf6_lsack_send_interface (struct thread *thread)
 
   oh->type = OSPF6_MESSAGE_TYPE_LSACK;
   oh->length = htons (p - sendbuf);
+  
+#ifdef WOSPF
+  if (oi->is_wospf_interface) {
+    ospf6_send (oi->linklocal_addr, &allspfrouters6, oi, oh);
+
+    /* Reset Hello interval is no state change is to be signaled */
+    if (list_isempty(lls_message->req_fs_from_message->req_fs_from_neighbors) &&
+	list_isempty(lls_message->fs_for_message->fs_for_neighbors)) {
+      
+      THREAD_OFF(oi->thread_send_hello);
+      oi->thread_send_hello = thread_add_timer(master, ospf6_hello_send,
+					       oi, oi->hello_interval);
+      WOSPF_PRINTF(3, "Sending multicast ack -> reset HelloInterval");
+    }
+    
+  }
+  else {
+#endif
 
   if (oi->state == OSPF6_INTERFACE_DR ||
       oi->state == OSPF6_INTERFACE_BDR)
     ospf6_send (oi->linklocal_addr, &allspfrouters6, oi, oh);
   else
     ospf6_send (oi->linklocal_addr, &alldrouters6, oi, oh);
+
+#ifdef WOSPF
+  }
+#endif
 
   if (oi->thread_send_lsack == NULL && oi->lsack_list->count > 0)
     {

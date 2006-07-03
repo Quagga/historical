@@ -37,6 +37,8 @@
 
 #include "ospf6d.h"
 
+#include "wospf_main.h"
+
 /* Default configuration file name for ospf6d. */
 #define OSPF6_DEFAULT_CONFIG       "ospf6d.conf"
 
@@ -273,6 +275,10 @@ main (int argc, char *argv[], char *envp[])
 
   if (daemon_mode)
     daemon (0, 0);
+
+#ifdef WOSPF
+  wospf_init();
+#endif /* WOSPF */
 
   /* pid file create */
   pid_output (pid_file);

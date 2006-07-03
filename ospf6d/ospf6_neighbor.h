@@ -134,5 +134,8 @@ void ospf6_neighbor_init ();
 int config_write_ospf6_debug_neighbor (struct vty *vty);
 void install_element_ospf6_debug_neighbor ();
 
+
+
+
 #endif /* OSPF6_NEIGHBOR_H */
 

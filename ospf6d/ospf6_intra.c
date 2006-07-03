@@ -47,6 +47,10 @@
 #include "ospf6_flood.h"
 #include "ospf6d.h"
 
+#include "wospf_top.h"
+#include "wospf_defs.h"
+
+
 /******************************/
 /* RFC2740 3.4.3.1 Router-LSA */
 /******************************/
@@ -231,6 +235,37 @@ ospf6_router_lsa_originate (struct thread *thread)
             }
         }
 
+#ifdef WOSPF
+
+      /* Point-to-MultiPoint characteristics */
+      if (oi->is_wospf_interface) {
+
+	//WOSPF_PRINTF(2, "Building router LSA");
+	
+	/* Iterates all neighbors associated with this interface */
+	for (j = listhead (oi->neighbor_list); j; nextnode (j))
+	  {
+	    on = (struct ospf6_neighbor *) getdata (j);
+	    
+	    if (on->state == OSPF6_NEIGHBOR_FULL) {
+	      lsdesc->type = OSPF6_ROUTER_LSDESC_POINTTOPOINT;
+	      lsdesc->metric = htons (oi->cost);
+	      lsdesc->interface_id = htonl (oi->interface->ifindex);
+	      lsdesc->neighbor_interface_id = htonl (on->ifindex);
+	      lsdesc->neighbor_router_id = on->router_id;
+	      
+	      lsdesc++;
+	      
+	      //WOSPF_PRINTF(2, "    %s", WOSPF_ID(&on->router_id));
+	    }
+	  }
+	
+      }
+      
+      else {
+#endif
+
+
       /* Broadcast and NBMA interfaces */
       if (if_is_broadcast (oi->interface))
         {
@@ -260,6 +295,10 @@ ospf6_router_lsa_originate (struct thread *thread)
 
           lsdesc++;
         }
+
+#ifdef WOSPF
+      }
+#endif
 
       /* Virtual links */
         /* xxx */
@@ -1373,3 +1412,138 @@ ospf6_intra_init ()
 }
 
 
+#ifdef BUGFIX
+//prevent LSAs from being originated before MinLSInterval
+void ospf6_lsa_schedule(struct ospf6_area *oa, struct ospf6_interface *oi,
+                      int type, wospf_bool stub)
+{
+  struct ospf6 *o = NULL;
+  struct ospf6_lsa *old;
+  int link_state_id;
+  long time_msec = -1;
+
+  switch(type)
+  {
+    case OSPF6_LSTYPE_ROUTER:
+      link_state_id = 0;
+      o = oa->ospf6;
+      old = ospf6_lsdb_lookup (htons (type), link_state_id,
+                               o->router_id, oa->lsdb);
+      break;
+    case OSPF6_LSTYPE_NETWORK:
+      link_state_id = oi->interface->ifindex;
+      o = oi->area->ospf6;
+      old = ospf6_lsdb_lookup (htons (type), htonl(link_state_id),
+                               o->router_id, oi->area->lsdb);
+      break;
+    case OSPF6_LSTYPE_LINK:
+      link_state_id = oi->interface->ifindex;
+      o = oi->area->ospf6;
+      old = ospf6_lsdb_lookup (htons (type), htonl(link_state_id),
+                               o->router_id, oi->lsdb);
+      break;
+    case OSPF6_LSTYPE_INTRA_PREFIX:
+      if (stub)
+      {
+        link_state_id = 0;
+        o = oa->ospf6;
+        old = ospf6_lsdb_lookup (htons (type), link_state_id, 
+                                 o->router_id, oa->lsdb);
+      }
+      else
+      {
+        link_state_id = oi->interface->ifindex;
+        o = oi->area->ospf6;
+        old = ospf6_lsdb_lookup (htons (type), htonl(link_state_id),
+                                 o->router_id, oi->area->lsdb);
+      }
+      break;
+    default:
+      zlog_warn ("No such LSA type");
+      return;
+      break;
+  }
+  if (old)
+    {
+      time_msec =
+	(long)(((float)MIN_LS_INTERVAL- elapsed_time(&old->originated)) * 1000);
+    }
+  switch(type)
+    {
+    case OSPF6_LSTYPE_ROUTER:
+    if (time_msec > 0)
+    {
+      THREAD_OFF(oa->thread_router_lsa);
+      oa->thread_router_lsa =
+       thread_add_timer_msec(master, ospf6_router_lsa_originate, oa, time_msec);
+      //XXX FIXME ospf6_flood_clear(old); 
+      //should we clear our own old cued LSA (rxmt list)  ????
+      //while we wait to originate a new one
+    }
+    else
+    {
+      oa->thread_router_lsa =
+        thread_add_event(master, ospf6_router_lsa_originate, oa, 0);
+    }
+    break;
+    case OSPF6_LSTYPE_NETWORK:
+    if (time_msec > 0)
+    {
+      THREAD_OFF(oi->thread_network_lsa);
+      oi->thread_network_lsa =
+       thread_add_timer_msec(master, ospf6_network_lsa_originate,oi, time_msec);
+    }
+    else
+    {
+      oi->thread_network_lsa =
+        thread_add_event(master, ospf6_network_lsa_originate, oi, 0);
+    }
+    break;
+  case OSPF6_LSTYPE_LINK:
+    if (time_msec > 0)
+    {
+      THREAD_OFF(oi->thread_link_lsa);
+      oi->thread_link_lsa =
+        thread_add_timer_msec(master, ospf6_link_lsa_originate, oi, time_msec);
+    }
+    else
+    {
+      oi->thread_link_lsa =
+        thread_add_event(master, ospf6_link_lsa_originate, oi, 0);
+    }
+    break;
+  case OSPF6_LSTYPE_INTRA_PREFIX:
+    if (stub)
+    {
+      if (time_msec > 0)
+      {
+        THREAD_OFF(oa->thread_intra_prefix_lsa);
+        oa->thread_intra_prefix_lsa =
+          thread_add_timer_msec(master, ospf6_intra_prefix_lsa_originate_stub,
+          oa, time_msec);
+      }
+      else
+      {
+        oa->thread_intra_prefix_lsa =
+          thread_add_event(master, ospf6_intra_prefix_lsa_originate_stub,oa, 0);
+      }
+    }
+    else
+    {
+      if (time_msec > 0)
+      {
+        THREAD_OFF(oi->thread_intra_prefix_lsa);
+        oi->thread_intra_prefix_lsa = 
+          thread_add_timer_msec(master,ospf6_intra_prefix_lsa_originate_transit,
+                                oi, time_msec);
+      }
+      else
+      {
+        oi->thread_intra_prefix_lsa =
+         thread_add_event(master,ospf6_intra_prefix_lsa_originate_transit,oi,0);
+      }
+    }
+    break;
+  }
+}
+#endif //BUGFIX

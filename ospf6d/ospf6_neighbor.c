@@ -40,6 +40,10 @@
 #include "ospf6_flood.h"
 #include "ospf6d.h"
 
+#include "wospf_defs.h"
+#include "wospf_neighbor_table.h"
+#include "wospf_two_hop_neighbor.h"
+
 unsigned char conf_debug_ospf6_neighbor = 0;
 
 const char *ospf6_neighbor_state_str[] =
@@ -112,6 +116,11 @@ ospf6_neighbor_delete (struct ospf6_neighbor *on)
 {
   struct ospf6_lsa *lsa;
 
+#ifdef WOSPF
+  wospf_delete_neighbor_table(on->router_id);
+
+#endif
+
   ospf6_lsdb_remove_all (on->summary_list);
   ospf6_lsdb_remove_all (on->request_list);
   for (lsa = ospf6_lsdb_head (on->retrans_list); lsa;
@@ -168,6 +177,20 @@ ospf6_neighbor_state_change (u_char next_state, struct ospf6_neighbor *on)
 
   if (prev_state == OSPF6_NEIGHBOR_FULL || next_state == OSPF6_NEIGHBOR_FULL)
     {
+      
+#ifdef WOSPF
+      struct ospf6_area *oa = on->ospf6_if->area;
+      if (!oa->thread_router_lsa) {
+	oa->thread_router_lsa =
+	  thread_add_timer_msec(master, ospf6_router_lsa_originate, 
+				oa, on->ospf6_if->minLSInterval*1000);
+      
+	WOSPF_PRINTF(2, "Scheduling Router LSA for transmission in %d sec", on->ospf6_if->minLSInterval);
+      }
+      else WOSPF_PRINTF(22, "NOT Scheduling Router LSA for transmission in %d sec", on->ospf6_if->minLSInterval);
+
+#endif      
+
       OSPF6_ROUTER_LSA_SCHEDULE (on->ospf6_if->area);
       if (on->ospf6_if->state == OSPF6_INTERFACE_DR)
         {
@@ -191,12 +214,29 @@ ospf6_neighbor_state_change (u_char next_state, struct ospf6_neighbor *on)
     }
 #endif /*XXX*/
 
+#ifdef WOSPF
+  if (prev_state < OSPF6_NEIGHBOR_EXCHANGE && next_state >= OSPF6_NEIGHBOR_EXCHANGE) {
+    wospf_insert_neighbor_table(on);
+  }
+  else if (next_state < OSPF6_NEIGHBOR_EXCHANGE && prev_state >= OSPF6_NEIGHBOR_EXCHANGE) {
+    wospf_delete_neighbor_table(on->router_id);
+  }
+
+#endif
+
 }
 
 /* RFC2328 section 10.4 */
 int
 need_adjacency (struct ospf6_neighbor *on)
 {
+
+#ifdef WOSPF
+  if (on->ospf6_if->is_wospf_interface)
+    return WOSPF_TRUE;
+
+#endif
+
   if (on->ospf6_if->state == OSPF6_INTERFACE_POINTTOPOINT ||
       on->ospf6_if->state == OSPF6_INTERFACE_DR ||
       on->ospf6_if->state == OSPF6_INTERFACE_BDR)

@@ -42,6 +42,10 @@
 #include "ospf6_spf.h"
 #include "ospf6d.h"
 
+#include "ospf6_proto.h"
+#include "wospf_protocol.h"
+#include "wospf_defs.h"
+
 unsigned char conf_debug_ospf6_interface = 0;
 
 const char *ospf6_interface_state_str[] =
@@ -158,6 +162,32 @@ ospf6_interface_create (struct interface *ifp)
   /* link both */
   oi->interface = ifp;
   ifp->info = oi;
+
+#ifdef WOSPF
+  oi->is_wospf_interface = WOSPF_TRUE;
+  oi->support_incr_hellos = WOSPF_TRUE;
+  oi->pushbacked_lsa_list = list_new();
+  
+  oi->propagation_delay = 0;
+  oi->pushback_interval = ((int)oi->rxmt_interval/2) - oi->propagation_delay;
+  
+  /* Ensure the inequality */
+  if (oi->pushback_interval - (((double)oi->rxmt_interval/2) - oi->propagation_delay) == 0) {
+    oi->pushback_interval -= 1;
+  }
+
+  /* Ensure the inequality */
+  oi->ack_interval = (int)(oi->pushback_interval - oi->propagation_delay);
+  if (oi->ack_interval - (oi->pushback_interval - oi->propagation_delay) == 0) {
+    oi->ack_interval -= 1;
+  }
+
+  oi->ack_cache_timeout = ACK_CACHE_TIMEOUT;
+  oi->minLSInterval = MIN_LS_INTERVAL;
+
+  zlog_notice("RxmtInterval: %d  PushbackInterval: %d  AckInterval: %d", oi->rxmt_interval, oi->pushback_interval, 
+	      oi->ack_interval);
+#endif
 
   return oi;
 }
@@ -647,6 +677,16 @@ interface_up (struct thread *thread)
   if (! CHECK_FLAG (oi->flag, OSPF6_INTERFACE_PASSIVE))
     thread_add_event (master, ospf6_hello_send, oi, 0);
 
+
+#ifdef WOSPF
+
+  if (oi->is_wospf_interface) {
+    ospf6_interface_state_change (OSPF6_INTERFACE_POINTTOPOINT, oi);
+  }
+  else {
+
+#endif
+
   /* decide next interface state */
   if (if_is_pointopoint (oi->interface))
     ospf6_interface_state_change (OSPF6_INTERFACE_POINTTOPOINT, oi);
@@ -657,6 +697,10 @@ interface_up (struct thread *thread)
       ospf6_interface_state_change (OSPF6_INTERFACE_WAITING, oi);
       thread_add_timer (master, wait_timer, oi, oi->dead_interval);
     }
+
+#ifdef WOSPF
+  }
+#endif
 
   return 0;
 }

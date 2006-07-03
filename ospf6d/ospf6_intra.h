@@ -22,6 +22,12 @@
 #ifndef OSPF6_INTRA_H
 #define OSPF6_INTRA_H
 
+
+#include "ospf6d.h"
+#include "ospf6_area.h"
+#include "ospf6_interface.h"
+#include "wospf_defs.h"
+
 /* Router-LSA */
 struct ospf6_router_lsa
 {
@@ -95,8 +101,41 @@ struct ospf6_intra_prefix_lsa
 };
 
 
+
+#ifdef BUGFIX
+
+//struct ospf6_interface;
+void ospf6_lsa_schedule(struct ospf6_area *oa, struct ospf6_interface *oi,
+                        int type, wospf_bool stub);
 #define OSPF6_ROUTER_LSA_SCHEDULE(oa) \
   do { \
+    if (! (oa)->thread_router_lsa) \
+   ospf6_lsa_schedule(oa, NULL, OSPF6_LSTYPE_ROUTER, WOSPF_FALSE); \
+  } while (0)
+#define OSPF6_NETWORK_LSA_SCHEDULE(oi) \
+  do { \
+    if (! (oi)->thread_network_lsa) \
+   ospf6_lsa_schedule(NULL, oi, OSPF6_LSTYPE_NETWORK, WOSPF_FALSE); \
+  } while (0)
+#define OSPF6_LINK_LSA_SCHEDULE(oi) \
+  do { \
+    if (! (oi)->thread_link_lsa) \
+   ospf6_lsa_schedule(NULL, oi, OSPF6_LSTYPE_LINK, WOSPF_FALSE); \
+  } while (0)
+#define OSPF6_INTRA_PREFIX_LSA_SCHEDULE_STUB(oa) \
+  do { \
+    if (! (oa)->thread_intra_prefix_lsa) \
+   ospf6_lsa_schedule(oa, NULL, OSPF6_LSTYPE_INTRA_PREFIX, WOSPF_TRUE); \
+  } while (0)
+#define OSPF6_INTRA_PREFIX_LSA_SCHEDULE_TRANSIT(oi) \
+  do { \
+    if (! (oi)->thread_intra_prefix_lsa) \
+   ospf6_lsa_schedule(NULL, oi, OSPF6_LSTYPE_INTRA_PREFIX, WOSPF_FALSE); \
+  } while (0)
+#else
+#define OSPF6_ROUTER_LSA_SCHEDULE(oa) \
+  do { \
+    WOSPF_PRINTF(2, "Schedule OLD Router LSA...."); \ /* Debug */
     if (! (oa)->thread_router_lsa) \
       (oa)->thread_router_lsa = \
         thread_add_event (master, ospf6_router_lsa_originate, oa, 0); \
@@ -127,6 +166,7 @@ struct ospf6_intra_prefix_lsa
         thread_add_event (master, ospf6_intra_prefix_lsa_originate_transit, \
                           oi, 0); \
   } while (0)
+#endif
 
 #define OSPF6_NETWORK_LSA_EXECUTE(oi) \
   do { \

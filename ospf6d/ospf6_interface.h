@@ -102,6 +102,17 @@ struct ospf6_interface
 
   /* prefix-list name to filter connected prefix */
   char *plist_name;
+
+  /* WOSPF-OR parameters */
+  int is_wospf_interface;
+  int support_incr_hellos;
+  u_int32_t propagation_delay;
+  u_int32_t pushback_interval;
+  u_int32_t ack_interval;
+  uint32_t ack_cache_timeout;
+  struct list *pushbacked_lsa_list;
+  u_int32_t minLSInterval;
+
 };
 
 /* interface state */

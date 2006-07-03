@@ -28,6 +28,10 @@
 extern int errno;
 extern struct thread_master *master;
 
+/* Enable WOSPF-OR code */
+#define WOSPF
+#define BUGFIX /* Code fetched from Boeings OSPF-MANET implementation */
+
 #ifdef INRIA_IPV6
 #ifndef IPV6_PKTINFO
 #define IPV6_PKTINFO IPV6_RECVPKTINFO

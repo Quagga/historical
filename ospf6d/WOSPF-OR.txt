@@ -1,0 +1,50 @@
+
+
+WOSPF-OR: Wireless OSPFv3 by the use of Overlapping Relays.
+
+
+Comments on the implementation:
+This WOSPF-OR implementation is a more or less complete rewrite of the
+WOSPF-OR implementation described in the my master thesis named
+"Wireless Extensions to OSPF - Implementation of the Overlapping
+Relays Proposal". The aim of the code rewrite was first and foremost
+to make the code more readable to others. I have not had the time to
+perform such extensive testing as I did in the thesis, but the code
+seems to operate quite well. Furthermore, I have not had the time to
+make sure every detail in the draft/thesis is implemented, so in this
+rewritten implementation there may be some deltas from Cisco's draft
+that were not present in the original implementation. However, most of
+the functionality are implemented as outlined in the draft/thesis, and
+it is probably easier to fix bugs etc in this implementation rather
+than diving into the original implementation. :) 
+
+Some details on the rewritten code: 
+    - The local node maintain LLS information in a global LLS
+      struct. If, for example, a neighbor is dropped, the neighbor's
+      router ID is added to the Neighbor Drop message contained withing
+      the LLS message. Outgoing TLVs are constructed based on this
+      global LLS struct. Hence, the local node has /one/ global LLS data
+      structure to update wrt the LLS signaling. Incoming LLS data block
+      are parsed and stored in the same type of LLS struct. 
+    - All WOSPF-OR code is encapsulated in "#ifdef WOSPF"-tags, or
+      resides in separate files.
+    - Delta from the draft: Only adjacent neighbor utilize Overlapping
+      Relays and Incremental Hellos, i.e. LLS data blocks are only
+      transmitted along adjacent links.
+
+Some bugs and un-implemented features:
+    - Several memory leaks are present
+    - Timing out ack cache entries does not work
+    - LLS checksum computation does not work
+    - The DoNotAge bit and the DC bit functionality is still not implemented
+    - The I, L and F bits may be used incorrectly, i.e. they may not
+      processed correctly wrt to the dratf, section 3.4.12
+    - Support for OSPF Graceful Restart is not implemented
+
+Other (minor) deltas from the draft not already mentioned are probably
+present, but the functionality should be more or less compliant with
+the draft. Some last minute changes were made before submitting the
+code, but hopefully not additional bugs were introduced. :)
+
+
+Kenneth Holter, May 2006

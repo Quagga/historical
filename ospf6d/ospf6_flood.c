@@ -42,6 +42,12 @@
 
 #include "ospf6_flood.h"
 
+#include "wospf_ack_cache.h"
+#include "wospf_top.h"
+#include "wospf_flood.h"
+#include "wospf_intra.h"
+#include "wospf_aor_selector.h"
+
 unsigned char conf_debug_ospf6_flooding;
 
 struct ospf6_lsdb *
@@ -390,6 +396,7 @@ ospf6_flood_interface (struct ospf6_neighbor *from,
     }
 }
 
+
 void
 ospf6_flood_area (struct ospf6_neighbor *from,
                   struct ospf6_lsa *lsa, struct ospf6_area *oa)
@@ -411,7 +418,16 @@ ospf6_flood_area (struct ospf6_neighbor *from,
         continue;
 #endif/*0*/
 
+
+#ifdef WOSPF
+      if (oi->is_wospf_interface) 
+	wospf_flood_interface (from, lsa, oi);
+      else
+	ospf6_flood_interface (from, lsa, oi);
+#else
       ospf6_flood_interface (from, lsa, oi);
+#endif
+      
     }
 }
 
@@ -535,6 +551,10 @@ ospf6_acknowledge_lsa_bdrouter (struct ospf6_lsa *lsa, int ismore_recent,
   struct ospf6_interface *oi;
   int is_debug = 0;
 
+#ifdef WOSPF
+  zlog_err("ERROR: Inside ospf6_acknowledge_lsa_bdrouter");
+#endif
+
   if (IS_OSPF6_DEBUG_FLOODING ||
       IS_OSPF6_DEBUG_FLOOD_TYPE (lsa->header->type))
     is_debug++;
@@ -564,8 +584,13 @@ ospf6_acknowledge_lsa_bdrouter (struct ospf6_lsa *lsa, int ismore_recent,
           /* Delayed acknowledgement */
           ospf6_lsdb_add (ospf6_lsa_copy (lsa), oi->lsack_list);
           if (oi->thread_send_lsack == NULL)
+#ifdef WOSPF
+	    oi->thread_send_lsack =
+              thread_add_timer (master, ospf6_lsack_send_interface, oi, oi->ack_interval);
+#else
             oi->thread_send_lsack =
               thread_add_timer (master, ospf6_lsack_send_interface, oi, 3);
+#endif
         }
       else
         {
@@ -588,8 +613,13 @@ ospf6_acknowledge_lsa_bdrouter (struct ospf6_lsa *lsa, int ismore_recent,
           /* Delayed acknowledgement */
           ospf6_lsdb_add (ospf6_lsa_copy (lsa), oi->lsack_list);
           if (oi->thread_send_lsack == NULL)
+#ifdef WOSPF
+	    oi->thread_send_lsack =
+              thread_add_timer (master, ospf6_lsack_send_interface, oi, oi->ack_interval);
+#else
             oi->thread_send_lsack =
               thread_add_timer (master, ospf6_lsack_send_interface, oi, 3);
+#endif
         }
       else
         {
@@ -620,9 +650,17 @@ ospf6_acknowledge_lsa_bdrouter (struct ospf6_lsa *lsa, int ismore_recent,
      early of ospf6_receive_lsa () */
 }
 
+
+#ifdef WOSPF
+static void
+ospf6_acknowledge_lsa_allother (struct ospf6_lsa *lsa, int ismore_recent,
+                                struct ospf6_neighbor *from, 
+				struct in6_addr *dst)
+#else
 static void
 ospf6_acknowledge_lsa_allother (struct ospf6_lsa *lsa, int ismore_recent,
                                 struct ospf6_neighbor *from)
+#endif
 {
   struct ospf6_interface *oi;
   int is_debug = 0;
@@ -638,6 +676,11 @@ ospf6_acknowledge_lsa_allother (struct ospf6_lsa *lsa, int ismore_recent,
      No acknowledgement sent. */
   if (CHECK_FLAG (lsa->flag, OSPF6_LSA_FLOODBACK))
     {
+
+#ifdef WOSPF
+      zlog_debug ("No acknowledgement (AllOther & FloodBack)");
+#endif
+
       if (is_debug)
         zlog_debug ("No acknowledgement (AllOther & FloodBack)");
       return;
@@ -647,13 +690,22 @@ ospf6_acknowledge_lsa_allother (struct ospf6_lsa *lsa, int ismore_recent,
      back out receiving interface. Delayed acknowledgement sent. */
   if (ismore_recent < 0)
     {
+
       if (is_debug)
         zlog_debug ("Delayed acknowledgement (AllOther & MoreRecent)");
       /* Delayed acknowledgement */
       ospf6_lsdb_add (ospf6_lsa_copy (lsa), oi->lsack_list);
       if (oi->thread_send_lsack == NULL)
+#ifdef WOSPF
+	{
+	  oi->thread_send_lsack =
+	    thread_add_timer (master, ospf6_lsack_send_interface, oi, oi->ack_interval);
+	  WOSPF_PRINTF(2, "Scheduling ACKs for transmission in %d sec", oi->ack_interval);
+	}
+#else
         oi->thread_send_lsack =
           thread_add_timer (master, ospf6_lsack_send_interface, oi, 3);
+#endif
       return;
     }
 
@@ -662,6 +714,11 @@ ospf6_acknowledge_lsa_allother (struct ospf6_lsa *lsa, int ismore_recent,
   if (CHECK_FLAG (lsa->flag, OSPF6_LSA_DUPLICATE) &&
       CHECK_FLAG (lsa->flag, OSPF6_LSA_IMPLIEDACK))
     {
+
+#ifdef WOSPF
+      WOSPF_PRINTF(5, "No acknowledgement of %s (AllOther & Duplicate & ImpliedAck)", lsa->name);
+#endif
+
       if (is_debug)
         zlog_debug ("No acknowledgement (AllOther & Duplicate & ImpliedAck)");
       return;
@@ -672,6 +729,17 @@ ospf6_acknowledge_lsa_allother (struct ospf6_lsa *lsa, int ismore_recent,
   if (CHECK_FLAG (lsa->flag, OSPF6_LSA_DUPLICATE) &&
       ! CHECK_FLAG (lsa->flag, OSPF6_LSA_IMPLIEDACK))
     {
+
+#ifdef WOSPF
+      if (IN6_IS_ADDR_MULTICAST(dst)) {
+	WOSPF_PRINTF(2, "Not acking duplicate LSA %s sent by %s", lsa->name, WOSPF_ID(&from->router_id));
+	return; 
+      }
+      /* Else the LSA was received UNICAST */
+      else WOSPF_PRINTF(2, "Acking UNICAST LSA %s sent by %s", lsa->name, WOSPF_ID(&from->router_id));
+   
+#endif
+
       if (is_debug)
         zlog_debug ("Direct acknowledgement (AllOther & Duplicate)");
       ospf6_lsdb_add (ospf6_lsa_copy (lsa), from->lsack_list);
@@ -688,19 +756,37 @@ ospf6_acknowledge_lsa_allother (struct ospf6_lsa *lsa, int ismore_recent,
      early of ospf6_receive_lsa () */
 }
 
+#ifdef WOSPF
+void
+ospf6_acknowledge_lsa (struct ospf6_lsa *lsa, int ismore_recent,
+                       struct ospf6_neighbor *from,
+		       struct in6_addr *dst)
+#else
 void
 ospf6_acknowledge_lsa (struct ospf6_lsa *lsa, int ismore_recent,
                        struct ospf6_neighbor *from)
+#endif
 {
   struct ospf6_interface *oi;
 
   assert (from && from->ospf6_if);
   oi = from->ospf6_if;
 
+#ifdef WOSPF
+  if (is_AOR_selector(from->router_id) == WOSPF_TRUE) {
+    WOSPF_PRINTF(1, "I'm an AOR for %s -> not sending ACK on %s", WOSPF_ID(&from->router_id), lsa->name);
+    return; 
+  }
+#endif
+
   if (oi->state == OSPF6_INTERFACE_BDR)
     ospf6_acknowledge_lsa_bdrouter (lsa, ismore_recent, from);
   else
+#ifdef WOSPF
+    ospf6_acknowledge_lsa_allother (lsa, ismore_recent, from, dst);
+#else
     ospf6_acknowledge_lsa_allother (lsa, ismore_recent, from);
+#endif
 }
 
 /* RFC2328 section 13 (4):
@@ -747,9 +833,16 @@ ospf6_is_maxage_lsa_drop (struct ospf6_lsa *lsa, struct ospf6_neighbor *from)
 }
 
 /* RFC2328 section 13 The Flooding Procedure */
+#ifdef WOSPF
+void
+ospf6_receive_lsa (struct ospf6_neighbor *from,
+                   struct ospf6_lsa_header *lsa_header,
+		   struct in6_addr *dst)
+#else
 void
 ospf6_receive_lsa (struct ospf6_neighbor *from,
                    struct ospf6_lsa_header *lsa_header)
+#endif
 {
   struct ospf6_lsa *new = NULL, *old = NULL, *rem = NULL;
   int ismore_recent;
@@ -761,6 +854,19 @@ ospf6_receive_lsa (struct ospf6_neighbor *from,
 
   /* make lsa structure for received lsa */
   new = ospf6_lsa_create (lsa_header);
+
+#ifdef WOSPF
+
+  /* Update the neighbor's neighbor list is router LSA */
+  if (OSPF6_LSA_IS_TYPE (ROUTER, new) && from != NULL) {
+    WOSPF_PRINTF(22, "Got router LSA %s from %s", new->name, WOSPF_ID(&from->router_id));
+  }
+  if (from->ospf6_if->is_wospf_interface)
+    SET_FLAG(new->flag, OSPF6_LSA_MANET);
+
+#endif
+
+
 
   if (IS_OSPF6_DEBUG_FLOODING ||
       IS_OSPF6_DEBUG_FLOOD_TYPE (new->header->type))
@@ -790,6 +896,7 @@ ospf6_receive_lsa (struct ospf6_neighbor *from,
       ospf6_lsa_delete (new);
       return;
     }
+
 
   /* (3) LSA which have reserved scope is discarded
      RFC2470 3.5.1. Receiving Link State Update packets  */
@@ -821,6 +928,10 @@ ospf6_receive_lsa (struct ospf6_neighbor *from,
       if (is_debug)
         zlog_debug ("Drop MaxAge LSA with direct acknowledgement.");
 
+#ifdef WOSPF
+      zlog_debug ("Drop MaxAge LSA with direct acknowledgement.");
+#endif
+
       /* a) Acknowledge back to neighbor (Direct acknowledgement, 13.5) */
       ospf6_lsdb_add (ospf6_lsa_copy (new), from->lsack_list);
       if (from->thread_send_lsack == NULL)
@@ -841,6 +952,11 @@ ospf6_receive_lsa (struct ospf6_neighbor *from,
       ismore_recent = ospf6_lsa_compare (new, old);
       if (ntohl (new->header->seqnum) == ntohl (old->header->seqnum))
         {
+
+#ifdef WOSPF
+	  //zlog_debug ("Duplicate LSA %s received", new->name);
+#endif
+
           if (is_debug)
             zlog_debug ("Received is duplicated LSA");
           SET_FLAG (new->flag, OSPF6_LSA_DUPLICATE);
@@ -861,11 +977,20 @@ ospf6_receive_lsa (struct ospf6_neighbor *from,
           timersub (&now, &old->installed, &res);
           if (res.tv_sec < MIN_LS_ARRIVAL)
             {
+
+#ifdef WOSPF
+	      /* WOSPF-OR hack: Quagga's OSPFv3 code does not enforce
+		 waiting MinLSInterval when updating LSAs. This hack
+		 does not reject such LSAs */
+	      zlog_debug ("%s received within MinLSArrival", new->name);
+#else
+
               if (is_debug)
                 zlog_debug ("LSA can't be updated within MinLSArrival, discard");
               ospf6_lsa_delete (new);
               return;   /* examin next lsa */
-            }
+#endif
+           }
         }
 
       gettimeofday (&new->received, (struct timezone *) NULL);
@@ -888,8 +1013,24 @@ ospf6_receive_lsa (struct ospf6_neighbor *from,
               table calculation (replacing database copy) */
       ospf6_install_lsa (new);
 
+#ifdef WOSPF
+      if (from->ospf6_if->is_wospf_interface) {
+	
+	/* Update the neighbor's neighbor list is router LSA */
+	if (OSPF6_LSA_IS_TYPE (ROUTER, new)) {
+	  
+	  if (new->header->adv_router == from->router_id) {
+	    
+	    wospf_process_router_lsa(new, from, lsa_header);
+	  }
+	  
+	}
+
+      }
+#endif
+
       /* (e) possibly acknowledge */
-      ospf6_acknowledge_lsa (new, ismore_recent, from);
+      ospf6_acknowledge_lsa (new, ismore_recent, from, dst);
 
       /* (f) Self Originated LSA, section 13.4 */
       if (new->header->adv_router == from->ospf6_if->area->ospf6->router_id)
@@ -947,13 +1088,27 @@ ospf6_receive_lsa (struct ospf6_neighbor *from,
           SET_FLAG (new->flag, OSPF6_LSA_IMPLIEDACK);
           ospf6_decrement_retrans_count (rem);
           ospf6_lsdb_remove (rem, from->retrans_list);
+
+#ifdef WOSPF
+	  if (from->ospf6_if->is_wospf_interface) {
+	    
+	    char *name = int_to_ip(&from->router_id);
+	    WOSPF_PRINTF(3, "Implicit acknowledgement(reflood of %s) from %s", new->name, name);
+	    WOSPF_PRINTF(33, "  Removing %s from %s's retrans list", new->name, name);
+	    
+	    /* This neighbor has acked an LSA - remove from BackupWait
+	       lists */
+	    wospf_remove_bwn_list(from, new, from->ospf6_if, 1);
+	  }
+#endif
+
         }
 
       if (is_debug)
         zlog_debug ("Possibly acknowledge and then discard");
 
       /* (b) possibly acknowledge */
-      ospf6_acknowledge_lsa (new, ismore_recent, from);
+      ospf6_acknowledge_lsa (new, ismore_recent, from, dst);
 
       ospf6_lsa_delete (new);
       return;
@@ -985,13 +1140,23 @@ ospf6_receive_lsa (struct ospf6_neighbor *from,
               zlog_debug ("Send back directly and then discard");
             }
 
-          /* XXX, MinLSArrival check !? RFC 2328 13 (8) */
+#ifdef WOSPF
+	  /* Draft, section 3.4.8.2.3: WOSPF-OR interfaces: Ignore the new LSA unless I'm
+	     an AOR for the sender */
+	  if ((from->ospf6_if->is_wospf_interface && is_AOR_selector(from->router_id) == WOSPF_FALSE) ||
+	      from->ospf6_if->is_wospf_interface == WOSPF_FALSE) {
+#endif
+	    /* XXX, MinLSArrival check !? RFC 2328 13 (8) */
+	    
+	    ospf6_lsdb_add (ospf6_lsa_copy (old), from->lsupdate_list);
+	    if (from->thread_send_lsupdate == NULL)
+	      from->thread_send_lsupdate =
+		thread_add_event (master, ospf6_lsupdate_send_neighbor, from, 0);
+	    ospf6_lsa_delete (new);
+#ifdef WOSPF
+	  }
+#endif
 
-          ospf6_lsdb_add (ospf6_lsa_copy (old), from->lsupdate_list);
-          if (from->thread_send_lsupdate == NULL)
-            from->thread_send_lsupdate =
-              thread_add_event (master, ospf6_lsupdate_send_neighbor, from, 0);
-          ospf6_lsa_delete (new);
           return;
         }
       return;
