@@ -32,6 +32,10 @@
 #include "linklist.h"
 #include "thread.h"
 
+#ifdef OSPF6_MANET_MDR_FLOOD
+#include "ospf6_neighbor.h"
+#endif //OSPF6_MANET_MDR_FLOOD
+
 #include "ospf6_lsa.h"
 #include "ospf6_lsdb.h"
 #include "ospf6_route.h"
@@ -40,6 +44,9 @@
 #include "ospf6_intra.h"
 #include "ospf6_interface.h"
 #include "ospf6d.h"
+#ifdef SIM
+#include "sim.h"
+#endif //SIM
 
 unsigned char conf_debug_ospf6_spf = 0;
 
@@ -321,6 +328,21 @@ ospf6_spf_install (struct ospf6_vertex *v,
 
       prev = (struct ospf6_vertex *) route->route_option;
       if (prev->hops > v->hops)
+#ifdef BUGFIX  //FIXME
+        {
+          LIST_LOOP (prev->child_list, w, node)
+            {
+              assert (w->parent == prev);
+              w->parent = v;
+              listnode_add_sort (v->child_list, w);
+            }
+          listnode_delete (prev->parent->child_list, prev);
+          listnode_add_sort (v->parent->child_list, v);
+
+          //ospf6_vertex_delete (prev);  //HACK
+          route->route_option = v;
+        }
+#else
         {
           LIST_LOOP (prev->child_list, w, node)
             {
@@ -334,6 +356,7 @@ ospf6_spf_install (struct ospf6_vertex *v,
           ospf6_vertex_delete (prev);
           route->route_option = v;
         }
+#endif //BUGFIX
       else
         ospf6_vertex_delete (v);
 
@@ -393,9 +416,23 @@ ospf6_spf_table_finish (struct ospf6_route_table *result_table)
 /* RFC2328 16.1.  Calculating the shortest-path tree for an area */
 /* RFC2740 3.8.1.  Calculating the shortest path tree for an area */
 void
+#ifdef OSPF6_MANET_MPR_SP
+//Changes by:  Stan Ratliff
+//Date:  November 1st, 2005
+//Reason:  Add a flag to enable or disable the use of unsynchronized links
+//         in the SPF calculation.
+// Copyright (C) 2005
+
+//Roy-01 4.1 para 6
+ospf6_spf_calculation (u_int32_t router_id,
+                       struct ospf6_route_table *result_table,
+                       struct ospf6_area *oa,
+																							boolean ignore_unsync)
+#else
 ospf6_spf_calculation (u_int32_t router_id,
                        struct ospf6_route_table *result_table,
                        struct ospf6_area *oa)
+#endif //OSPF6_MANET_MPR_SP
 {
   struct pqueue *candidate_list;
   struct ospf6_vertex *root, *v, *w;
@@ -403,6 +440,11 @@ ospf6_spf_calculation (u_int32_t router_id,
   int size;
   caddr_t lsdesc;
   struct ospf6_lsa *lsa;
+#if defined(OSPF6_MANET_MDR_FLOOD) || defined(OSPF6_MANET_MPR_FLOOD)
+  struct listnode *i2, *j;
+  struct ospf6_interface *oi;
+  struct ospf6_neighbor *on;
+#endif // defined(OSPF6_MANET_MDR_FLOOD) || defined(OSPF6_MANET_MPR_FLOOD)
 
   /* initialize */
   candidate_list = pqueue_create ();
@@ -415,7 +457,15 @@ ospf6_spf_calculation (u_int32_t router_id,
   lsa = ospf6_lsdb_lookup (htons (OSPF6_LSTYPE_ROUTER), htonl (0),
                            router_id, oa->lsdb);
   if (lsa == NULL)
+#ifdef BUGFIX
+  {
+    //canidate list was not being deleted when returning on NULL
+    pqueue_delete (candidate_list);
     return;
+  }
+#else
+    return;
+#endif //BUGFIX
   root = ospf6_vertex_create (lsa);
   root->area = oa;
   root->cost = 0;
@@ -423,14 +473,81 @@ ospf6_spf_calculation (u_int32_t router_id,
   root->nexthop[0].ifindex = 0; /* loopbak I/F is better ... */
   inet_pton (AF_INET6, "::1", &root->nexthop[0].address);
 
+#if defined(OSPF6_MANET_MDR_FLOOD) || defined(OSPF6_MANET_MPR_FLOOD)
+  pqueue_enqueue (root, candidate_list);  // add root to candidate list
+
+  // For each manet interface, add all 2-way neighbors for which
+  // LSA exists to candidate list.
+
+  for (i2 = listhead (oa->if_list); i2; nextnode (i2))
+  {
+    oi = (struct ospf6_interface *) getdata (i2);
+    if (oi->state == OSPF6_INTERFACE_DOWN) continue;
+    if (oi->type != OSPF6_IFTYPE_MANETRELIABLE) continue;
+
+    if (oi->flooding == OSPF6_FLOOD_MDR_SICDS)
+    { 
+      if (oi->AdjConnectivity == OSPF6_ADJ_FULLYCONNECTED) 
+        continue;
+    }
+#ifdef OSPF6_MANET_MPR_SP
+    else if (oi->flooding == OSPF6_FLOOD_MPR_SDCDS)
+    {
+      //if (!oi->smart_peering || !oi->unsynch_adj)
+      if (!oi->smart_peering || !oi->unsynch_adj || ignore_unsync) //BUGFIX_SP
+        continue;
+    }
+#endif //OSPF6_MANET_MPR_SP
+    else
+      continue;
+
+    for (j = listhead(oi->neighbor_list); j; nextnode(j))
+    {
+      on = (struct ospf6_neighbor *) getdata (j);
+
+      // If full adjacencies are used, routable neighbors are the
+      // same as Full neighbors.
+      if (oi->flooding == OSPF6_FLOOD_MDR_SICDS && oi->full_adj_part_lsa)
+      {
+        if (on->state == OSPF6_NEIGHBOR_FULL)
+          on->routable = true;
+        else
+          on->routable = false;
+      }
+        
+      // Require neighbor to be routable.
+      if (on->state >= OSPF6_NEIGHBOR_TWOWAY && on->routable ||
+          oi->full_adj_part_lsa && on->state == OSPF6_NEIGHBOR_FULL)
+      {
+        lsa = ospf6_lsdb_lookup (htons (OSPF6_LSTYPE_ROUTER), htonl (0),
+                          on->router_id, oa->lsdb);
+        if (lsa == NULL) continue;
+        v = ospf6_vertex_create (lsa);
+        v->area = oa;
+        v->parent = root;
+        // Full neighbors are given lower cost.
+        if (on->state == OSPF6_NEIGHBOR_FULL)
+          v->cost = oi->cost+9;
+        else
+          v->cost = oi->cost+10;
+        //v->cost = oi->cost;
+        v->hops = 1;
+        v->nexthop[0].ifindex = oi->interface->ifindex;
+        v->nexthop[0].address = on->linklocal_addr;
+        pqueue_enqueue (v, candidate_list);
+      }
+    }
+  }
+#else //defined(OSPF6_MANET_MDR_FLOOD) || defined(OSPF6_MANET_MPR_FLOOD)
   /* Actually insert root to the candidate-list as the only candidate */
   pqueue_enqueue (root, candidate_list);
+#endif //defined(OSPF6_MANET_MDR_FLOOD) || defined(OSPF6_MANET_MPR_FLOOD)
 
   /* Iterate until candidate-list becomes empty */
   while (candidate_list->size)
     {
       /* get closest candidate from priority queue */
-      v = pqueue_dequeue (candidate_list);
+      v = (struct ospf6_vertex *) pqueue_dequeue (candidate_list);
 
       /* installing may result in merging or rejecting of the vertex */
       if (ospf6_spf_install (v, result_table) < 0)
@@ -443,6 +560,32 @@ ospf6_spf_calculation (u_int32_t router_id,
       for (lsdesc = OSPF6_LSA_HEADER_END (v->lsa->header) + 4;
            lsdesc + size <= OSPF6_LSA_END (v->lsa->header); lsdesc += size)
         {
+#ifdef OSPF6_MANET_MPR_SP
+//Changes by:  Stan Ratliff
+//Date:  November 1st, 2005
+//Reason:  Check for unsynchronized links in the SPF calculation.
+// Copyright (C) 2005
+
+          //Roy-01 4.1 para 6
+          if (ROUTER_LSDESC_IS_UNSYNC(lsdesc) && ignore_unsync)
+            continue;
+#endif //OSPF6_MANET_MPR_SP
+#ifdef OSPF6_MANET_MPR_SP //BUGFIX_SP
+          //Is this the router's own router-LSA and are we doing synch adj
+          //If yes, prune links in router-LSA with neighbor state below FULL
+          if (VERTEX_IS_TYPE (ROUTER, v) && ignore_unsync && v == root)
+          {
+            struct ospf6_router_lsdesc* orl = 
+              (struct ospf6_router_lsdesc *)lsdesc; 
+            on = NULL;
+            oi = ospf6_interface_lookup_by_ifindex (ntohl(orl->interface_id));
+            if (oi)
+              on = ospf6_neighbor_lookup (orl->neighbor_router_id, oi);
+            //Is the link in the router-LSA below neighbor state FULL
+            if (!on || on->state < OSPF6_NEIGHBOR_FULL)
+              continue;
+          }
+#endif //OSPF6_MANET_MPR_SP
           lsa = ospf6_lsdesc_lsa (lsdesc, v);
           if (lsa == NULL)
             continue;
@@ -479,7 +622,7 @@ ospf6_spf_calculation (u_int32_t router_id,
           /* add new candidate to the candidate_list */
           if (IS_OSPF6_DEBUG_SPF (PROCESS))
             zlog_debug ("  New candidate: %s hops %d cost %d",
-			w->name, w->hops, w->cost);
+              w->name, w->hops, w->cost);
           pqueue_enqueue (w, candidate_list);
         }
     }
@@ -513,11 +656,54 @@ ospf6_spf_log_database (struct ospf6_area *oa)
   zlog_debug ("%s", buffer);
 }
 
+#ifdef OSPF6_MANET_MPR_SP
+//Changes by:  Stan Ratliff
+//Date:  November 1st, 2005
+//Reason:  Make sure all neighbors are synchronized
+// Copyright (C) 2005
+
+//Roy-01 4.2
+void
+ospf6_spf_check_smart_peers (struct ospf6_area *oa)
+{
+  struct listnode *i2, *j;
+  struct ospf6_interface *oi;
+  struct ospf6_neighbor *on;
+  struct ospf6_route *route;
+  struct prefix prefix;
+
+  for (i2 = listhead (oa->if_list); i2; nextnode (i2))
+  {
+    oi = (struct ospf6_interface *) getdata (i2);
+    if (oi->state == OSPF6_INTERFACE_DOWN) continue;
+    if (oi->type != OSPF6_IFTYPE_MANETRELIABLE) continue;
+    if (oi->flooding != OSPF6_FLOOD_MPR_SDCDS) continue;
+    if (!oi->smart_peering) continue;
+    if (!oi->unsynch_adj) continue;
+    for (j = listhead(oi->neighbor_list); j; nextnode(j))
+    {
+      on = (struct ospf6_neighbor *) getdata (j);
+      ospf6_linkstate_prefix (on->router_id, htonl (0), &prefix);
+      route = ospf6_route_lookup(&prefix, on->ospf6_if->area->spf_table_sync);
+      if (route == NULL){
+        thread_execute(master, twoway_received, on, 0);
+      }
+    }
+  }
+}
+#endif //OSPF6_MANET_MPR_SP
+
 int
 ospf6_spf_calculation_thread (struct thread *t)
 {
   struct ospf6_area *oa;
   struct timeval start, end, runtime;
+#ifdef OSPF6_MANET_MPR_SP
+  struct listnode *i;
+  struct ospf6_interface *oi;
+  boolean or_sp = false;
+  struct interface *ifp;
+#endif //OSPF6_MANET_MPR_SP
 
   oa = (struct ospf6_area *) THREAD_ARG (t);
   oa->thread_spf_calculation = NULL;
@@ -528,9 +714,51 @@ ospf6_spf_calculation_thread (struct thread *t)
     ospf6_spf_log_database (oa);
 
   /* execute SPF calculation */
+#ifdef SIM
+  gettimeofday_sim (&start, (struct timezone *) NULL);
+#else
   gettimeofday (&start, (struct timezone *) NULL);
+#endif //SIM
+
+#ifdef OSPF6_MANET_MPR_SP
+  //check to see if this is an area with a OR/SP interface
+  //this is needed, so the double calculation does not take place with other
+  //interface types
+  for (i = listhead (oa->if_list); i; nextnode (i))
+  {
+    oi = (struct ospf6_interface *) getdata (i);
+    if (oi->state == OSPF6_INTERFACE_DOWN) continue;
+    if (oi->type != OSPF6_IFTYPE_MANETRELIABLE) continue;
+    if (oi->flooding != OSPF6_FLOOD_MPR_SDCDS) continue;
+    if (!oi->smart_peering) continue;
+    if (!oi->unsynch_adj) continue;
+    or_sp = true;
+  }
+
+  if (or_sp)
+  {
+//Changes by:  Stan Ratliff
+//Date:  November 1st, 2005
+//Reason:  Perform 2 SPF calculations -- one using the
+// unsychronized links (above), and the other ignoring those links (below).
+// Copyright (C) 2005
+    //Roy-01 4.1 para 6
+    ospf6_spf_calculation (oa->ospf6->router_id, oa->spf_table, oa, false);
+    ospf6_spf_calculation (oa->ospf6->router_id, oa->spf_table_sync, oa,true);
+    ospf6_spf_check_smart_peers(oa);
+  }
+  else
+    ospf6_spf_calculation (oa->ospf6->router_id, oa->spf_table, oa, false);
+#else
   ospf6_spf_calculation (oa->ospf6->router_id, oa->spf_table, oa);
-  gettimeofday (&end, (struct timezone *) NULL);
+#endif //OSPF6_MANET_MPR_SP
+
+
+#ifdef SIM
+  gettimeofday_sim (&end, (struct timezone *) NULL);
+#else
+ gettimeofday (&end, (struct timezone *) NULL);
+#endif //SIM
   timersub (&end, &start, &runtime);
 
   if (IS_OSPF6_DEBUG_SPF (PROCESS) || IS_OSPF6_DEBUG_SPF (TIME))
@@ -540,6 +768,22 @@ ospf6_spf_calculation_thread (struct thread *t)
   ospf6_intra_route_calculation (oa);
   ospf6_intra_brouter_calculation (oa);
 
+
+#ifdef OSPF6_MANET_MPR_SP  //BUGFIX_SP -- moved from ospf6_install_lsa
+//Roy-01 4.2
+//see if any of our neighbors need to initiate database exchange
+  for (i = listhead(iflist); i; nextnode(i))
+  {
+    ifp = (struct interface *) getdata (i);
+    oi = (struct ospf6_interface *) ifp->info;
+    if (!oi || oi->type != OSPF6_IFTYPE_MANETRELIABLE ||
+        oi->flooding != OSPF6_FLOOD_MPR_SDCDS)
+      continue;
+
+    ospf6_manet_update_routable_neighbors(oi);
+    ospf6_or_update_adjacencies(oi);
+  }
+#endif //OSPF6_MANET_MPR_SP
   return 0;
 }
 

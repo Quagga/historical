@@ -25,7 +25,7 @@
 #include "linklist.h"
 #include "thread.h"
 #include "memory.h"
-#include "if.h"
+#include "lib/if.h"
 #include "prefix.h"
 #include "table.h"
 #include "vty.h"
@@ -46,6 +46,14 @@
 #include "ospf6_abr.h"
 #include "ospf6_flood.h"
 #include "ospf6d.h"
+
+#ifdef BUGFIX
+#include "ospf6_flood.h"
+#ifdef SIM_ETRACE_STAT
+#include "sim.h"
+#endif //SIM_ETRACE_STAT
+#endif //BUGFIX
+
 
 /******************************/
 /* RFC2740 3.4.3.1 Router-LSA */
@@ -129,12 +137,25 @@ ospf6_router_lsa_originate (struct thread *thread)
   router_lsa = (struct ospf6_router_lsa *)
     ((caddr_t) lsa_header + sizeof (struct ospf6_lsa_header));
 
+#ifdef OSPF6_MANET
+  OSPF6_OPT_SET (router_lsa->options, OSPF6_OPT_V6,2);
+  OSPF6_OPT_SET (router_lsa->options, OSPF6_OPT_E,2);
+  OSPF6_OPT_CLEAR (router_lsa->options, OSPF6_OPT_MC,2);
+  OSPF6_OPT_CLEAR (router_lsa->options, OSPF6_OPT_N,2);
+  OSPF6_OPT_SET (router_lsa->options, OSPF6_OPT_R,2);
+  OSPF6_OPT_CLEAR (router_lsa->options, OSPF6_OPT_DC,2);
+  OSPF6_OPT_CLEAR (router_lsa->options, OSPF6_OPT_AF,2);
+  OSPF6_OPT_CLEAR (router_lsa->options, OSPF6_OPT_L,1);
+  OSPF6_OPT_CLEAR (router_lsa->options, OSPF6_OPT_I,1); //same as D
+  OSPF6_OPT_CLEAR (router_lsa->options, OSPF6_OPT_D,1); //same as I
+#else
   OSPF6_OPT_SET (router_lsa->options, OSPF6_OPT_V6);
   OSPF6_OPT_SET (router_lsa->options, OSPF6_OPT_E);
   OSPF6_OPT_CLEAR (router_lsa->options, OSPF6_OPT_MC);
   OSPF6_OPT_CLEAR (router_lsa->options, OSPF6_OPT_N);
   OSPF6_OPT_SET (router_lsa->options, OSPF6_OPT_R);
   OSPF6_OPT_CLEAR (router_lsa->options, OSPF6_OPT_DC);
+#endif //OSPF6_MANET
 
   if (ospf6_is_router_abr (ospf6))
     SET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_B);
@@ -153,7 +174,7 @@ ospf6_router_lsa_originate (struct thread *thread)
 
   for (i = listhead (oa->if_list); i; nextnode (i))
     {
-      oi = (struct ospf6_interface *) getdata (i);
+      oi = getdata (i);
 
       /* Interfaces in state Down or Loopback are not described */
       if (oi->state == OSPF6_INTERFACE_DOWN ||
@@ -161,6 +182,13 @@ ospf6_router_lsa_originate (struct thread *thread)
         continue;
 
       /* Nor are interfaces without any full adjacencies described */
+      
+#ifdef OSPF6_MANET_MDR_FLOOD
+      /* MDR may include non-adjacent neighbors in LSA. */
+      if (!(oi->flooding == OSPF6_FLOOD_MDR_SICDS &&
+            oi->AdjConnectivity > OSPF6_ADJ_FULLYCONNECTED))
+#endif /* OSPF6_MANET_MDR_FLOOD */
+      {
       count = 0;
       for (j = listhead (oi->neighbor_list); j; nextnode (j))
         {
@@ -170,6 +198,7 @@ ospf6_router_lsa_originate (struct thread *thread)
         }
       if (count == 0)
         continue;
+      }
 
       /* Multiple Router-LSA instance according to size limit setting */
       if ( (oa->router_lsa_size_limit != 0)
@@ -213,26 +242,139 @@ ospf6_router_lsa_originate (struct thread *thread)
         }
 
       /* Point-to-Point interfaces */
+#ifdef OSPF6_CONFIG
+      if(oi->type == OSPF6_IFTYPE_POINTOPOINT ||
+         oi->type == OSPF6_IFTYPE_POINTOMULTIPOINT ||
+         oi->type == OSPF6_IFTYPE_MANETRELIABLE)
+#else
       if (if_is_pointopoint (oi->interface))
+#endif //OSPF6_CONFIG
         {
           for (j = listhead (oi->neighbor_list); j; nextnode (j))
             {
               on = (struct ospf6_neighbor *) getdata (j);
-              if (on->state != OSPF6_NEIGHBOR_FULL)
-                continue;
+
+#ifdef OSPF6_MANET_MDR_FLOOD
+              // LSAFullness determines which neighbors to include.
+              if (oi->flooding == OSPF6_FLOOD_MDR_SICDS && 
+                  oi->AdjConnectivity > OSPF6_ADJ_FULLYCONNECTED)
+              {
+                if (oi->LSAFullness == OSPF6_LSA_FULLNESS_MIN) 
+                // minimal LSAs (adjacent nbrs)
+                {
+                  if (on->state != OSPF6_NEIGHBOR_FULL)
+                  { on->adv = false; continue; } // Not advertised.
+                }
+                if (oi->LSAFullness == OSPF6_LSA_FULLNESS_MINHOP ||
+                    oi->LSAFullness == OSPF6_LSA_FULLNESS_MINHOP2PATHS) 
+                // partial LSAs
+                {
+                  if (!(on->state >= OSPF6_NEIGHBOR_TWOWAY && on->adv))
+                  { on->adv = false; continue; } // Not advertised.
+                }
+                // Make sure neighbors less than 2-way are not routable.
+                if (on->state < OSPF6_NEIGHBOR_TWOWAY)
+                  on->routable = false;
+                if (oi->LSAFullness == OSPF6_LSA_FULLNESS_MDRFULL) 
+                // full LSAs only for MDR/BDMR
+                {
+                  // Other includes Full MDR/BMDR nbrs that are (b)parent
+                  // or are already advertised (persistence).
+                  if (oi->mdr_level == OSPF6_OTHER &&
+                      oi->full_adj_part_lsa &&
+                      (on->state != OSPF6_NEIGHBOR_FULL ||
+                       on->mdr_level < OSPF6_BMDR ||
+                       !(oi->parent == on || oi->bparent == on || on->adv)))
+                  { on->adv = false; continue; } // Not advertised.
+                  // No need to check for parents in partial adj case.
+                  else if (oi->mdr_level == OSPF6_OTHER &&
+                      !oi->full_adj_part_lsa &&
+                      (on->state != OSPF6_NEIGHBOR_FULL ||
+                       on->mdr_level < OSPF6_BMDR))
+                  { on->adv = false; continue; } // Not advertised.
+
+                  // MDR/BMDR includes all full or routable nbrs,
+                  // depending on full_adj_part_lsa.
+                  if (oi->mdr_level >= OSPF6_BMDR &&
+                      oi->full_adj_part_lsa &&
+                      on->state != OSPF6_NEIGHBOR_FULL)
+                  { on->adv = false; continue; } // Not advertised.
+                  else if (oi->mdr_level >= OSPF6_BMDR &&
+                           !oi->full_adj_part_lsa && !on->routable)
+                  { on->adv = false; continue; } // Not advertised.
+                }
+                if (oi->LSAFullness > OSPF6_LSA_FULLNESS_MDRFULL) 
+                // full LSAs
+                {
+                  if (!(on->state >= OSPF6_NEIGHBOR_TWOWAY && on->routable))
+                  { on->adv = false; continue; } // Not advertised.
+                }
+              }
+              else
+#endif //OSPF6_MANET_MDR_FLOOD
+#if defined(OSPF6_MANET_MPR_FLOOD) && defined(OSPF6_MANET_MPR_SP)
+              //Roy-01 4 para 3 and 4.1 para 2 bullet 2
+              //allow 2-way neighbors in router-lsa
+              if (oi->flooding == OSPF6_FLOOD_MPR_SDCDS && oi->unsynch_adj)
+              {
+                if (on->state < OSPF6_NEIGHBOR_TWOWAY || !on->routable)
+                  continue;
+              }
+              else
+#endif //OSPF6_MANET_MPR_FLOOD && OSPF6_MANET_MPR_SP
+
+              {
+                if (on->state != OSPF6_NEIGHBOR_FULL)
+                  continue;
+              }
 
               lsdesc->type = OSPF6_ROUTER_LSDESC_POINTTOPOINT;
               lsdesc->metric = htons (oi->cost);
               lsdesc->interface_id = htonl (oi->interface->ifindex);
               lsdesc->neighbor_interface_id = htonl (on->ifindex);
               lsdesc->neighbor_router_id = on->router_id;
-
+#ifdef OSPF6_MANET_MDR_FLOOD
+              if (oi->flooding == OSPF6_FLOOD_MDR_SICDS &&
+                  oi->AdjConnectivity > OSPF6_ADJ_FULLYCONNECTED)
+              {
+                if (on->state == OSPF6_NEIGHBOR_FULL)
+                  lsdesc->metric = htons (oi->cost+9);  //FIXME Why 9,10
+                else
+                  lsdesc->metric = htons (oi->cost+10);
+              }
+                on->adv = true; // Neighbor is advertised.
+#endif //OSPF6_MANET_MDR_FLOOD
+#if defined(OSPF6_MANET_MPR_SP) && defined(OSPF6_MANET_MPR_FLOOD)
+//Changes by:  Stan Ratliff
+//Date:  November 1st, 2005
+//Reason: Add a flag to router-LSAs to identify unsynchronized adjacencies
+              if (oi->flooding == OSPF6_FLOOD_MPR_SDCDS && oi->unsynch_adj)
+              {
+                if (on->state == OSPF6_NEIGHBOR_FULL)
+                {
+                  lsdesc->metric = htons(oi->cost+9);
+                  lsdesc->lsdesc_flag = 0x00;
+                }
+                else
+                {
+                  //Roy-01 4.1 para 7 [A]
+                  //tag 2-way links in router-lsa
+                  lsdesc->metric = htons(oi->cost+10);
+                  lsdesc->lsdesc_flag = OSPF6_ROUTER_LSDESC_UNSYNC;
+                }
+              }
+#endif //OSPF6_MANET_MPR_SP && OSPF6_MANET_MPR_FLOOD
               lsdesc++;
             }
         }
 
       /* Broadcast and NBMA interfaces */
+#ifdef OSPF6_CONFIG
+      if (oi->type == OSPF6_IFTYPE_BROADCAST ||
+          oi->type == OSPF6_IFTYPE_NBMA)
+#else
       if (if_is_broadcast (oi->interface))
+#endif //OSPF6_CONFIG
         {
           /* If this router is not DR,
              and If this router not fully adjacent with DR,
@@ -307,6 +449,10 @@ ospf6_router_lsa_originate (struct thread *thread)
         continue;
       ospf6_lsa_purge (lsa);
     }
+
+#ifdef SIM_ETRACE_STAT
+    update_statistics(OSPF6_ORIG_RTR_LSA, 1);
+#endif //SIM_ETRACE_STAT
 
   return 0;
 }
@@ -1102,8 +1248,13 @@ ospf6_intra_prefix_lsa_add (struct ospf6_lsa *lsa)
       route->path.cost = ls_entry->path.cost +
                          ntohs (op->prefix_metric);
 
+#ifdef BUGFIX
+      for (i = 0; i < OSPF6_MULTI_PATH_LIMIT &&
+     ospf6_nexthop_is_set (&ls_entry->nexthop[i]); i++)
+#else
       for (i = 0; ospf6_nexthop_is_set (&ls_entry->nexthop[i]) &&
            i < OSPF6_MULTI_PATH_LIMIT; i++)
+#endif //BUGFIX
         ospf6_nexthop_copy (&route->nexthop[i], &ls_entry->nexthop[i]);
 
       if (IS_OSPF6_DEBUG_EXAMIN (INTRA_PREFIX))
@@ -1230,12 +1381,22 @@ ospf6_intra_route_calculation (struct ospf6_area *oa)
         }
 
       if (CHECK_FLAG (route->flag, OSPF6_ROUTE_REMOVE))
+#ifdef SIM_ETRACE_STAT
+      {
+        update_statistics(OSPF6_ROUTE_CHANGES, 1);
         ospf6_route_remove (route, oa->route_table);
+      }
+#else
+        ospf6_route_remove (route, oa->route_table);
+#endif //SIM_ETRACE_STAT
       else if (CHECK_FLAG (route->flag, OSPF6_ROUTE_ADD) ||
                CHECK_FLAG (route->flag, OSPF6_ROUTE_CHANGE))
         {
           if (hook_add)
             (*hook_add) (route);
+#ifdef SIM_ETRACE_STAT
+          update_statistics(OSPF6_ROUTE_CHANGES, 1);
+#endif //SIM_ETRACE_STAT
         }
 
       route->flag = 0;
@@ -1373,3 +1534,147 @@ ospf6_intra_init ()
 }
 
 
+#ifdef BUGFIX
+//prevent LSAs from being originated before MinLSInterval
+void ospf6_lsa_schedule(struct ospf6_area *oa, struct ospf6_interface *oi,
+                      int type, boolean stub)
+{
+  struct ospf6 *o = NULL;
+  struct ospf6_lsa *old;
+  int link_state_id;
+  long time_msec = -1;
+
+  switch(type)
+  {
+    case OSPF6_LSTYPE_ROUTER:
+      link_state_id = 0;
+      o = oa->ospf6;
+      old = ospf6_lsdb_lookup (htons (type), link_state_id,
+                               o->router_id, oa->lsdb);
+      break;
+    case OSPF6_LSTYPE_NETWORK:
+      link_state_id = oi->interface->ifindex;
+      o = oi->area->ospf6;
+      old = ospf6_lsdb_lookup (htons (type), htonl(link_state_id),
+                               o->router_id, oi->area->lsdb);
+      break;
+    case OSPF6_LSTYPE_LINK:
+      link_state_id = oi->interface->ifindex;
+      o = oi->area->ospf6;
+      old = ospf6_lsdb_lookup (htons (type), htonl(link_state_id),
+                               o->router_id, oi->lsdb);
+      break;
+    case OSPF6_LSTYPE_INTRA_PREFIX:
+      if (stub)
+      {
+        link_state_id = 0;
+        o = oa->ospf6;
+        old = ospf6_lsdb_lookup (htons (type), link_state_id, 
+                                 o->router_id, oa->lsdb);
+      }
+      else
+      {
+        link_state_id = oi->interface->ifindex;
+        o = oi->area->ospf6;
+        old = ospf6_lsdb_lookup (htons (type), htonl(link_state_id),
+                                 o->router_id, oi->area->lsdb);
+      }
+      break;
+    default:
+      zlog_warn ("No such LSA type");
+      return;
+      break;
+  }
+  if (old)
+  {
+#ifdef OSPF6_CONFIG
+    time_msec =
+      (long)(((float)o->minLSInterval- elapsed_time(&old->originated)) * 1000);
+#else
+    time_msec =
+      (long)(((float)MIN_LS_INTERVAL- elapsed_time(&old->originated)) * 1000);
+#endif //OSPF6_CONFIG
+#ifdef SIM_ETRACE_STAT
+    if (time_msec > 0)
+      TraceEvent_sim(2,"Delay LSA type %x orig by %d msec", type, time_msec);
+#endif //SIM_ETRACE_STAT
+  }
+  switch(type)
+  {
+    case OSPF6_LSTYPE_ROUTER:
+    if (time_msec > 0)
+    {
+      THREAD_OFF(oa->thread_router_lsa);
+      oa->thread_router_lsa =
+       thread_add_timer_msec(master, ospf6_router_lsa_originate, oa, time_msec);
+      //XXX FIXME ospf6_flood_clear(old); 
+      //should we clear our own old cued LSA (rxmt list)  ????
+      //while we wait to originate a new one
+    }
+    else
+    {
+      oa->thread_router_lsa =
+        thread_add_event(master, ospf6_router_lsa_originate, oa, 0);
+    }
+    break;
+    case OSPF6_LSTYPE_NETWORK:
+    if (time_msec > 0)
+    {
+      THREAD_OFF(oi->thread_network_lsa);
+      oi->thread_network_lsa =
+       thread_add_timer_msec(master, ospf6_network_lsa_originate,oi, time_msec);
+    }
+    else
+    {
+      oi->thread_network_lsa =
+        thread_add_event(master, ospf6_network_lsa_originate, oi, 0);
+    }
+    break;
+  case OSPF6_LSTYPE_LINK:
+    if (time_msec > 0)
+    {
+      THREAD_OFF(oi->thread_link_lsa);
+      oi->thread_link_lsa =
+        thread_add_timer_msec(master, ospf6_link_lsa_originate, oi, time_msec);
+    }
+    else
+    {
+      oi->thread_link_lsa =
+        thread_add_event(master, ospf6_link_lsa_originate, oi, 0);
+    }
+    break;
+  case OSPF6_LSTYPE_INTRA_PREFIX:
+    if (stub)
+    {
+      if (time_msec > 0)
+      {
+        THREAD_OFF(oa->thread_intra_prefix_lsa);
+        oa->thread_intra_prefix_lsa =
+          thread_add_timer_msec(master, ospf6_intra_prefix_lsa_originate_stub,
+          oa, time_msec);
+      }
+      else
+      {
+        oa->thread_intra_prefix_lsa =
+          thread_add_event(master, ospf6_intra_prefix_lsa_originate_stub,oa, 0);
+      }
+    }
+    else
+    {
+      if (time_msec > 0)
+      {
+        THREAD_OFF(oi->thread_intra_prefix_lsa);
+        oi->thread_intra_prefix_lsa = 
+          thread_add_timer_msec(master,ospf6_intra_prefix_lsa_originate_transit,
+                                oi, time_msec);
+      }
+      else
+      {
+        oi->thread_intra_prefix_lsa =
+         thread_add_event(master,ospf6_intra_prefix_lsa_originate_transit,oi,0);
+      }
+    }
+    break;
+  }
+}
+#endif //BUGFIX

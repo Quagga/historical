@@ -1,3 +1,4 @@
+#ifndef SIM
 /*
  * Copyright (C) 2003 Yasuhiro Ohara
  *
@@ -689,4 +690,4 @@ install_element_ospf6_debug_zebra ()
   install_element (CONFIG_NODE, &no_debug_ospf6_zebra_sendrecv_cmd);
 }
 
-
+#endif //SIM

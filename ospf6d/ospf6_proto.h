@@ -45,6 +45,10 @@
 #define INITIAL_SEQUENCE_NUMBER  0x80000001  /* signed 32-bit integer */
 #define MAX_SEQUENCE_NUMBER      0x7fffffff  /* signed 32-bit integer */
 
+#ifdef OSPF6_MANET_DIFF_HELLO
+#define MAX_SCS_NUMBER     0xffff /* unsigned 16-bit integer */
+#endif //OSPF6_MANET_DIFF_HELLO
+
 #define ALLSPFROUTERS6 "ff02::5"
 #define ALLDROUTERS6   "ff02::6"
 
@@ -60,10 +64,26 @@
 
 /* OSPF options */
 /* present in HELLO, DD, LSA */
+#ifdef OSPF6_MANET
+#define OSPF6_OPT_SET(x,opt,i)   ((x)[(i)] |=  (opt))
+#define OSPF6_OPT_ISSET(x,opt,i) ((x)[(i)] &   (opt))
+#define OSPF6_OPT_CLEAR(x,opt,i) ((x)[(i)] &= ~(opt))
+#else
 #define OSPF6_OPT_SET(x,opt)   ((x)[2] |=  (opt))
 #define OSPF6_OPT_ISSET(x,opt) ((x)[2] &   (opt))
 #define OSPF6_OPT_CLEAR(x,opt) ((x)[2] &= ~(opt))
+#endif //OSPF6_MANET
 #define OSPF6_OPT_CLEAR_ALL(x) ((x)[0] = (x)[1] = (x)[2] = 0)
+
+
+#ifdef OSPF6_MANET
+//Chandra03 3.5
+#define OSPF6_OPT_F  (1 << 3)   /* Indicates Optimized Flooding  */
+#define OSPF6_OPT_I  (1 << 2)   /* Indicates Incremental Hellos  */
+#define OSPF6_OPT_D  (1 << 2)   /* Indicates Differential Hellos  */
+#define OSPF6_OPT_L  (1 << 1)   /* Indicates an LLS Data Block */
+#define OSPF6_OPT_AF (1 << 0)   /* Indicates usage of address families */
+#endif //OSPF6_MANET
 
 #define OSPF6_OPT_DC (1 << 5)   /* Demand Circuit handling Capability */
 #define OSPF6_OPT_R  (1 << 4)   /* Forwarding Capability (Any Protocol) */

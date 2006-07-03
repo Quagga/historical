@@ -32,7 +32,9 @@
 #include "ospf6_lsdb.h"
 #include "ospf6_message.h"
 #include "ospf6_route.h"
+#ifndef SIM
 #include "ospf6_zebra.h"
+#endif //SIM
 #include "ospf6_spf.h"
 #include "ospf6_top.h"
 #include "ospf6_area.h"
@@ -43,6 +45,20 @@
 #include "ospf6_abr.h"
 #include "ospf6_flood.h"
 #include "ospf6d.h"
+#ifdef SIM
+#include "sim.h"
+using namespace std;
+
+/*
+ * Global Variables SIM 
+ * needed for the quagga C libraries
+ * They are reassigned to the corresponding instance variable, as needed,
+ * via the SetGlobals() method
+ */
+extern struct ospf6 *ospf6; // This is the pointer that we keep rewriting
+extern struct thread_master *master;  //Also a pointer we keep rewriting
+#endif //SIM
+
 
 #ifdef HAVE_SNMP
 #include "ospf6_snmp.h"
@@ -109,7 +125,9 @@ config_write_ospf6_debug (struct vty *vty)
 {
   config_write_ospf6_debug_message (vty);
   config_write_ospf6_debug_lsa (vty);
+#ifndef SIM
   config_write_ospf6_debug_zebra (vty);
+#endif //SIM
   config_write_ospf6_debug_interface (vty);
   config_write_ospf6_debug_neighbor (vty);
   config_write_ospf6_debug_spf (vty);
@@ -1808,8 +1826,9 @@ ospf6_init ()
   ospf6_area_init ();
   ospf6_interface_init ();
   ospf6_neighbor_init ();
+#ifndef SIM
   ospf6_zebra_init ();
-
+#endif //SIM
   ospf6_lsa_init ();
   ospf6_spf_init ();
   ospf6_intra_init ();
@@ -1826,12 +1845,17 @@ ospf6_init ()
   install_element_ospf6_debug_lsa ();
   install_element_ospf6_debug_interface ();
   install_element_ospf6_debug_neighbor ();
+#ifndef SIM
   install_element_ospf6_debug_zebra ();
+#endif //SIM
   install_element_ospf6_debug_spf ();
   install_element_ospf6_debug_route ();
   install_element_ospf6_debug_asbr ();
   install_element_ospf6_debug_abr ();
   install_element_ospf6_debug_flood ();
+#ifdef OSPF6_CONFIG
+  install_element_ospf6_debug_database();
+#endif //OSPF6_CONFIG
 
   install_element (VIEW_NODE, &show_version_ospf6_cmd);
   install_element (ENABLE_NODE, &show_version_ospf6_cmd);
@@ -1929,7 +1953,49 @@ ospf6_init ()
 
   /* Make ospf protocol socket. */
   ospf6_serv_sock ();
+#ifndef SIM
   thread_add_read (master, ospf6_receive, NULL, ospf6_sock);
+#endif //SIM
 }
 
+#if defined(OSPF6_MANET) || defined(BUGFIX)
+char *ip2str(u_int32_t addr)
+{
+  static char str[16];
+  unsigned char *ip;
+  ip = (unsigned char *) &addr;
+  sprintf(str,"%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+  return str;
+}
+
+void set_time(struct timeval *t)
+{
+ struct timeval now;
+
+#ifdef SIM
+ gettimeofday_sim (&now, (struct timezone *)NULL);
+#else
+ gettimeofday (&now, (struct timezone *)NULL);
+#endif //SIM
+ t->tv_sec = now.tv_sec;
+ t->tv_usec = now.tv_usec;
+ return;
+}
+
+float elapsed_time(struct timeval *t)
+{
+ struct timeval now;
+ float T;
+
+#ifdef SIM
+ gettimeofday_sim (&now, (struct timezone *)NULL);
+#else
+ gettimeofday (&now, (struct timezone *)NULL);
+#endif //SIM
+ T = (float)(now.tv_sec - t->tv_sec)  +
+     (float)(now.tv_usec - t->tv_usec) / 1000000;
+
+ return T;
+}
+#endif //OSPF6_MANET
 

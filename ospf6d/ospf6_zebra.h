@@ -1,3 +1,4 @@
+#ifndef SIM
 /*
  * Copyright (C) 2003 Yasuhiro Ohara
  *
@@ -51,3 +52,4 @@ void install_element_ospf6_debug_zebra ();
 
 #endif /*OSPF6_ZEBRA_H*/
 
+#endif //SIM

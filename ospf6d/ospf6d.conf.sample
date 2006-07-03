@@ -1,24 +1,49 @@
 !
 ! Zebra configuration saved from vty
-!   2003/11/28 00:49:49
+!   2000/05/11 02:09:37
 !
-hostname ospf6d@plant
-password zebra
+hostname hulk
+password hulk
+log file /var/log/zebra-ospf6d.log
 log stdout
-service advanced-vty
 !
-debug ospf6 neighbor state
+!debug ospf6 message hello
+!debug ospf6 message dbdesc
+!debug ospf6 message lsreq
+!debug ospf6 message lsupdate
+!debug ospf6 message lsack
+!debug ospf6 neighbor
+!debug ospf6 spf database
+!debug ospf6 interface
+!debug ospf6 abr
+!debug ospf6 lsa router
+!debug ospf6 zebra
+!debug ospf6 route table
 !
-interface fxp0
- ipv6 ospf6 cost 1
- ipv6 ospf6 hello-interval 10
- ipv6 ospf6 dead-interval 40
- ipv6 ospf6 retransmit-interval 5
- ipv6 ospf6 priority 0
- ipv6 ospf6 transmit-delay 1
- ipv6 ospf6 instance-id 0
+interface eth1
+  ipv6 ospf6 priority 1
+  ipv6 ospf6 transmit-delay 1
+  ipv6 ospf6 instance-id 0
+  ipv6 ospf6 ifmtu 1500
+  ipv6 ospf6 cost 1
+  ipv6 ospf6 hello-interval 2
+  ipv6 ospf6 dead-interval 6
+  ipv6 ospf6 retransmit-interval 5
+  ipv6 ospf6 network manet-reliable
+!  ipv6 ospf6 network flood mpr
+! ipv6 ospf6 network point-to-multipoint
+  ipv6 ospf6 network flood mdr
+  ipv6 ospf6 ackinterval 500
+!  ipv6 ospf6 diffhellos
+  ipv6 ospf6 pushbackinterval 4000
+  ipv6 ospf6 backupwaitinterval 500
+  ipv6 ospf6 twohoprefresh 3
+  ipv6 ospf6 hellorepeatcount 3
+  ipv6 ospf6 adjacencyconnectivity biconnected
+  ipv6 ospf6 lsafullness minhoplsa
+  ipv6 ospf6 flood-delay 100
 !
-interface lo0
+interface lo
  ipv6 ospf6 cost 1
  ipv6 ospf6 hello-interval 10
  ipv6 ospf6 dead-interval 40
@@ -26,27 +51,18 @@ interface lo0
  ipv6 ospf6 priority 1
  ipv6 ospf6 transmit-delay 1
  ipv6 ospf6 instance-id 0
+ ipv6 ospf6 network loopback
 !
 router ospf6
- router-id 255.1.1.1
+ router-id 10.0.0.2
  redistribute static route-map static-ospf6
- interface fxp0 area 0.0.0.0
+ interface eth1 area 0.0.0.0
+ interface lo area 0.0.0.0
 !
-access-list access4 permit 127.0.0.1/32
+ipv6 prefix-list hostroute seq 10 permit 3ffe:501:100c:4380::/60 le 128 ge 128
 !
-ipv6 access-list access6 permit 3ffe:501::/32
-ipv6 access-list access6 permit 2001:200::/48
-ipv6 access-list access6 permit ::1/128
-!
-ipv6 prefix-list test-prefix seq 1000 deny any
-!
-route-map static-ospf6 permit 10
- match ipv6 address prefix-list test-prefix
+route-map static-ospf6 permit 50
+ match ipv6 address prefix-list hostroute
  set metric-type type-2
- set metric 2000
-!
-line vty
- access-class access4
- ipv6 access-class access6
- exec-timeout 0 0
+ set metric 30
 !

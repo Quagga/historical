@@ -47,6 +47,10 @@
 #include "ospf6_abr.h"
 #include "ospf6d.h"
 
+#ifdef SIM
+#include "sim.h"
+#endif //SIM
+
 unsigned char conf_debug_ospf6_abr;
 
 int
@@ -367,7 +371,11 @@ ospf6_abr_originate_summary_to_area (struct ospf6_route *route,
   else
     {
       summary->type = route->type;
+#ifdef SIM
+      gettimeofday_sim (&summary->changed, NULL);
+#else
       gettimeofday (&summary->changed, NULL);
+#endif //SIM
     }
 
   summary->path.router_bits = route->path.router_bits;

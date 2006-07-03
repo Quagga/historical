@@ -72,7 +72,26 @@ ospf6_capability_printbuf (char capability, char *buf, int size)
 void
 ospf6_options_printbuf (u_char *options, char *buf, int size)
 {
+#ifdef OSPF6_MANET
+  const char *dc, *r, *n, *mc, *e, *v6, *AF, *L, *I, *F;
+#else
   const char *dc, *r, *n, *mc, *e, *v6;
+#endif //OSPF6_MANET
+
+#ifdef OSPF6_MANET 
+  F  = (OSPF6_OPT_ISSET (options, OSPF6_OPT_F, 1) ? "F" : "--");
+  I  = (OSPF6_OPT_ISSET (options, OSPF6_OPT_I, 1) ? "I" : "--"); //same as D
+  L  = (OSPF6_OPT_ISSET (options, OSPF6_OPT_L, 1) ? "L" : "--");
+  AF  = (OSPF6_OPT_ISSET (options, OSPF6_OPT_AF, 1) ? "AF" : "--");
+  dc = (OSPF6_OPT_ISSET (options, OSPF6_OPT_DC,2) ? "DC" : "--");
+  r  = (OSPF6_OPT_ISSET (options, OSPF6_OPT_R,2)  ? "R"  : "--" );
+  n  = (OSPF6_OPT_ISSET (options, OSPF6_OPT_N,2)  ? "N"  : "--" );
+  mc = (OSPF6_OPT_ISSET (options, OSPF6_OPT_MC,2) ? "MC" : "--");
+  e  = (OSPF6_OPT_ISSET (options, OSPF6_OPT_E,2)  ? "E"  : "--" );
+  v6 = (OSPF6_OPT_ISSET (options, OSPF6_OPT_V6,2) ? "V6" : "--");
+  snprintf (buf, size, "%s|%s|%s|%s|--|--|%s|%s|%s|%s|%s|%s", 
+           F, I, L, AF, dc, r, n, mc, e, v6);
+#else
   dc = (OSPF6_OPT_ISSET (options, OSPF6_OPT_DC) ? "DC" : "--");
   r  = (OSPF6_OPT_ISSET (options, OSPF6_OPT_R)  ? "R"  : "-" );
   n  = (OSPF6_OPT_ISSET (options, OSPF6_OPT_N)  ? "N"  : "-" );
@@ -80,6 +99,7 @@ ospf6_options_printbuf (u_char *options, char *buf, int size)
   e  = (OSPF6_OPT_ISSET (options, OSPF6_OPT_E)  ? "E"  : "-" );
   v6 = (OSPF6_OPT_ISSET (options, OSPF6_OPT_V6) ? "V6" : "--");
   snprintf (buf, size, "%s|%s|%s|%s|%s|%s", dc, r, n, mc, e, v6);
+#endif //OSPF6_MANET
 }
 
 

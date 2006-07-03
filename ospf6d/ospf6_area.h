@@ -52,6 +52,10 @@ struct ospf6_area
   struct ospf6_lsdb *lsdb;
   struct ospf6_lsdb *lsdb_self;
 
+#ifdef OSPF6_MANET_MPR_SP
+  struct ospf6_route_table *spf_table_sync;
+#endif //OSPF6_MANET_MPR_SP
+
   struct ospf6_route_table *spf_table;
   struct ospf6_route_table *route_table;
 

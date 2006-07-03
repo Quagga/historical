@@ -22,6 +22,11 @@
 #ifndef OSPF6_INTRA_H
 #define OSPF6_INTRA_H
 
+#ifdef BUGFIX
+#include "ospf6d.h"
+#include "ospf6_area.h"
+#endif //BUGFIX
+
 /* Router-LSA */
 struct ospf6_router_lsa
 {
@@ -34,17 +39,40 @@ struct ospf6_router_lsa
 struct ospf6_router_lsdesc
 {
   u_char    type;
+#ifdef OSPF6_MANET_MPR_SP
+//Changes by:  Stan Ratliff
+//Date:  November 1st, 2005
+//Reason: Add a flag to router-LSAs to identify unsynchronized adjacencies
+  u_char    lsdesc_flag;           /* Was reserved, used for SMART_PEERING */
+#else
   u_char    reserved;
+#endif //OSPF6_MANET_MPR_SP
   u_int16_t metric;                /* output cost */
   u_int32_t interface_id;
   u_int32_t neighbor_interface_id;
   u_int32_t neighbor_router_id;
 };
 
+#ifdef OSPF6_MANET_MPR_SP
+//Changes by:  Stan Ratliff
+//Date:  November 1st, 2005
+//Reason: Add a flag to router-LSAs to identify unsynchronized adjacencies
+#define OSPF6_ROUTER_LSDESC_UNSYNC             1     /* SMART_PEERING */
+#endif //OSPF6_MANET_MPR_SP
+
 #define OSPF6_ROUTER_LSDESC_POINTTOPOINT       1
 #define OSPF6_ROUTER_LSDESC_TRANSIT_NETWORK    2
 #define OSPF6_ROUTER_LSDESC_STUB_NETWORK       3
 #define OSPF6_ROUTER_LSDESC_VIRTUAL_LINK       4
+
+#ifdef OSPF6_MANET_MPR_SP
+//Changes by:  Stan Ratliff
+//Date:  November 1st, 2005
+//Reason: Add a flag to router-LSAs to identify unsynchronized adjacencies
+#define ROUTER_LSDESC_IS_UNSYNC(x) \
+  ((((struct ospf6_router_lsdesc *)(x))->lsdesc_flag & \
+  OSPF6_ROUTER_LSDESC_UNSYNC == OSPF6_ROUTER_LSDESC_UNSYNC) ? 1 : 0)
+#endif //OSPF6_MANET_MPR_SP
 
 #define ROUTER_LSDESC_IS_TYPE(t,x)                         \
   ((((struct ospf6_router_lsdesc *)(x))->type ==           \
@@ -94,7 +122,36 @@ struct ospf6_intra_prefix_lsa
   /* followed by ospf6 prefix(es) */
 };
 
-
+#ifdef BUGFIX
+struct ospf6_interface;
+void ospf6_lsa_schedule(struct ospf6_area *oa, struct ospf6_interface *oi,
+                        int type, boolean stub);
+#define OSPF6_ROUTER_LSA_SCHEDULE(oa) \
+  do { \
+    if (! (oa)->thread_router_lsa) \
+   ospf6_lsa_schedule(oa, NULL, OSPF6_LSTYPE_ROUTER, false); \
+  } while (0)
+#define OSPF6_NETWORK_LSA_SCHEDULE(oi) \
+  do { \
+    if (! (oi)->thread_network_lsa) \
+   ospf6_lsa_schedule(NULL, oi, OSPF6_LSTYPE_NETWORK, false); \
+  } while (0)
+#define OSPF6_LINK_LSA_SCHEDULE(oi) \
+  do { \
+    if (! (oi)->thread_link_lsa) \
+   ospf6_lsa_schedule(NULL, oi, OSPF6_LSTYPE_LINK, false); \
+  } while (0)
+#define OSPF6_INTRA_PREFIX_LSA_SCHEDULE_STUB(oa) \
+  do { \
+    if (! (oa)->thread_intra_prefix_lsa) \
+   ospf6_lsa_schedule(oa, NULL, OSPF6_LSTYPE_INTRA_PREFIX, true); \
+  } while (0)
+#define OSPF6_INTRA_PREFIX_LSA_SCHEDULE_TRANSIT(oi) \
+  do { \
+    if (! (oi)->thread_intra_prefix_lsa) \
+   ospf6_lsa_schedule(NULL, oi, OSPF6_LSTYPE_INTRA_PREFIX, false); \
+  } while (0)
+#else
 #define OSPF6_ROUTER_LSA_SCHEDULE(oa) \
   do { \
     if (! (oa)->thread_router_lsa) \
@@ -127,6 +184,7 @@ struct ospf6_intra_prefix_lsa
         thread_add_event (master, ospf6_intra_prefix_lsa_originate_transit, \
                           oi, 0); \
   } while (0)
+#endif //BUGFIX
 
 #define OSPF6_NETWORK_LSA_EXECUTE(oi) \
   do { \

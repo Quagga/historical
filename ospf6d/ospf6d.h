@@ -118,6 +118,18 @@ struct route_node *route_prev (struct route_node *node);
 void ospf6_debug ();
 void ospf6_init ();
 
+#if defined(BUGFIX) || defined(OSPF6_MANET)
+char *ip2str(u_int32_t addr);
+void set_time(struct timeval *t);
+float elapsed_time(struct timeval *t);
+#endif //OSPF6_MANET
+
+#if defined(BUGFIX) || defined(OSPF6_MANET)
+typedef char boolean;
+#define false 0
+#define true 1
+#endif //BUGFIX
+
 #endif /* OSPF6D_H */
 
 

@@ -22,7 +22,7 @@
 #include <zebra.h>
 
 #include "memory.h"
-#include "if.h"
+#include "lib/if.h"
 #include "log.h"
 #include "command.h"
 #include "thread.h"
@@ -41,6 +41,27 @@
 #include "ospf6_intra.h"
 #include "ospf6_spf.h"
 #include "ospf6d.h"
+#ifdef OSPF6_MANET
+#include "ospf6_proto.h"
+#endif //OSPF6_MANET
+#ifdef SIM
+#include "sim.h"
+#endif //SIM
+
+#if (defined (USER_CHECKSUM) && !defined(__LINKSYS__))//extra incl for getifaddrs
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <netdb.h>
+#include <net/if.h>
+#include <ifaddrs.h>
+                                                                                
+static struct in6_addr *
+ospf6_interface_get_linklocal_address(struct interface *ifp);
+                                                                                
+#endif
+#ifdef __LINKSYS__
+int get_linksys_linklocal_address( struct interface *ifp, struct in6_addr *);
+#endif
 
 unsigned char conf_debug_ospf6_interface = 0;
 
@@ -123,7 +144,15 @@ ospf6_interface_create (struct interface *ifp)
   oi->area = (struct ospf6_area *) NULL;
   oi->neighbor_list = list_new ();
   oi->neighbor_list->cmp = ospf6_neighbor_cmp;
+#if (defined( __LINKSYS__) && defined(USER_CHECKSUM))
+  oi->linklocal_addr = (struct in6_addr *) malloc(sizeof(struct in6_addr));
+  get_linksys_linklocal_address(ifp,oi->linklocal_addr);
+#elif defined(USER_CHECKSUM)
+  oi->linklocal_addr = ospf6_interface_get_linklocal_address(ifp);
+#elif (!defined( __LINKSYS__) && !defined(USER_CHECKSUM))
   oi->linklocal_addr = (struct in6_addr *) NULL;
+#endif
+
   oi->instance_id = 0;
   oi->transdelay = 1;
   oi->priority = 1;
@@ -134,6 +163,63 @@ ospf6_interface_create (struct interface *ifp)
   oi->cost = 1;
   oi->state = OSPF6_INTERFACE_DOWN;
   oi->flag = 0;
+
+#ifdef OSPF6_MANET
+  oi->ackInterval = 1800; 
+  oi->ack_cache_timeout = 100; //Sec
+  oi->diff_hellos = false;
+
+#ifdef OSPF6_MANET_MPR_FLOOD
+  oi->pushBackInterval = 2000; //msecs
+#ifdef OSPF6_MANET_MPR_SP
+  oi->smart_peering = false;
+  oi->unsynch_adj = false;
+#endif// OSPF6_MANET_MPR_SP
+#endif //OSPF6_MANET_MPR_FLOOD
+
+#ifdef OSPF6_MANET_MDR_FLOOD
+  oi->BackupWaitInterval = 2000; //msec (greater than flood_delay + prop delay) 
+  oi->TwoHopRefresh = 3;
+  oi->HelloRepeatCount = 3;
+  oi->NonPersistentMDR = false;
+  oi->AdjConnectivity = OSPF6_ADJ_BICONNECTED; 
+  oi->LSAFullness = OSPF6_LSA_FULLNESS_MIN; 
+  oi->MDRConstraint = 3; // constraint h for MPN, should be 2 or 3.
+  oi->full_adj_part_lsa = 0; // For full adjacencies with partial LSAs.
+#ifdef OSPF6_MANET_DIFF_HELLO
+#ifdef OSPF6_MANET_MDR_LQ
+  oi->link_quality = true;
+#endif //OSPF6_MANET_MDR_LQ
+#endif //OSPF6_MANET_DIFF_HELLO
+#endif //OSPF6_MANET_MDR_FLOOD
+#endif //OSPF6_MANET
+
+#ifdef SIM_ETRACE_STAT
+  oi->num_2way_neigh = 0;
+  set_time(&oi->neigh_2way_change_time);
+  oi->num_full_neigh = 0;
+  set_time(&oi->neigh_full_change_time);
+  set_time(&oi->relaysel_change_time);
+#endif //SIM_ETRACE_STAT
+
+#ifdef OSPF6_DELAYED_FLOOD
+  oi->flood_delay = 100; //msec
+#endif //OSPF6_DELAYED_FLOOD
+
+#ifdef OSPF6_JITTER
+  oi->jitter = 100;  //msec
+#endif // OSPF6_JITTER
+
+#ifdef OSPF6_CONFIG
+  if (if_is_broadcast (ifp))
+    oi->type = OSPF6_IFTYPE_BROADCAST;
+  else if (if_is_pointopoint (ifp))
+    oi->type = OSPF6_IFTYPE_POINTOPOINT;
+  else if (if_is_loopback (ifp))
+    oi->type = OSPF6_IFTYPE_LOOPBACK;
+  else
+    oi->type = OSPF6_IFTYPE_NONE;
+#endif //OSPF6_CONFIG
 
   /* Try to adjust I/O buffer size with IfMtu */
   oi->ifmtu = ifp->mtu6;
@@ -174,6 +260,67 @@ ospf6_interface_delete (struct ospf6_interface *oi)
       ospf6_neighbor_delete (on);
     }
   list_delete (oi->neighbor_list);
+
+  if (oi->type == OSPF6_IFTYPE_MANETRELIABLE)
+  {
+#ifdef OSPF6_MANET_MPR_FLOOD
+#ifdef OSPF6_MANET_DIFF_HELLO
+    struct drop_neighbor *drop_neigh;
+#endif //OSPF6_MANET_DIFF_HELLO
+    struct ospf6_relay *relay;
+    struct ospf6_relay_selector *relay_sel;
+
+    /* two_hop_list  -- must be after neighbor delete
+     * two_hop data structures cleared in one hop list delete above
+     */
+    list_delete (oi->two_hop_list);
+
+#ifdef OSPF6_MANET_DIFF_HELLO
+    //drop_neighbor_list
+    for (n = listhead (oi->drop_neighbor_list); n; nextnode(n))
+    {
+      drop_neigh = (struct drop_neighbor *) getdata(n);
+      free(drop_neigh->expire_time);
+      free(drop_neigh);
+    }
+    list_delete (oi->drop_neighbor_list);
+#endif //OSPF6_MANET_DIFF_HELLO
+    //relay_list
+    for (n = listhead(oi->relay_list); n; nextnode(n))
+    {
+      relay = (struct ospf6_relay *) getdata(n);
+      free(relay->drop_expire_time);
+      free(relay);
+    }
+    list_delete (oi->relay_list);
+
+  //relay_sel_list
+    for (n = listhead(oi->relay_sel_list); n; nextnode(n))
+    {
+      relay_sel = (struct ospf6_relay_selector *) getdata(n);
+      free(relay_sel->expire_time);
+      free(relay_sel);
+    }
+    list_delete (oi->relay_sel_list);
+#endif //OSPF6_MANET_MPR_FLOOD
+
+#if defined(OSPF6_MANET_MDR_FLOOD) && defined(OSPF6_MANET_DIFF_HELLO)
+    if (oi->lnl)
+    {
+      struct ospf6_lnl_element *lnl_element;
+      //lnl 
+      for (n = listhead(oi->lnl); n; nextnode(n))
+      {
+        lnl_element = (struct ospf6_lnl_element *) getdata(n);
+        free(lnl_element);
+      }
+      list_delete (oi->lnl);
+    }
+#endif //OSPF6_MANET_DIFF_HELLO && OSPF6_MANET_MDR_FLOOD
+
+
+  }
+
 
   THREAD_OFF (oi->thread_send_hello);
   THREAD_OFF (oi->thread_send_lsupdate);
@@ -233,7 +380,76 @@ ospf6_interface_disable (struct ospf6_interface *oi)
   THREAD_OFF (oi->thread_send_lsupdate);
   THREAD_OFF (oi->thread_send_lsack);
 }
+#if (defined(USER_CHECKSUM) && defined(__LINKSYS__))
 
+/* the linksys  and other non-libc2.3 machines do not support
+   IPv6 address retrieval in getifaddrs().  This routine uses
+   the /proc/net/if_inet6 to search for an IPv6 address for a 
+   given interface.
+*/
+int get_linksys_linklocal_address( struct interface *ifp, struct in6_addr *iAddr)
+{
+ unsigned char a[8][5], f[32],v6addr[64];
+ unsigned int b,c,d,e;
+ int stat=0, found=0;
+
+ FILE *fp = fopen("/proc/net/if_inet6","r");
+
+ if(!fp) return -1;
+ while(!feof(fp)) {
+
+        fscanf(fp, "%4s%4s%4s%4s%4s%4s%4s%4s %x %x %x %x\t%s",
+                        a[0],a[1],a[2],a[3],a[4],a[5],a[6],a[7],&b,&c,&d,&e,&f);
+
+        if(!strcmp(f,ifp->name)) {  /* found our interface! */
+                sprintf(v6addr,"%s:%s:%s:%s:%s:%s:%s:%s",a[0],a[1],a[2],a[3],a[4],a[5],
+                a[6],a[7]);
+        fprintf(stderr,"%s --> %s\n",f,v6addr);
+        stat = inet_pton(AF_INET6, v6addr, iAddr);
+	if(stat)   /* we found and address and could decode it */
+           found = 1;
+        }
+ }
+
+ fclose(fp);
+ return found;
+}
+#endif
+
+#if (defined(USER_CHECKSUM) && !defined(__LINKSYS__))
+/*
+* in order to compute the checksum, we need to find the 
+* source address that will be used.  Note that the 
+* getifaddrs() call used below works for IPv4 only
+* in glibc < 2.3.
+*
+*/
+
+static struct in6_addr *
+ospf6_interface_get_linklocal_address(struct interface *ifp)
+{
+  struct in6_addr *l = (struct in6_addr *) NULL;
+
+        struct ifaddrs *ifap0, *ifap;
+        struct sockaddr_in6 *sin6=NULL;
+                                                                                
+        if (getifaddrs(&ifap0)) {
+	  return l;
+        }
+                                                                                
+        for (ifap = ifap0; ifap; ifap=ifap->ifa_next) {
+                if (ifap->ifa_addr == NULL)
+                        continue;
+                if (!strcmp(ifap->ifa_name,ifp->name) && (ifap->ifa_addr->sa_family == AF_INET6)) {
+		  sin6 = (struct sockaddr_in6 *) ifap->ifa_addr;
+		  if(IN6_IS_ADDR_LINKLOCAL(&sin6->sin6_addr)) 
+		    l = &sin6->sin6_addr; 
+		}
+	}
+	return l;
+
+}
+#else
 static struct in6_addr *
 ospf6_interface_get_linklocal_address (struct interface *ifp)
 {
@@ -256,6 +472,7 @@ ospf6_interface_get_linklocal_address (struct interface *ifp)
     }
   return l;
 }
+#endif
 
 void
 ospf6_interface_if_add (struct interface *ifp)
@@ -339,8 +556,11 @@ ospf6_interface_connected_route_update (struct interface *ifp)
     return;
 
   /* reset linklocal pointer */
+#if defined(__LINKSYS__) && defined(USER_CHECKSUM)
+  get_linksys_linklocal_address(ifp,oi->linklocal_addr);
+#else
   oi->linklocal_addr = ospf6_interface_get_linklocal_address (ifp);
-
+#endif
   /* if area is null, do not make connected-route list */
   if (oi->area == NULL)
     return;
@@ -357,7 +577,9 @@ ospf6_interface_connected_route_update (struct interface *ifp)
       CONTINUE_IF_ADDRESS_LINKLOCAL (IS_OSPF6_DEBUG_INTERFACE, c->address);
       CONTINUE_IF_ADDRESS_UNSPECIFIED (IS_OSPF6_DEBUG_INTERFACE, c->address);
       CONTINUE_IF_ADDRESS_LOOPBACK (IS_OSPF6_DEBUG_INTERFACE, c->address);
+#ifndef SIM  //XXX BOEING why is v4compat not allowed?
       CONTINUE_IF_ADDRESS_V4COMPAT (IS_OSPF6_DEBUG_INTERFACE, c->address);
+#endif //SIM
       CONTINUE_IF_ADDRESS_V4MAPPED (IS_OSPF6_DEBUG_INTERFACE, c->address);
 
       /* apply filter */
@@ -374,7 +596,7 @@ ospf6_interface_connected_route_update (struct interface *ifp)
             {
               if (IS_OSPF6_DEBUG_INTERFACE)
                 zlog_debug ("%s on %s filtered by prefix-list %s ",
-			    buf, oi->interface->name, oi->plist_name);
+                  buf, oi->interface->name, oi->plist_name);
               continue;
             }
         }
@@ -648,7 +870,13 @@ interface_up (struct thread *thread)
     thread_add_event (master, ospf6_hello_send, oi, 0);
 
   /* decide next interface state */
+#ifdef OSPF6_CONFIG
+  if (oi->type == OSPF6_IFTYPE_POINTOPOINT ||
+      oi->type == OSPF6_IFTYPE_POINTOMULTIPOINT ||
+      oi->type == OSPF6_IFTYPE_MANETRELIABLE)
+#else
   if (if_is_pointopoint (oi->interface))
+#endif // OSPF6_CONFIG
     ospf6_interface_state_change (OSPF6_INTERFACE_POINTTOPOINT, oi);
   else if (oi->priority == 0)
     ospf6_interface_state_change (OSPF6_INTERFACE_DROTHER, oi);
@@ -803,6 +1031,81 @@ ospf6_interface_show (struct vty *vty, struct interface *ifp)
   else
     oi = (struct ospf6_interface *) ifp->info;
 
+#ifdef OSPF6_CONFIG
+  if (oi->type == OSPF6_IFTYPE_BROADCAST)
+    type = "BROADCAST";
+  else if (oi->type == OSPF6_IFTYPE_LOOPBACK)
+    type = "LOOPBACK";
+  else if (oi->type == OSPF6_IFTYPE_NBMA)
+    type = "NBMA";
+  else if (oi->type == OSPF6_IFTYPE_POINTOMULTIPOINT)
+    type = "POINT TO MULTIPOINT";
+  else if (oi->type == OSPF6_IFTYPE_MANETRELIABLE)
+    type = "MANET";
+  else if (oi->type == OSPF6_IFTYPE_POINTOPOINT)
+    type = "POINT TO POINT";
+  vty_out (vty, "  OSPF6 type %s%s", type, VTY_NEWLINE);
+
+  if (oi->type == OSPF6_IFTYPE_MANETRELIABLE)
+  {
+    if (oi->flooding == OSPF6_FLOOD_MDR_SICDS)
+      type = "MDR"; 
+    else if (oi->flooding == OSPF6_FLOOD_MPR_SDCDS)
+      type = "MPR"; 
+    else
+      type = "BROADCAST";
+    vty_out (vty, "  OSPF6 MANET flooding type %s%s", type, VTY_NEWLINE);
+
+    if (oi->flooding == OSPF6_FLOOD_MPR_SDCDS)
+    {
+      struct listnode *n;
+      struct ospf6_relay *relay;
+      struct ospf6_relay_selector *relay_sel;
+      char router_id[32];
+
+      vty_out (vty, "  Relay list:  ");
+      for (n = listhead(oi->relay_list); n; nextnode(n))
+      {
+        relay = (struct ospf6_relay *) getdata(n);
+        if (!relay->active)
+          continue;
+        inet_ntop (AF_INET, &relay->router_id, router_id, sizeof(router_id));
+        vty_out(vty, "%s,", router_id);
+      }
+      vty_out (vty, "%s", VTY_NEWLINE);
+
+      vty_out (vty, "  Relay Sel list:  ");
+      for (n = listhead(oi->relay_sel_list); n; nextnode(n))
+      {
+        relay_sel = (struct ospf6_relay_selector *) getdata(n);
+        inet_ntop (AF_INET, &relay_sel->router_id, router_id,sizeof(router_id));
+        vty_out(vty, "%s,", router_id);
+      }
+      vty_out (vty, "%s", VTY_NEWLINE);
+    }
+    else if (oi->flooding == OSPF6_FLOOD_MDR_SICDS)
+    {
+      switch (oi->mdr_level)
+      {
+        case OSPF6_MDR:
+          type = "MDR";
+          break;
+        case OSPF6_BMDR:
+          type = "BMDR";
+          break;
+        case OSPF6_OTHER:
+          type = "OTHER";
+          break;
+        default:
+          type = "???";
+          break;
+      }
+      vty_out (vty, "    Router is an %s router%s", type, VTY_NEWLINE);
+    }
+  }
+
+#endif //OSPF6_CONFIG
+
   vty_out (vty, "  Internet Address:%s", VNL);
   for (i = listhead (ifp->connected); i; nextnode (i))
     {
@@ -854,7 +1157,11 @@ ospf6_interface_show (struct vty *vty, struct interface *ifp)
   vty_out (vty, "  Number of I/F scoped LSAs is %u%s",
            oi->lsdb->count, VNL);
 
+#ifdef SIM
+  gettimeofday_sim (&now, (struct timezone *) NULL);
+#else
   gettimeofday (&now, (struct timezone *) NULL);
+#endif //SIM
 
   timerclear (&res);
   if (oi->thread_send_lsupdate)
@@ -950,7 +1257,7 @@ DEFUN (show_ipv6_ospf6_interface_ifname_prefix,
       return CMD_WARNING;
     }
 
-  oi = ifp->info;
+  oi = (struct ospf6_interface *) ifp->info;
   if (oi == NULL)
     {
       vty_out (vty, "OSPFv3 is not enabled on %s%s", argv[0], VNL);
@@ -1233,6 +1540,438 @@ DEFUN (ipv6_ospf6_hellointerval,
   return CMD_SUCCESS;
 }
 
+#if defined(OSPF6_CONFIG) && defined(OSPF6_DELAYED_FLOOD)
+DEFUN (ipv6_ospf6_flooddelay,
+       ipv6_ospf6_flooddelay_cmd,
+       "ipv6 ospf6 flood-delay <1-65535>",
+       IP6_STR
+       OSPF6_STR
+       "Time in msec to coalesce LSAs before sending\n"
+       SECONDS_STR
+       )
+{
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+
+  oi = (struct ospf6_interface *) ifp->info;
+  if (oi == NULL)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+
+  oi->flood_delay = strtol (argv[0], NULL, 10);
+  return CMD_SUCCESS;
+}
+#endif // defined(OSPF6_CONFIG) && defined(OSPF6_DELAYED_FLOOD)
+
+#if defined(OSPF6_CONFIG) && defined(OSPF6_JITTER)
+DEFUN (ipv6_ospf6_jitter,
+       ipv6_ospf6_jitter_cmd,
+       "ipv6 ospf6 jitter <1-65535>",
+       IP6_STR
+       OSPF6_STR
+       "Time in msec to jitter sending of all ospf6 packets\n"
+       SECONDS_STR
+       )
+{
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+
+  oi = (struct ospf6_interface *) ifp->info;
+  if (oi == NULL)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+
+  oi->jitter = strtol (argv[0], NULL, 10);
+ return CMD_SUCCESS;
+}
+#endif //OSPF6_CONFIG
+
+#ifdef OSPF6_MANET
+DEFUN (ipv6_ospf6_ackinterval,
+       ipv6_ospf6_ackinterval_cmd,
+       "ipv6 ospf6 ackinterval <1-65535>",
+       IP6_STR
+       OSPF6_STR
+       "Interval of time to coalesce acks\n"
+       SECONDS_STR
+       )
+{
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+
+  oi = (struct ospf6_interface *) ifp->info;
+  if (oi == NULL)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+
+  oi->ackInterval = strtol (argv[0], NULL, 10);
+  return CMD_SUCCESS;
+}
+
+DEFUN (ipv6_ospf6_diffhellos,
+       ipv6_ospf6_diffhellos_cmd,
+       "ipv6 ospf6 diffhellos",
+       IP6_STR
+       OSPF6_STR)
+{
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+
+  oi = (struct ospf6_interface *) ifp->info;
+  if (oi == NULL)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+
+  oi->diff_hellos = true;
+
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_ipv6_ospf6_diffhellos,
+       no_ipv6_ospf6_diffhellos_cmd,
+       "no ipv6 ospf6 diffhellos",
+       IP6_STR
+       OSPF6_STR)
+{
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+
+  oi = (struct ospf6_interface *) ifp->info;
+  if (oi == NULL)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+
+  oi->diff_hellos = false;
+
+  return CMD_SUCCESS;
+}
+
+#ifdef OSPF6_MANET_MPR_FLOOD
+
+#ifdef OSPF6_MANET_MPR_SP
+DEFUN (ipv6_ospf6_smartpeering,
+       ipv6_ospf6_smartpeering_cmd,
+       "ipv6 ospf6 smartpeering",
+       IP6_STR
+       OSPF6_STR)
+{
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+
+  oi = (struct ospf6_interface *) ifp->info;
+  if (oi == NULL)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+
+  oi->smart_peering = true;
+
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_ipv6_ospf6_smartpeering,
+       no_ipv6_ospf6_smartpeering_cmd,
+       "no ipv6 ospf6 smartpeering",
+       IP6_STR
+       OSPF6_STR)
+{
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+
+  oi = (struct ospf6_interface *) ifp->info;
+  if (oi == NULL)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+
+  oi->smart_peering = false;
+
+  return CMD_SUCCESS;
+}
+
+DEFUN (ipv6_ospf6_unsynchadj,
+       ipv6_ospf6_unsynchadj_cmd,
+       "ipv6 ospf6 unsynchadj",
+       IP6_STR
+       OSPF6_STR)
+{
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+
+  oi = (struct ospf6_interface *) ifp->info;
+  if (oi == NULL)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+
+  oi->unsynch_adj = true;
+
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_ipv6_ospf6_unsynchadj,
+       no_ipv6_ospf6_unsynchadj_cmd,
+       "no ipv6 ospf6 unsynchadj",
+       IP6_STR
+       OSPF6_STR)
+{
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+
+  oi = (struct ospf6_interface *) ifp->info;
+  if (oi == NULL)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+
+  oi->unsynch_adj = false;
+
+  return CMD_SUCCESS;
+}
+#endif //OSPF6_MANET_MPR_SP
+
+DEFUN (ipv6_ospf6_pushbackinterval,
+       ipv6_ospf6_pushbackinterval_cmd,
+       "ipv6 ospf6 pushbackinterval <1-65535>",
+       IP6_STR
+       OSPF6_STR
+       "Interval of time for non-overlapping relays to wait before flooding\n"
+       SECONDS_STR
+       )
+{
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+
+  oi = (struct ospf6_interface *) ifp->info;
+  if (oi == NULL)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+
+  oi->pushBackInterval = strtol (argv[0], NULL, 10);
+  return CMD_SUCCESS;
+}
+#endif //OSPF6_MANET_MPR_FLOOD
+
+#ifdef OSPF6_MANET_MDR_FLOOD
+DEFUN (ipv6_ospf6_backupwaitinterval,
+       ipv6_ospf6_backupwaitinterval_cmd,
+       "ipv6 ospf6 backupwaitinterval <1-65535>",
+       IP6_STR
+       OSPF6_STR
+       "Interval of time for MBDRs to wait before flooding\n"
+       SECONDS_STR
+       )
+{
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+
+  oi = (struct ospf6_interface *) ifp->info;
+  if (oi == NULL)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+
+  oi->BackupWaitInterval = strtol (argv[0], NULL, 10);
+  return CMD_SUCCESS;
+}
+
+DEFUN (ipv6_ospf6_twohoprefresh,
+       ipv6_ospf6_twohoprefresh_cmd,
+       "ipv6 ospf6 twohoprefresh <1-65535>",
+       IP6_STR
+       OSPF6_STR
+       "Full Hellos are sent every TwoHopRefresh Hellos\n"
+       SECONDS_STR
+       )
+{
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+
+  oi = (struct ospf6_interface *) ifp->info;
+  if (oi == NULL)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+
+  oi->TwoHopRefresh = strtol (argv[0], NULL, 10);
+  return CMD_SUCCESS;
+}
+
+DEFUN (ipv6_ospf6_hellorepeatcount,
+       ipv6_ospf6_hellorepeatcount_cmd,
+       "ipv6 ospf6 hellorepeatcount <1-65535>",
+       IP6_STR
+       OSPF6_STR
+       "Total hellos in succession that cannot be missed using diff hellos\n"
+       "Number of successive losses\n"
+       )
+{
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+
+  oi = (struct ospf6_interface *) ifp->info;
+  if (oi == NULL)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+
+  oi->HelloRepeatCount = strtol (argv[0], NULL, 10);
+  return CMD_SUCCESS;
+}
+
+DEFUN (ipv6_ospf6_nonpersistentmdr,
+       ipv6_ospf6_nonpersistentmdr_cmd,
+       "ipv6 ospf6 nonpersistent_mdr",
+       IP6_STR
+       OSPF6_STR
+       "Persistent MDR/MBDR election\n")
+{
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+
+  oi = (struct ospf6_interface *) ifp->info;
+  if (oi == NULL)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+
+  oi->NonPersistentMDR = true;
+
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_ipv6_ospf6_nonpersistentmdr,
+       no_ipv6_ospf6_nonpersistentmdr_cmd,
+       "no ipv6 ospf6 nonpersistent_mdr",
+       IP6_STR
+       OSPF6_STR
+       "No Persistent MDR/MBDR election\n")
+{
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+
+  oi = (struct ospf6_interface *) ifp->info;
+  if (oi == NULL)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+
+  oi->NonPersistentMDR = false;
+
+  return CMD_SUCCESS;
+}
+
+DEFUN (ipv6_ospf6_adjacencyconnectivity,
+       ipv6_ospf6_adjacencyconnectivity_cmd,
+       "ipv6 ospf6 adjacencyconnectivity (uniconnected|biconnected|fully)",
+       IP6_STR
+       OSPF6_STR
+       "Level of adjacencies between neighbors\n"
+       "Specify uniconnected adjacencies between routers\n"
+       "Specify biconnected adjacencies between routers\n"
+       "Specify fully connected adjacencies between routers\n")
+{
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+
+  oi = (struct ospf6_interface *) ifp->info;
+  if (!oi)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+
+  if (strncmp (argv[0], "uni", 3) == 0)
+    oi->AdjConnectivity = OSPF6_ADJ_UNICONNECTED;
+  else if (strncmp (argv[0], "bi", 2) == 0)
+    oi->AdjConnectivity = OSPF6_ADJ_BICONNECTED;
+  else if (strncmp (argv[0], "full", 3) == 0)
+    oi->AdjConnectivity = OSPF6_ADJ_FULLYCONNECTED;
+  else
+    oi->AdjConnectivity = OSPF6_ADJ_BICONNECTED;
+
+  return CMD_SUCCESS;
+
+}
+
+DEFUN (ipv6_ospf6_lsafullnesss,
+       ipv6_ospf6_lsafullness_cmd,
+       "ipv6 ospf6 lsafullness (minlsa|minhoplsa|mdrfulllsa|fulllsa)",
+       IP6_STR
+       OSPF6_STR
+       "Level of LSA fullness\n"
+       "Specify min size LSAs (only adjacent neighbors)\n"
+       "Specify partial LSAs for min-hop routing\n"
+       "Specify full LSAs from MDR/MBDRs\n"
+       "Specify full LSAs (all routable neighbors)\n")
+{
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+
+  oi = (struct ospf6_interface *) ifp->info;
+  if (!oi)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+
+  if (strncmp (argv[0], "minlsa", 6) == 0)
+    oi->LSAFullness = OSPF6_LSA_FULLNESS_MIN;
+  else if (strncmp (argv[0], "minhop", 6) == 0)
+    oi->LSAFullness = OSPF6_LSA_FULLNESS_MINHOP;
+  else if (strncmp (argv[0], "minhop2paths", 6) == 0)
+    oi->LSAFullness = OSPF6_LSA_FULLNESS_MINHOP2PATHS;
+  else if (strncmp (argv[0], "mdrfull", 6) == 0)
+    oi->LSAFullness = OSPF6_LSA_FULLNESS_MDRFULL;
+  else if (strncmp (argv[0], "full", 4) == 0)
+    oi->LSAFullness = OSPF6_LSA_FULLNESS_FULL;
+  else
+    oi->LSAFullness = OSPF6_LSA_FULLNESS_MIN;
+
+  return CMD_SUCCESS;
+
+}
+#endif //OSPF6_MANET_MDR_FLOOD
+#endif //OSPF6_MANET
+
 /* interface variable set command */
 DEFUN (ipv6_ospf6_deadinterval,
        ipv6_ospf6_deadinterval_cmd,
@@ -1461,6 +2200,201 @@ DEFUN (ipv6_ospf6_advertise_prefix_list,
   return CMD_SUCCESS;
 }
 
+#ifdef OSPF6_CONFIG
+DEFUN (ipv6_ospf6_network,
+       ipv6_ospf6_network_cmd,
+       "ipv6 ospf6 network (broadcast|non-broadcast|point-to-multipoint|point-to-point|manet-reliable|loopback)",
+       "IPv6 Information\n"
+       "OSPF6 interface commands\n"
+       "Network type\n"
+       "Specify OSPF6 broadcast multi-access network\n"
+       "Specify OSPF6 NBMA network\n"
+       "Specify OSPF6 point-to-multipoint network\n"
+       "Specify OSPF6 manet-reliable network\n"
+       "Specify OSPF6 point-to-point network\n"
+       "Specify OSPF6 loopback\n")
+{
+
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+  int old_type;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+  oi = (struct ospf6_interface *) ifp->info;
+  if (!oi)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+  old_type = oi->type;
+
+  if (strncmp (argv[0], "b", 1) == 0)
+    oi->type = OSPF6_IFTYPE_BROADCAST;
+  else if (strncmp (argv[0], "n", 1) == 0)
+    oi->type = OSPF6_IFTYPE_NBMA;
+  else if (strncmp (argv[0], "point-to-m", 10) == 0)
+    oi->type = OSPF6_IFTYPE_POINTOMULTIPOINT;
+  else if (strncmp (argv[0], "point-to-p", 10) == 0)
+    oi->type = OSPF6_IFTYPE_POINTOPOINT;
+  else if (strncmp (argv[0], "manet-r", 7) == 0)
+    oi->type = OSPF6_IFTYPE_MANETRELIABLE;
+  else if (strncmp (argv[0], "l", 1) == 0)
+    oi->type = OSPF6_IFTYPE_LOOPBACK;
+
+#ifdef OSPF6_MANET
+  if (oi->type == OSPF6_IFTYPE_MANETRELIABLE)
+  { //install extra structures neccesary for manet interface
+#ifdef OSPF6_MANET_MPR_FLOOD
+    oi->two_hop_list = list_new();
+    oi->relay_list = list_new();
+    oi->relay_sel_list = list_new();
+    oi->mpr_change = true;
+
+#ifdef OSPF6_MANET_DIFF_HELLO
+    oi->drop_neighbor_list = list_new();
+    oi->scs_num = 0;
+    oi->increment_scs = false;
+    oi->full_state = false;
+    oi->initialization = true;
+#endif //OSPF6_MANET_DIFF_HELLO
+#endif //OSPF6_MANET_MPR_FLOOD
+
+#if defined(OSPF6_MANET_MDR_FLOOD) && defined(OSPF6_MANET_DIFF_HELLO)
+    oi->lnl = list_new();
+    oi->hsn = 0;
+    oi->full_hello_count = 0;
+#endif //OSPF6_MANET_DIFF_HELLO && OSPF6_MANET_MDR_FLOOD
+  }
+#endif //OSPF6_MANET
+
+  if (oi->type == old_type)
+    return CMD_SUCCESS;
+
+  /*for (rn = route_top (IF_OIFS (ifp)); rn; rn = route_next (rn))
+    {
+      struct ospf_interface *oi = rn->info;
+
+      if (!oi)
+    continue;
+      oi->type = IF_DEF_PARAMS (ifp)->type;
+
+      if (oi->state > ISM_Down)
+    {
+      OSPF_ISM_EVENT_EXECUTE (oi, ISM_InterfaceDown);
+      OSPF_ISM_EVENT_EXECUTE (oi, ISM_InterfaceUp);
+    }
+    }
+*/
+  return CMD_SUCCESS;
+}
+
+ALIAS (ipv6_ospf6_network,
+       ospf6_network_cmd,
+       "ospf6 network (broadcast|non-broadcast|point-to-multipoint|point-to-point|manet-reliable|loopback)",
+       "OSPF interface commands\n"
+       "Network type\n"
+       "Specify OSPF6 broadcast multi-access network\n"
+       "Specify OSPF6 NBMA network\n"
+       "Specify OSPF6 point-to-multipoint network\n"
+       "Specify OSPF6 manet-reliable network\n"
+       "Specify OSPF6 point-to-point network\n"
+       "Specify OSPF6 loopback\n")
+
+DEFUN (no_ipv6_ospf6_network,
+       no_ipv6_ospf6_network_cmd,
+       "no ipv6 ospf6 network",
+       NO_STR
+       "IP Information\n"
+       "OSPF6 interface commands\n"
+       "Network type\n")
+{
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+  int old_type;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+  oi = (struct ospf6_interface *) ifp->info;
+  if (!oi)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+  old_type = oi->type;
+
+  oi->type = OSPF6_IFTYPE_NONE;
+
+  if (oi->type == old_type)
+    return CMD_SUCCESS;
+
+/*
+  struct route_node *rn;
+  if (IF_DEF_PARAMS (ifp)->type == old_type)
+    return CMD_SUCCESS;
+
+  for (rn = route_top (IF_OIFS (ifp)); rn; rn = route_next (rn))
+    {
+
+      if (!oi)
+    continue;
+
+      oi->type = IF_DEF_PARAMS (ifp)->type;
+
+      if (oi->state > ISM_Down)
+    {
+      OSPF_ISM_EVENT_EXECUTE (oi, ISM_InterfaceDown);
+      OSPF_ISM_EVENT_EXECUTE (oi, ISM_InterfaceUp);
+    }
+    }
+*/
+  return CMD_SUCCESS;
+}
+
+ALIAS (no_ipv6_ospf6_network,
+       no_ospf6_network_cmd,
+       "no ospf6 network",
+       NO_STR
+       "OSPF6 interface commands\n"
+       "Network type\n")
+
+
+DEFUN (ipv6_ospf6_network_flood,
+       ipv6_ospf6_network_flood_cmd,
+       "ipv6 ospf6 network flood (broadcast|mpr|mdr)",
+       "IPv6 Information\n"
+       "OSPF6 interface commands\n"
+       "Network type\n"
+       "manet flooding\n"
+       "Specify OSPF6 broadcast flooding\n"
+       "Specify OSPF6 mpr flooding\n"
+       "Specify OSPF6 essential SI-CDS flooding\n")
+{
+
+  struct ospf6_interface *oi;
+  struct interface *ifp;
+
+  ifp = (struct interface *) vty->index;
+  assert (ifp);
+  oi = (struct ospf6_interface *) ifp->info;
+  if (!oi)
+    oi = ospf6_interface_create (ifp);
+  assert (oi);
+
+  if (strncmp (argv[0], "b", 1) == 0)
+    oi->flooding = OSPF6_FLOOD_BROADCAST;
+#ifdef OSPF6_MANET_MPR_FLOOD
+  if (strncmp (argv[0], "mpr", 3) == 0)
+    oi->flooding = OSPF6_FLOOD_MPR_SDCDS;
+#endif //OSPF6_MANET_MPR_FLOOD
+#ifdef OSPF6_MANET_MDR_FLOOD
+  else if (strncmp (argv[0], "mdr", 3) == 0)
+    oi->flooding = OSPF6_FLOOD_MDR_SICDS;
+#endif //OSPF6_MANET_MDR_FLOOD
+  else
+    oi->flooding = OSPF6_FLOOD_BROADCAST;
+
+  return CMD_SUCCESS;
+}
+#endif //OSPF6_CONFIG
+
+
 DEFUN (no_ipv6_ospf6_advertise_prefix_list,
        no_ipv6_ospf6_advertise_prefix_list_cmd,
        "no ipv6 ospf6 advertise prefix-list",
@@ -1598,6 +2532,46 @@ ospf6_interface_init ()
 
   install_element (INTERFACE_NODE, &ipv6_ospf6_advertise_prefix_list_cmd);
   install_element (INTERFACE_NODE, &no_ipv6_ospf6_advertise_prefix_list_cmd);
+
+#ifdef OSPF6_CONFIG
+  install_element (INTERFACE_NODE, &ipv6_ospf6_network_cmd);
+  install_element (INTERFACE_NODE, &no_ipv6_ospf6_network_cmd);
+  install_element (INTERFACE_NODE, &ipv6_ospf6_network_flood_cmd);
+#endif //OSPF6_CONFIG
+
+#if defined(OSPF6_CONFIG) && defined(OSPF6_DELAYED_FLOOD)
+  install_element (INTERFACE_NODE, &ipv6_ospf6_flooddelay_cmd);
+#endif //OSPF6_CONFIG
+#if defined(OSPF6_CONFIG) && defined(OSPF6_JITTER)
+  install_element (INTERFACE_NODE, &ipv6_ospf6_jitter_cmd);
+#endif //defined(OSPF6_CONFIG) && defined(OSPF6_JITTER)
+
+#ifdef OSPF6_MANET
+  install_element (INTERFACE_NODE, &ipv6_ospf6_ackinterval_cmd);
+  install_element (INTERFACE_NODE, &ipv6_ospf6_diffhellos_cmd);
+  install_element (INTERFACE_NODE, &no_ipv6_ospf6_diffhellos_cmd);
+
+#ifdef OSPF6_MANET_MPR_FLOOD
+#ifdef OSPF6_MANET_MPR_SP
+  install_element (INTERFACE_NODE, &ipv6_ospf6_smartpeering_cmd);
+  install_element (INTERFACE_NODE, &no_ipv6_ospf6_smartpeering_cmd);
+  install_element (INTERFACE_NODE, &ipv6_ospf6_unsynchadj_cmd);
+  install_element (INTERFACE_NODE, &no_ipv6_ospf6_unsynchadj_cmd);
+#endif //OSPF6_MANET_MPR_SP
+  install_element (INTERFACE_NODE, &ipv6_ospf6_pushbackinterval_cmd);
+#endif //OSPF6_MANET_MPR_FLOOD
+
+#ifdef OSPF6_MANET_MDR_FLOOD
+  install_element (INTERFACE_NODE, &ipv6_ospf6_backupwaitinterval_cmd);
+  install_element (INTERFACE_NODE, &ipv6_ospf6_twohoprefresh_cmd);
+  install_element (INTERFACE_NODE, &ipv6_ospf6_hellorepeatcount_cmd);
+  install_element (INTERFACE_NODE, &ipv6_ospf6_nonpersistentmdr_cmd);
+  install_element (INTERFACE_NODE, &no_ipv6_ospf6_nonpersistentmdr_cmd);
+  install_element (INTERFACE_NODE, &ipv6_ospf6_adjacencyconnectivity_cmd);
+  install_element (INTERFACE_NODE, &ipv6_ospf6_lsafullness_cmd);
+#endif //OSPF6_MANET_MDR_FLOOD
+#endif // OSPF6_MANET
+
 }
 
 DEFUN (debug_ospf6_interface,
@@ -1642,4 +2616,10 @@ install_element_ospf6_debug_interface ()
   install_element (CONFIG_NODE, &no_debug_ospf6_interface_cmd);
 }
 
-
+#ifdef OSPF6_MANET_DIFF_HELLO
+u_int16_t ospf6_increment_scs(u_int16_t scs_num)
+{
+  scs_num++;
+  return scs_num;
+}
+#endif //OSPF6_MANET_DIFF_HELLO

@@ -22,7 +22,16 @@
 #ifndef OSPF6_INTERFACE_H
 #define OSPF6_INTERFACE_H
 
+#ifdef SIM
+#include "lib/if.h"
+#include "ospf6d.h" //for boolean
+#else
 #include "if.h"
+#endif //SIM
+
+#ifdef OSPF6_MANET
+#include "vty.h"
+#endif //OSPF6_MANET
 
 /* Debug option */
 extern unsigned char conf_debug_ospf6_interface;
@@ -32,6 +41,24 @@ extern unsigned char conf_debug_ospf6_interface;
   (conf_debug_ospf6_interface = 0)
 #define IS_OSPF6_DEBUG_INTERFACE \
   (conf_debug_ospf6_interface)
+
+#ifdef OSPF6_MANET_MDR_FLOOD
+typedef enum {
+  OSPF6_ADJ_FULLYCONNECTED = 0,
+  OSPF6_ADJ_UNICONNECTED,
+  OSPF6_ADJ_BICONNECTED
+}ospf6_AdjConnectivity;
+
+//How much information to include in LSAs
+//These are defined in Ogier's draft, Appendix C
+typedef enum {
+  OSPF6_LSA_FULLNESS_MIN = 0,   //minimal LSAs (only adjacent neighbors)
+  OSPF6_LSA_FULLNESS_MINHOP,      //partial LSAs for min-hop routing
+  OSPF6_LSA_FULLNESS_MINHOP2PATHS, //same as above, with some path redundancy
+  OSPF6_LSA_FULLNESS_MDRFULL,  //full LSAs from MDR/MBDRs
+  OSPF6_LSA_FULLNESS_FULL       //full LSAs (all routable neighbors)
+}ospf6_LSAFullness;
+#endif //OSPF6_MANET_MDR_FLOOD
 
 /* Interface structure */
 struct ospf6_interface
@@ -102,7 +129,132 @@ struct ospf6_interface
 
   /* prefix-list name to filter connected prefix */
   char *plist_name;
+
+#ifdef SIM_ETRACE_STAT
+  int num_2way_neigh;
+  struct timeval neigh_2way_change_time;
+  int num_full_neigh;
+  struct timeval neigh_full_change_time;
+  struct timeval relaysel_change_time;
+#endif //SIM_ETRACE_STAT
+
+#ifdef OSPF6_CONFIG
+  /* OSPF6 Interface Type */
+  u_char type;
+  u_char flooding;
+#endif //OSPF6_CONFIG
+
+#ifdef OSPF6_DELAYED_FLOOD
+  int flood_delay; //msec
+#endif //OSPF6_DELAYED_FLOOD
+
+#ifdef OSPF6_JITTER
+  int jitter; //msec
+#endif //defined(OSPF6_JITTER)
+
+#ifdef OSPF6_MANET
+  long ackInterval;
+  int ack_cache_timeout;
+  boolean diff_hellos;
+#endif //OSPF6_MANET
+
+#ifdef OSPF6_MANET_MPR_FLOOD
+  long pushBackInterval;
+  struct list *two_hop_list;
+  struct list *relay_list;
+  struct list *relay_sel_list;
+  boolean mpr_change;
+
+#ifdef OSPF6_MANET_MPR_SP
+  boolean smart_peering;
+  boolean unsynch_adj;
+#endif //OSPF6_MANET_MPR_SP
+
+#ifdef OSPF6_MANET_DIFF_HELLO
+  struct list *drop_neighbor_list;
+  u_int16_t scs_num;
+  boolean increment_scs;
+  boolean full_state;
+  boolean initialization;
+#ifdef OSPF6_MANET_MDR_LQ
+  boolean link_quality;
+#endif //OSPF6_MANET_MDR_LQ
+#endif //OSPF6_MANET_DIFF_HELLO
+#endif //OSPF6_MANET_MPR_FLOOD
+
+#ifdef OSPF6_MANET_MDR_FLOOD
+  long BackupWaitInterval;
+  int **cost_matrix;
+  int **lsa_cost_matrix;
+  int AdjConnectivity; //1=uniconnected, 2=biconnected, 0=fully connected
+  int LSAFullness; 
+  int MDRConstraint; // MPN parameter h, should be 2 or 3.
+  int mdr_level;
+  int mdr_count;
+  struct ospf6_neighbor *parent;
+  struct ospf6_neighbor *bparent;
+  u_int16_t TwoHopRefresh;
+  u_int16_t HelloRepeatCount;
+  boolean NonPersistentMDR;
+  boolean full_adj_part_lsa;  // For full adjacencies with partial LSAs.
+#ifdef OSPF6_MANET_DIFF_HELLO
+  struct list *lnl;
+  u_int16_t hsn;
+  u_int full_hello_count;
+#endif //OSPF6_MANET_DIFF_HELLO
+#endif //OSPF6_MANET_MDR_FLOOD
+
 };
+
+#ifdef OSPF6_MANET_DIFF_HELLO
+struct drop_neighbor
+{
+  u_int32_t router_id;
+  struct timeval *expire_time;
+ boolean first;
+};
+#endif //OSPF6_MANET_DIFF_HELLO
+
+#ifdef OSPF6_MANET_MPR_FLOOD
+struct ospf6_relay
+{
+  u_int32_t router_id;
+  boolean newly_activated;
+  boolean active;
+
+  boolean drop;
+  struct timeval *drop_expire_time;
+};
+
+struct ospf6_relay_selector
+{
+  u_int32_t router_id;
+  struct timeval *expire_time;
+#ifdef SIM_ETRACE_STAT
+ struct timeval install_time;
+#endif //SIM_ETRACE_STAT
+};
+#endif //OSPF6_MANET_MPR_FLOOD
+
+
+#ifdef OSPF6_CONFIG
+#define OSPF6_IFTYPE_NONE              0
+#define OSPF6_IFTYPE_POINTOPOINT       1
+#define OSPF6_IFTYPE_BROADCAST         2
+#define OSPF6_IFTYPE_NBMA              3
+#define OSPF6_IFTYPE_POINTOMULTIPOINT  4
+#define OSPF6_IFTYPE_VIRTUALLINK       5
+#define OSPF6_IFTYPE_LOOPBACK          6
+#define OSPF6_IFTYPE_MANETRELIABLE     7
+#define OSPF6_IFTYPE_MAX               8
+
+typedef enum {
+ OSPF6_FLOOD_BROADCAST = 0,
+ OSPF6_FLOOD_MPR_SDCDS = 1,
+ OSPF6_FLOOD_MDR_SICDS = 2
+} ospf6_flooding_type;
+#endif //OSPF6_CONFIG
+
 
 /* interface state */
 #define OSPF6_INTERFACE_NONE             0
@@ -148,6 +300,10 @@ void ospf6_interface_init ();
 
 int config_write_ospf6_debug_interface (struct vty *vty);
 void install_element_ospf6_debug_interface ();
+
+#ifdef OSPF6_MANET_DIFF_HELLO
+u_int16_t ospf6_increment_scs(u_int16_t scs_num);
+#endif //OSPF6_MANET_DIFF_HELLO
 
 #endif /* OSPF6_INTERFACE_H */
 

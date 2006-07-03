@@ -42,6 +42,9 @@
 
 #include "ospf6_flood.h"
 #include "ospf6d.h"
+#ifdef SIM
+#include "sim.h"
+#endif //SIM
 
 vector ospf6_lsa_handler_vector;
 
@@ -95,7 +98,8 @@ ospf6_get_lsa_handler (u_int16_t type)
   if (index >= vector_max (ospf6_lsa_handler_vector))
     handler = &unknown_handler;
   else
-    handler = vector_slot (ospf6_lsa_handler_vector, index);
+    handler = (struct ospf6_lsa_handler *)
+              vector_slot (ospf6_lsa_handler_vector, index);
 
   if (handler == NULL)
     handler = &unknown_handler;
@@ -138,12 +142,21 @@ ospf6_lsa_is_differ (struct ospf6_lsa *lsa1,
 
   ospf6_lsa_age_current (lsa1);
   ospf6_lsa_age_current (lsa2);
+#ifdef SIM_ETRACE_STAT
+  if (ntohs (age_mask(lsa1->header)) == MAXAGE &&
+      ntohs (age_mask(lsa2->header)) != MAXAGE)
+    return 1;
+  if (ntohs (age_mask(lsa1->header)) != MAXAGE &&
+      ntohs (age_mask(lsa2->header)) == MAXAGE)
+    return 1;
+#else
   if (ntohs (lsa1->header->age) == MAXAGE &&
       ntohs (lsa2->header->age) != MAXAGE)
     return 1;
   if (ntohs (lsa1->header->age) != MAXAGE &&
       ntohs (lsa2->header->age) == MAXAGE)
     return 1;
+#endif //SIM_ETRACE_STAT
 
   /* compare body */
   if (ntohs (lsa1->header->length) != ntohs (lsa2->header->length))
@@ -180,11 +193,19 @@ ospf6_lsa_age_set (struct ospf6_lsa *lsa)
 
   assert (lsa && lsa->header);
 
+#ifdef SIM
+  if (gettimeofday_sim (&now, (struct timezone *)NULL) < 0)
+#else
   if (gettimeofday (&now, (struct timezone *)NULL) < 0)
+#endif //SIM
     zlog_warn ("LSA: gettimeofday failed, may fail LSA AGEs: %s",
                safe_strerror (errno));
 
+#ifdef SIM_ETRACE_STAT
+  lsa->birth.tv_sec = now.tv_sec - ntohs (age_mask(lsa->header));
+#else
   lsa->birth.tv_sec = now.tv_sec - ntohs (lsa->header->age);
+#endif //SIM_ETRACE_STAT
   lsa->birth.tv_usec = now.tv_usec;
 
   return;
@@ -203,7 +224,11 @@ ospf6_lsa_age_current (struct ospf6_lsa *lsa)
   assert (lsa->header);
 
   /* current time */
+#ifdef SIM
+  if (gettimeofday_sim (&now, (struct timezone *)NULL) < 0)
+#else
   if (gettimeofday (&now, (struct timezone *)NULL) < 0)
+#endif //SIM
     zlog_warn ("LSA: gettimeofday failed, may fail LSA AGEs: %s",
                safe_strerror (errno));
 
@@ -213,7 +238,12 @@ ospf6_lsa_age_current (struct ospf6_lsa *lsa)
   /* if over MAXAGE, set to it */
   age = (ulage > MAXAGE ? MAXAGE : ulage);
 
+
+#ifdef SIM_ETRACE_STAT
+  lsa->header->age = htons (age) + hopcount_mask(lsa->header);
+#else
   lsa->header->age = htons (age);
+#endif //SIM_ETRACE_STAT
   return age;
 }
 
@@ -226,7 +256,13 @@ ospf6_lsa_age_update_to_send (struct ospf6_lsa *lsa, u_int32_t transdelay)
   age = ospf6_lsa_age_current (lsa) + transdelay;
   if (age > MAXAGE)
     age = MAXAGE;
+
+#ifdef SIM_ETRACE_STAT
+  lsa->header->age = htons (age) + hopcount_mask(lsa->header);
+#else
   lsa->header->age = htons (age);
+#endif //SIM_ETRACE_STAT
+
 }
 
 void
@@ -239,7 +275,13 @@ ospf6_lsa_premature_aging (struct ospf6_lsa *lsa)
   THREAD_OFF (lsa->expire);
   THREAD_OFF (lsa->refresh);
 
+#ifdef SIM
+ //setting birth to 0 would normally make (now - birth > MAXAGE)
   memset (&lsa->birth, 0, sizeof (struct timeval));
+ lsa->birth.tv_sec = (MAXAGE)*-1;
+#else
+  memset (&lsa->birth, 0, sizeof (struct timeval));
+#endif //SIM
   thread_execute (master, ospf6_lsa_expire, lsa, 0);
 }
 
@@ -317,9 +359,15 @@ ospf6_lsa_header_print_raw (struct ospf6_lsa_header *header)
              sizeof (adv_router));
   zlog_debug ("    [%s Id:%s Adv:%s]",
 	      ospf6_lstype_name (header->type), id, adv_router);
+#ifdef SIM_ETRACE_STAT
+  zlog_debug ("    Age: %4hu SeqNum: %#08lx Cksum: %04hx Len: %d",
+	      ntohs (age_mask(header)), (u_long) ntohl (header->seqnum),
+	      ntohs (header->checksum), ntohs (header->length));
+#else
   zlog_debug ("    Age: %4hu SeqNum: %#08lx Cksum: %04hx Len: %d",
 	      ntohs (header->age), (u_long) ntohl (header->seqnum),
 	      ntohs (header->checksum), ntohs (header->length));
+#endif //SIM_ETRACE_STAT
 }
 
 void
@@ -351,7 +399,11 @@ ospf6_lsa_show_summary (struct vty *vty, struct ospf6_lsa *lsa)
   inet_ntop (AF_INET, &lsa->header->adv_router, adv_router,
              sizeof (adv_router));
 
+#ifdef SIM
+  gettimeofday_sim (&now, NULL);
+#else
   gettimeofday (&now, NULL);
+#endif //SIM
   timersub (&now, &lsa->installed, &res);
   timerstring (&res, duration, sizeof (duration));
 
@@ -479,6 +531,13 @@ ospf6_lsa_create (struct ospf6_lsa_header *header)
   /* calculate birth of this lsa */
   ospf6_lsa_age_set (lsa);
 
+#ifdef OSPF6_MANET
+  lsa->pushBackTimer = NULL;
+#endif //OSPF6_MANET
+#ifdef OSPF6_MANET_TEMPORARY_LSDB
+  lsa->cache = 0;
+#endif //OSPF6_MANET_TEMPORARY_LSDB
+
   return lsa;
 }
 
@@ -522,6 +581,10 @@ ospf6_lsa_delete (struct ospf6_lsa *lsa)
   THREAD_OFF (lsa->expire);
   THREAD_OFF (lsa->refresh);
 
+#ifdef OSPF6_MANET
+  ospf6_pushback_lsa_delete(lsa);
+#endif //OSPF6_MANET
+
   /* do free */
   XFREE (MTYPE_OSPF6_LSA, lsa->header);
   XFREE (MTYPE_OSPF6_LSA, lsa);
@@ -537,6 +600,11 @@ ospf6_lsa_copy (struct ospf6_lsa *lsa)
     copy = ospf6_lsa_create_headeronly (lsa->header);
   else
     copy = ospf6_lsa_create (lsa->header);
+
+#ifdef SIM_ETRACE_STAT
+  copy->header->age += hopcount_mask(lsa->header);
+#endif //SIM_ETRACE_STAT
+
   assert (copy->lock == 0);
 
   copy->birth = lsa->birth;
@@ -544,6 +612,10 @@ ospf6_lsa_copy (struct ospf6_lsa *lsa)
   copy->received = lsa->received;
   copy->installed = lsa->installed;
   copy->lsdb = lsa->lsdb;
+
+#ifdef OSPF6_DELAYED_FLOOD
+  copy->rxmt_time = lsa->rxmt_time;
+#endif //OSPF6_DELAYED_FLOOD
 
   return copy;
 }
@@ -609,7 +681,7 @@ ospf6_lsa_expire (struct thread *thread)
 int
 ospf6_lsa_refresh (struct thread *thread)
 {
-  struct ospf6_lsa *old, *self, *new;
+  struct ospf6_lsa *old, *self, *new_;
   struct ospf6_lsdb *lsdb_self;
 
   assert (thread);
@@ -636,23 +708,39 @@ ospf6_lsa_refresh (struct thread *thread)
                          self->header->adv_router, old->lsdb);
   ospf6_lsa_checksum (self->header);
 
-  new = ospf6_lsa_create (self->header);
-  new->lsdb = old->lsdb;
-  new->refresh = thread_add_timer (master, ospf6_lsa_refresh, new,
+  new_ = ospf6_lsa_create (self->header);
+  new_->lsdb = old->lsdb;
+  new_->refresh = thread_add_timer (master, ospf6_lsa_refresh, new_,
                                    LS_REFRESH_TIME);
 
   /* store it in the LSDB for self-originated LSAs */
-  ospf6_lsdb_add (ospf6_lsa_copy (new), lsdb_self);
+  ospf6_lsdb_add (ospf6_lsa_copy (new_), lsdb_self);
+#ifdef OSPF6_CONFIG
+  if (IS_OSPF6_DEBUG_DATABASE (DATABASE_DETAIL))
+    ospf6_debug_lsdb_show(OSPF6_DEBUG_DATABASE_DETAIL, lsdb_self);
+  else if (IS_OSPF6_DEBUG_DATABASE (DATABASE))
+    ospf6_debug_lsdb_show(OSPF6_DEBUG_DATABASE, lsdb_self);
+#endif //OSPF6_CONFIG
 
-  if (IS_OSPF6_DEBUG_LSA_TYPE (new->header->type))
+  if (IS_OSPF6_DEBUG_LSA_TYPE (new_->header->type))
     {
       zlog_debug ("LSA Refresh:");
-      ospf6_lsa_header_print (new);
+      ospf6_lsa_header_print (new_);
     }
 
+#ifdef SIM_ETRACE_STAT
+  char id[16], adv_router[16];
+  inet_ntop (AF_INET,&new_->header->id, id, sizeof (id));
+  inet_ntop (AF_INET,&new_->header->adv_router, adv_router,sizeof (adv_router));
+  TraceEvent_sim(2,"Re-orig LSA %s -id %s -advrt %s -age %d -seq %lu -len %d",
+                ospf6_lstype_name(new_->header->type), id, adv_router,
+                ntohs(age_mask(new_->header)), ntohl(new_->header->seqnum),
+                ntohs(new_->header->length));
+#endif //SIM_ETRACE_STAT
+
   ospf6_flood_clear (old);
-  ospf6_flood (NULL, new);
-  ospf6_install_lsa (new);
+  ospf6_flood (NULL, new_);
+  ospf6_install_lsa (new_);
 
   return 0;
 }
@@ -762,7 +850,8 @@ DEFUN (debug_ospf6_lsa_type,
 
   for (i = 0; i < vector_max (ospf6_lsa_handler_vector); i++)
     {
-      handler = vector_slot (ospf6_lsa_handler_vector, i);
+      handler = (struct ospf6_lsa_handler *) 
+                vector_slot (ospf6_lsa_handler_vector, i);
       if (handler == NULL)
         continue;
       if (type && handler->type == type)
@@ -830,7 +919,8 @@ DEFUN (no_debug_ospf6_lsa_type,
 
   for (i = 0; i < vector_max (ospf6_lsa_handler_vector); i++)
     {
-      handler = vector_slot (ospf6_lsa_handler_vector, i);
+      handler = (struct ospf6_lsa_handler *) 
+                vector_slot (ospf6_lsa_handler_vector, i);
       if (handler == NULL)
         continue;
       if (type && handler->type == type)
@@ -891,7 +981,8 @@ install_element_ospf6_debug_lsa ()
   strncat (strbuf, "debug ospf6 lsa (", STRSIZE - strlen (strbuf));
   for (i = 0; i < vector_max (ospf6_lsa_handler_vector); i++)
     {
-      handler = vector_slot (ospf6_lsa_handler_vector, i);
+      handler = (struct ospf6_lsa_handler *) 
+                vector_slot (ospf6_lsa_handler_vector, i);
       if (handler == NULL)
         continue;
       strncat (strbuf, ospf6_lsa_handler_name (handler),
@@ -913,7 +1004,8 @@ install_element_ospf6_debug_lsa ()
 
   for (i = 0; i < vector_max (ospf6_lsa_handler_vector); i++)
     {
-      handler = vector_slot (ospf6_lsa_handler_vector, i);
+      handler = (struct ospf6_lsa_handler *)
+                vector_slot (ospf6_lsa_handler_vector, i);
       if (handler == NULL)
         continue;
       strncat (docbuf, "Debug ", DOCSIZE - strlen (docbuf));
@@ -978,7 +1070,8 @@ config_write_ospf6_debug_lsa (struct vty *vty)
 
   for (i = 0; i < vector_max (ospf6_lsa_handler_vector); i++)
     {
-      handler = vector_slot (ospf6_lsa_handler_vector, i);
+      handler = (struct ospf6_lsa_handler *) 
+                vector_slot (ospf6_lsa_handler_vector, i);
       if (handler == NULL)
         continue;
       if (CHECK_FLAG (handler->debug, OSPF6_LSA_DEBUG))
@@ -998,4 +1091,35 @@ config_write_ospf6_debug_lsa (struct vty *vty)
   return 0;
 }
 
+
+#ifdef SIM_ETRACE_STAT
+void ospf6_lsa_increment_hopcount(struct ospf6_lsa_header *lsa_header)
+{
+  if ((lsa_header->age & 0x00F0) == 0xF0)
+    return;  //this would overflow the hopcount space of 4 bits;
+
+  //printf("  age %x\n", lsa_header->age);
+  lsa_header->age += 0x10;  //hopcount is bits 5 to 8 when in network order
+  //printf("  hopcount = %x age = %x\n", (hopcount_mask(lsa_header)), 
+  //        ntohs(age_mask(lsa_header)));
+  //printf("  age %x\n", lsa_header->age);
+}
+
+//This function expects the age to be in network order (not host)
+//the lsa_header age is in network order
+u_int16_t age_mask(struct ospf6_lsa_header *lsa_header)
+{
+  u_int16_t age = (lsa_header->age & 0xFF0F);
+  return age; 
+}
+
+//This function expects the age to be in network order (not host)
+//the lsa_header age is in network order
+u_int16_t hopcount_mask(struct ospf6_lsa_header *lsa_header)
+{  
+  //hopcount is bits 5 to 8 when in network order
+  u_int16_t hopcount = (lsa_header->age & 0x00F0);
+  return hopcount;
+}
+#endif //SIM_ETRACE_STAT
 

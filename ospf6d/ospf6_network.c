@@ -24,11 +24,18 @@
 #include "log.h"
 #include "memory.h"
 #include "sockunion.h"
+#ifndef SIM
 #include "sockopt.h"
+#endif //SIM
 #include "privs.h"
 
 #include "ospf6_proto.h"
 #include "ospf6_network.h"
+
+#ifdef SIM
+#include "sim.h"
+#include "ospf6_interface.h"
+#endif //SIM
 
 extern struct zebra_privs_t ospf6d_privs;
 
@@ -41,9 +48,14 @@ void
 ospf6_set_reuseaddr ()
 {
   u_int on = 0;
+#ifdef SIM
+  if (setsockopt_sim (ospf6_sock, SOL_SOCKET, SO_REUSEADDR, &on,
+                  sizeof (u_int)) < 0)
+#else
   if (setsockopt (ospf6_sock, SOL_SOCKET, SO_REUSEADDR, &on,
                   sizeof (u_int)) < 0)
-    zlog_warn ("Network: set SO_REUSEADDR failed: %s", safe_strerror (errno));
+#endif //SIM
+    zlog_warn ("Network: set SO_REUSEADDR failed: %s", strerror (errno));
 }
 
 /* setsockopt MulticastLoop to off */
@@ -51,16 +63,25 @@ void
 ospf6_reset_mcastloop ()
 {
   u_int off = 0;
+#ifdef SIM
+  if (setsockopt_sim (ospf6_sock, IPPROTO_IPV6, IPV6_MULTICAST_LOOP,
+                  &off, sizeof (u_int)) < 0)
+#else
   if (setsockopt (ospf6_sock, IPPROTO_IPV6, IPV6_MULTICAST_LOOP,
                   &off, sizeof (u_int)) < 0)
+#endif //SIM
     zlog_warn ("Network: reset IPV6_MULTICAST_LOOP failed: %s",
-               safe_strerror (errno));
+               strerror (errno));
 }
 
 void
 ospf6_set_pktinfo ()
 {
+#ifdef SIM
+  setsockopt_ipv6_pktinfo_sim (ospf6_sock, 1);
+#else
   setsockopt_ipv6_pktinfo (ospf6_sock, 1);
+#endif //SIM
 }
 
 void
@@ -68,9 +89,14 @@ ospf6_set_checksum ()
 {
   int offset = 12;
 #ifndef DISABLE_IPV6_CHECKSUM
+#ifdef SIM
+  if (setsockopt_sim (ospf6_sock, IPPROTO_IPV6, IPV6_CHECKSUM,
+                  &offset, sizeof (offset)) < 0)
+#else
   if (setsockopt (ospf6_sock, IPPROTO_IPV6, IPV6_CHECKSUM,
                   &offset, sizeof (offset)) < 0)
-    zlog_warn ("Network: set IPV6_CHECKSUM failed: %s", safe_strerror (errno));
+#endif //SIM
+    zlog_warn ("Network: set IPV6_CHECKSUM failed: %s", strerror (errno));
 #else
   zlog_warn ("Network: Don't set IPV6_CHECKSUM");
 #endif /* DISABLE_IPV6_CHECKSUM */
@@ -80,6 +106,7 @@ ospf6_set_checksum ()
 int
 ospf6_serv_sock ()
 {
+#ifndef SIM
   if (ospf6d_privs.change (ZPRIVS_RAISE))
     zlog_err ("ospf6_serv_sock: could not raise privs");
 
@@ -102,7 +129,10 @@ ospf6_serv_sock ()
 #endif /*1*/
   ospf6_reset_mcastloop ();
   ospf6_set_pktinfo ();
+#ifndef USER_CHECKSUM
   ospf6_set_checksum ();
+#endif
+#endif //SIM
 
   /* setup global in6_addr, allspf6 and alldr6 for later use */
   inet_pton (AF_INET6, ALLSPFROUTERS6, &allspfrouters6);
@@ -122,8 +152,13 @@ ospf6_join_allspfrouters (u_int ifindex)
   memcpy (&mreq6.ipv6mr_multiaddr, &allspfrouters6,
           sizeof (struct in6_addr));
 
+#ifdef SIM
+  retval = setsockopt_sim (ospf6_sock, IPPROTO_IPV6, IPV6_JOIN_GROUP,
+                       &mreq6, sizeof (mreq6));
+#else
   retval = setsockopt (ospf6_sock, IPPROTO_IPV6, IPV6_JOIN_GROUP,
                        &mreq6, sizeof (mreq6));
+#endif //SIM
 
   if (retval < 0)
     zlog_err ("Network: Join AllSPFRouters on ifindex %d failed: %s",
@@ -144,8 +179,13 @@ ospf6_leave_allspfrouters (u_int ifindex)
   memcpy (&mreq6.ipv6mr_multiaddr, &allspfrouters6,
           sizeof (struct in6_addr));
 
+#ifdef SIM
+  if (setsockopt_sim (ospf6_sock, IPPROTO_IPV6, IPV6_LEAVE_GROUP,
+                  &mreq6, sizeof (mreq6)) < 0)
+#else
   if (setsockopt (ospf6_sock, IPPROTO_IPV6, IPV6_LEAVE_GROUP,
                   &mreq6, sizeof (mreq6)) < 0)
+#endif //SIM
     zlog_warn ("Network: Leave AllSPFRouters on ifindex %d Failed: %s",
                ifindex, safe_strerror (errno));
 #if 0
@@ -164,8 +204,13 @@ ospf6_join_alldrouters (u_int ifindex)
   memcpy (&mreq6.ipv6mr_multiaddr, &alldrouters6,
           sizeof (struct in6_addr));
 
+#ifdef SIM
+  if (setsockopt_sim (ospf6_sock, IPPROTO_IPV6, IPV6_JOIN_GROUP,
+                  &mreq6, sizeof (mreq6)) < 0)
+#else
   if (setsockopt (ospf6_sock, IPPROTO_IPV6, IPV6_JOIN_GROUP,
                   &mreq6, sizeof (mreq6)) < 0)
+#endif //SIM
     zlog_warn ("Network: Join AllDRouters on ifindex %d Failed: %s",
                ifindex, safe_strerror (errno));
 #if 0
@@ -184,8 +229,13 @@ ospf6_leave_alldrouters (u_int ifindex)
   memcpy (&mreq6.ipv6mr_multiaddr, &alldrouters6,
           sizeof (struct in6_addr));
 
+#ifdef SIM
+  if (setsockopt_sim (ospf6_sock, IPPROTO_IPV6, IPV6_LEAVE_GROUP,
+                  &mreq6, sizeof (mreq6)) < 0)
+#else
   if (setsockopt (ospf6_sock, IPPROTO_IPV6, IPV6_LEAVE_GROUP,
                   &mreq6, sizeof (mreq6)) < 0)
+#endif //SIM
     zlog_warn ("Network: Leave AllDRouters on ifindex %d Failed", ifindex);
 #if 0
   else
@@ -261,7 +311,17 @@ ospf6_sendmsg (struct in6_addr *src, struct in6_addr *dst,
   smsghdr.msg_control = (caddr_t) cmsgbuf;
   smsghdr.msg_controllen = sizeof (cmsgbuf);
 
+#ifdef SIM
+#ifdef OSPF6_JITTER
+  struct ospf6_interface * oi =
+  ospf6_interface_lookup_by_ifindex(*ifindex);
+  retval = sendmsg_sim (ospf6_sock, &smsghdr, 0, oi->jitter);
+#else
+  retval = sendmsg_sim (ospf6_sock, &smsghdr, 0);
+#endif //OSPF6_JITTER
+#else
   retval = sendmsg (ospf6_sock, &smsghdr, 0);
+#endif  //SIM
   if (retval != iov_totallen (message))
     zlog_warn ("sendmsg failed: ifindex: %d: %s (%d)",
                *ifindex, safe_strerror (errno), errno);

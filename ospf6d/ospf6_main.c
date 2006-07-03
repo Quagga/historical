@@ -28,12 +28,14 @@
 #include "command.h"
 #include "vty.h"
 #include "memory.h"
-#include "if.h"
+#include "lib/if.h"
 #include "filter.h"
 #include "prefix.h"
 #include "plist.h"
 #include "privs.h"
+#ifndef SIM
 #include "sigevent.h"
+#endif //SIM
 
 #include "ospf6d.h"
 
@@ -50,6 +52,36 @@ zebra_capabilities_t _caps_p [] =
   ZCAP_BIND
 };
 
+#ifdef SIM
+#if defined (QUAGGA_USER)
+char *quagga_u = QUAGGA_USER;
+#else
+char *quagga_u = NULL;
+#endif
+#if defined (QUAGGA_GROUP)
+char *quagga_g = QUAGGA_GROUP;
+#else
+char *quagga_g = NULL;
+#endif
+#if defined (VTY_GROUP)
+char *vty_g = VTY_GROUP;
+#else
+char *vty_g = NULL;
+#endif
+
+struct zebra_privs_t ospf6d_privs =
+{
+        _caps_p,
+        NULL,
+        2,
+        0,
+        quagga_u,
+        quagga_g,
+        vty_g,
+        NULL,
+        NULL
+};
+#else
 struct zebra_privs_t ospf6d_privs =
 {
 #if defined(QUAGGA_USER)
@@ -65,6 +97,7 @@ struct zebra_privs_t ospf6d_privs =
   .cap_num_p = 2,
   .cap_num_i = 0
 };
+#endif //SIM
 
 /* ospf6d options, we use GNU getopt library. */
 struct option longopts[] = 
@@ -82,7 +115,9 @@ struct option longopts[] =
 };
 
 /* Configuration file and directory. */
+#ifndef SIM
 char config_default[] = SYSCONFDIR OSPF6_DEFAULT_CONFIG;
+#endif //SIM
 
 /* ospf6d program name. */
 char *progname;
@@ -90,6 +125,7 @@ char *progname;
 /* is daemon? */
 int daemon_mode = 0;
 
+// Global Variable 
 /* Master of threads. */
 struct thread_master *master;
 
@@ -153,6 +189,7 @@ sigusr1 (void)
   zlog_rotate (NULL);
 }
 
+#ifndef SIM
 struct quagga_signal_t ospf6_signals[] =
 {
   {
@@ -296,5 +333,5 @@ main (int argc, char *argv[], char *envp[])
   /* Not reached. */
   exit (0);
 }
-
+#endif //SIM
 

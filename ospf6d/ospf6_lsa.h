@@ -22,6 +22,13 @@
 #ifndef OSPF6_LSA_H
 #define OSPF6_LSA_H
 
+#if defined(SIM) || defined(GTNETS)
+#include "linklist.h" //for pList
+#endif //SIM || GTNETS
+#ifdef SIM_ETRACE_STAT
+#include "ospf6d.h"
+#endif //SIM_ETRACE_STAT
+
 /* Debug option */
 #define OSPF6_LSA_DEBUG           0x01
 #define OSPF6_LSA_DEBUG_ORIGINATE 0x02
@@ -130,15 +137,33 @@ struct ospf6_lsa
   int               retrans_count;
 
   struct ospf6_lsdb *lsdb;
+#ifdef OSPF6_MANET_TEMPORARY_LSDB
+  u_int16_t cache;
+#endif //OSPF6_MANET_TEMPORARY_LSDB
 
   /* lsa instance */
   struct ospf6_lsa_header *header;
+
+#ifdef SIM_ETRACE_STAT 
+  boolean unicast_stale;
+#endif //SIM_ETRACE_STAT
+#ifdef OSPF6_DELAYED_FLOOD
+  struct timeval rxmt_time;  /* start of rxmt interval */
+#endif //OSPF6_DELAYED_FLOOD
+#ifdef OSPF6_MANET
+  struct thread *pushBackTimer;
+  struct list *pushback_neighbor_list;
+#endif //OSPF6_MANET
 };
 
 #define OSPF6_LSA_HEADERONLY 0x01
 #define OSPF6_LSA_FLOODBACK  0x02
 #define OSPF6_LSA_DUPLICATE  0x04
 #define OSPF6_LSA_IMPLIEDACK 0x08
+#ifdef OSPF6_MANET
+// Mark received LSA as being receive on multicast (for reflooding decisions)
+#define OSPF6_LSA_RECVMCAST 0x10
+#endif
 
 struct ospf6_lsa_handler
 {
@@ -248,5 +273,10 @@ void ospf6_lsa_cmd_init ();
 int config_write_ospf6_debug_lsa (struct vty *vty);
 void install_element_ospf6_debug_lsa ();
 
-#endif /* OSPF6_LSA_H */
+#ifdef SIM_ETRACE_STAT
+void ospf6_lsa_increment_hopcount(struct ospf6_lsa_header *);
+u_int16_t age_mask(struct ospf6_lsa_header *);
+u_int16_t hopcount_mask(struct ospf6_lsa_header *);
+#endif //SIM_ETRACE_STAT
 
+#endif /* OSPF6_LSA_H */

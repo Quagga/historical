@@ -35,7 +35,9 @@
 #include "ospf6_lsa.h"
 #include "ospf6_lsdb.h"
 #include "ospf6_route.h"
+#ifndef SIM
 #include "ospf6_zebra.h"
+#endif //SIM
 
 #include "ospf6_top.h"
 #include "ospf6_area.h"
@@ -47,9 +49,20 @@
 #include "ospf6_abr.h"
 #include "ospf6_intra.h"
 #include "ospf6d.h"
+#ifdef SIM
+#include "sim.h"
+#include "ospf6_sim_printing.h"
+#endif //SIM
+#ifdef OSPF6_MANET_MPR_FLOOD
+#include "ospf6_mpr.h"
+#endif //OSPF6_MANET_MPR_FLOOD
 
 /* global ospf6d variable */
+#ifdef SIM //Global SIM
+struct ospf6 *ospf6 = NULL;
+#else
 struct ospf6 *ospf6;
+#endif //SIM
 
 void
 ospf6_top_lsdb_hook_add (struct ospf6_lsa *lsa)
@@ -83,14 +96,18 @@ void
 ospf6_top_route_hook_add (struct ospf6_route *route)
 {
   ospf6_abr_originate_summary (route);
+#ifndef SIM
   ospf6_zebra_route_update_add (route);
+#endif //SIM
 }
 
 void
 ospf6_top_route_hook_remove (struct ospf6_route *route)
 {
   ospf6_abr_originate_summary (route);
+#ifndef SIM
   ospf6_zebra_route_update_remove (route);
+#endif //SIM
 }
 
 void
@@ -114,11 +131,15 @@ ospf6_create ()
 {
   struct ospf6 *o;
 
-  o = XMALLOC (MTYPE_OSPF6_TOP, sizeof (struct ospf6));
+  o = (struct ospf6 *) XMALLOC (MTYPE_OSPF6_TOP, sizeof (struct ospf6));
   memset (o, 0, sizeof (struct ospf6));
 
   /* initialize */
+#ifdef SIM
+  gettimeofday_sim (&o->starttime, (struct timezone *) NULL);
+#else
   gettimeofday (&o->starttime, (struct timezone *) NULL);
+#endif //SIM
   o->area_list = list_new ();
   o->area_list->cmp = ospf6_area_cmp;
   o->lsdb = ospf6_lsdb_create (o);
@@ -126,9 +147,16 @@ ospf6_create ()
   o->lsdb->hook_add = ospf6_top_lsdb_hook_add;
   o->lsdb->hook_remove = ospf6_top_lsdb_hook_remove;
 
+#ifdef OSPF6_CONFIG
+ o->minLSInterval = MIN_LS_INTERVAL;
+ o->minLSArrival = MIN_LS_ARRIVAL;
+#endif //OSPF6_CONFIG
+
   o->route_table = ospf6_route_table_create ();
+#ifndef SIM
   o->route_table->hook_add = ospf6_top_route_hook_add;
   o->route_table->hook_remove = ospf6_top_route_hook_remove;
+#endif //SIM
 
   o->brouter_table = ospf6_route_table_create ();
   o->brouter_table->hook_add = ospf6_top_brouter_hook_add;
@@ -146,11 +174,84 @@ ospf6_delete (struct ospf6 *o)
   struct listnode *i;
   struct ospf6_area *oa;
 
+#ifdef SIM
+  if (!o)
+    return;
+  struct listnode *j, *k;
+  struct ospf6_interface *oi;
+  struct ospf6_neighbor *on;
+  double lifetime, delta_2way, delta_full;
+  for (i = listhead (o->area_list); i; nextnode (i))
+  {
+    oa = (struct ospf6_area *) getdata (i);
+    for (j = listhead (oa->if_list); j; nextnode (j))
+    {
+      oi = (struct ospf6_interface *) getdata (j);
+#ifdef OSPF6_MANET_MPR_FLOOD
+      if (oi->type == OSPF6_IFTYPE_MANETRELIABLE)
+      {
+        struct ospf6_relay_selector *relay_sel;
+        k = listhead(oi->relay_sel_list);
+        while(k)
+        {
+          relay_sel = (struct ospf6_relay_selector *) getdata(k);
+          nextnode(k);
+          ospf6_relay_selector_delete(oi, relay_sel);
+          relay_sel = NULL;
+        }
+      }
+#endif //OSPF6_MANET_MPR_FLOOD
+#ifdef SIM_ETRACE_STAT
+      delta_2way = elapsed_time(&oi->neigh_2way_change_time);
+      delta_full = elapsed_time(&oi->neigh_full_change_time);
+      for (k = listhead (oi->neighbor_list); k; nextnode (k))
+      {
+        on = (struct ospf6_neighbor *) getdata (k);
+        if (on->state < OSPF6_NEIGHBOR_TWOWAY)
+          continue;
+        lifetime = elapsed_time(&on->creation_time);
+
+        update_statistics(OSPF6_CHANGE_OF_NUM_NEIGHS, 1);
+        update_statistics(OSPF6_DURATION_OF_NUM_NEIGHS, (double)delta_2way);
+        update_statistics(OSPF6_NUM_NEIGH_TIMES_DURATION_OF_NUM_NEIGHS,
+                          (double) (oi->num_2way_neigh * delta_2way));
+        update_statistics(OSPF6_NEIGH_LIFETIME,lifetime);
+        update_statistics(OSPF6_NEIGH_DEATHS,1);
+
+        if (on->state == OSPF6_NEIGHBOR_FULL)
+        {
+          update_statistics(OSPF6_CHANGE_OF_NUM_ADJ,1);
+          update_statistics(OSPF6_DURATION_OF_NUM_ADJ,(double)delta_full);
+          update_statistics(OSPF6_NUM_ADJ_TIMES_DURATION_OF_NUM_ADJ,
+                            (double) (oi->num_full_neigh-- * delta_full));
+          delta_full = 0;
+        }
+        TraceEvent_sim(1,"num_nbr %d for %f msec delnbr %s for %f msec",
+          oi->num_2way_neigh--, delta_2way, ip2str(on->router_id),lifetime);
+        delta_2way = 0;
+      }
+#endif //SIM_ETRACE_STAT
+    }
+  }
+#endif //SIM_ETRAC
+
+
+#ifdef BUGFIX
+ //deleting oa was causing the loop through list to point to NULL
+ i = listhead(o->area_list);
+ while(i)
+ {
+  oa = (struct ospf6_area *) getdata (i);
+  nextnode(i);
+  ospf6_area_delete (oa);
+ }
+#else
   for (i = listhead (o->area_list); i; nextnode (i))
     {
       oa = (struct ospf6_area *) getdata (i);
       ospf6_area_delete (oa);
     }
+#endif //BUGFIX
 
   ospf6_lsdb_delete (o->lsdb);
   ospf6_lsdb_delete (o->lsdb_self);
@@ -252,6 +353,58 @@ ospf6_maxage_remove (struct ospf6 *o)
   if (o && ! o->maxage_remover)
     o->maxage_remover = thread_add_event (master, ospf6_maxage_remover, o, 0);
 }
+
+#ifdef OSPF6_CONFIG
+DEFUN (ospf6_router_minlsinterval,
+       ospf6_router_minlsinterval_cmd,
+       "router minls-interval <0-65535>",
+       ROUTER_STR
+       "minimum time to originate an LSA\n"
+       SECONDS_STR)
+{
+  struct ospf6 *o;
+
+  o = (struct ospf6 *) vty->index;
+  o->minLSInterval = strtol (argv[0], NULL, 10);
+  
+  return CMD_SUCCESS;
+}
+DEFUN (ospf6_router_minlsarrival,
+       ospf6_router_minlsarrival_cmd,
+       "router minls-arrival <0-65535>",
+       ROUTER_STR
+    "minimum time to receive an LSA\n"
+       SECONDS_STR)
+{
+  struct ospf6 *o;
+
+  o = (struct ospf6 *) vty->index;
+
+ o->minLSArrival = strtol (argv[0], NULL, 10);
+
+  return CMD_SUCCESS;
+}
+#endif //OSPF6_CONFIG
+
+#ifdef SIM_ETRACE_STAT
+/* change Router_ID commands. */
+DEFUN (ospf6_router_stat,
+       ospf6_router_stat_cmd,
+       "router statistics start-time <0-4294967296>",
+       ROUTER_STR
+    "statistics\n"
+    "time to start collecting statistics\n"
+       SECONDS_STR)
+{
+  struct ospf6 *o;
+
+  o = (struct ospf6 *) vty->index;
+
+ o->start_stat_time = strtol (argv[0], NULL, 10);
+
+  return CMD_SUCCESS;
+}
+#endif //SIM_ETRACE_STAT
 
 /* start ospf6 */
 DEFUN (router_ospf6,
@@ -451,7 +604,11 @@ ospf6_show (struct vty *vty, struct ospf6 *o)
            router_id, VNL);
 
   /* running time */
+#ifdef SIM
+  gettimeofday_sim (&now, (struct timezone *)NULL);
+#else
   gettimeofday (&now, (struct timezone *)NULL);
+#endif //SIM
   timersub (&now, &o->starttime, &running);
   timerstring (&running, duration, sizeof (duration));
   vty_out (vty, " Running %s%s", duration, VNL);
@@ -680,6 +837,372 @@ ospf6_top_init ()
   install_element (OSPF6_NODE, &ospf6_interface_area_cmd);
   install_element (OSPF6_NODE, &no_ospf6_interface_area_cmd);
   install_element (OSPF6_NODE, &no_router_ospf6_cmd);
+#ifdef SIM_ETRACE_STAT
+  install_element (OSPF6_NODE, &ospf6_router_stat_cmd);
+#endif //SIM_ETRACE_STAT
+#ifdef OSPF6_CONFIG
+  install_element (OSPF6_NODE, &ospf6_router_minlsinterval_cmd);
+  install_element (OSPF6_NODE, &ospf6_router_minlsarrival_cmd);
+#endif //OSPF6_CONFIG
 }
 
+#ifdef OSPF6_MANET
+void ospf6_pushback_lsa_add(struct ospf6_lsa *lsa,
+                              struct ospf6_neighbor *on)
+{
+  struct listnode *n;
+  struct ospf6_pushback_neighbor *opbn = NULL;
+ 
+  if (on->ospf6_if->type != OSPF6_IFTYPE_MANETRELIABLE)
+    return;
 
+  ospf6_refresh_lsa_pushback_list(lsa);
+
+  //create the pushback list and schedule expiration
+  if (lsa->pushBackTimer == NULL)
+  {
+#ifdef OSPF6_MANET_MPR_FLOOD
+    if (on->ospf6_if->flooding == OSPF6_FLOOD_MPR_SDCDS)
+    {
+      lsa->pushBackTimer =
+        thread_add_timer_msec (master, ospf6_pushback_expiration, lsa,
+          on->ospf6_if->pushBackInterval + pushback_jitter(on->ospf6_if));
+    }
+#endif //OSPF6_MANET_MPR_FLOOD
+
+#ifdef OSPF6_MANET_MDR_FLOOD
+    if (on->ospf6_if->flooding == OSPF6_FLOOD_MDR_SICDS)
+    { 
+      lsa->pushBackTimer =
+        thread_add_timer_msec (master, ospf6_pushback_expiration, lsa,
+          on->ospf6_if->BackupWaitInterval + pushback_jitter(on->ospf6_if));
+    }
+#endif //OSPF6_MANET_MDR_FLOOD
+    if (!on->ospf6_if->flooding == OSPF6_FLOOD_MDR_SICDS ||
+        !on->ospf6_if->flooding == OSPF6_FLOOD_MPR_SDCDS)
+    {
+      printf("Interface flooding %d should not call ospf6_pushback_lsa_add()\n",
+             on->ospf6_if->flooding);
+      exit(0);
+    }
+    lsa->pushback_neighbor_list = list_new();
+  }
+
+  //Is this neighbor already on the push back list?
+  for (n = listhead(lsa->pushback_neighbor_list); n; nextnode(n))
+  {
+    opbn = (struct ospf6_pushback_neighbor *) getdata(n);
+    if (on->router_id == opbn->router_id &&
+        on->ospf6_if->interface->ifindex == opbn->ifindex)
+      return; //already in the list
+  }
+
+  //put the pushback neighbor on the pushback list
+  opbn = (struct ospf6_pushback_neighbor *) 
+          malloc(sizeof(struct ospf6_pushback_neighbor));
+  opbn->router_id = on->router_id;
+  opbn->ifindex = on->ospf6_if->interface->ifindex;
+  listnode_add(lsa->pushback_neighbor_list, opbn);
+}
+
+void ospf6_pushback_lsa_neighbor_delete(struct ospf6_lsa *lsa,
+                                       struct ospf6_neighbor *on)
+{
+  struct listnode *n;
+  struct ospf6_pushback_neighbor *opbn;
+
+  //Find pushback neighbor, if found remove
+  for (n = listhead(lsa->pushback_neighbor_list); n; nextnode(n))
+  {
+    opbn = (struct ospf6_pushback_neighbor *) getdata(n);
+    if (on->router_id == opbn->router_id &&
+        on->ospf6_if->interface->ifindex == opbn->ifindex)
+    {
+      listnode_delete(lsa->pushback_neighbor_list, opbn);
+      free(opbn);
+      break;
+    }
+  }
+  //clean out old neighbors and cancel pushback thread if pushback
+  //no more pushback neighbors
+  ospf6_refresh_lsa_pushback_list(lsa);
+}
+
+void ospf6_pushback_lsa_delete(struct ospf6_lsa *lsa)
+{
+ struct listnode *n;
+ struct ospf6_pushback_neighbor *opbn;
+
+ //cancel pushback thread
+ THREAD_OFF(lsa->pushBackTimer);
+ lsa->pushBackTimer = NULL;
+
+ //clean up pushback neighbor list
+ if (lsa->pushback_neighbor_list)
+ {
+  n = listhead(lsa->pushback_neighbor_list);
+  while(n)
+  {
+   opbn = (struct ospf6_pushback_neighbor *) getdata(n);
+   nextnode(n);
+   free(opbn);
+  }
+  list_delete(lsa->pushback_neighbor_list);
+  lsa->pushback_neighbor_list = NULL;
+ }
+}
+
+// Section 3.4.8-2.2
+ //Does "from" neighbor's neighbors cover all the pushback neighbors
+boolean ospf6_pushback_check_coverage(struct ospf6_lsa *lsa,
+                                    struct ospf6_neighbor *from)
+{
+  struct listnode *n;
+  boolean cover = true;
+  struct ospf6_pushback_neighbor *opbn;
+  struct ospf6_lsa *r_lsa;
+  char *start, *end, *current;
+  struct ospf6_router_lsa *router_lsa;
+  struct ospf6_router_lsdesc *router_lsd;
+
+  ospf6_refresh_lsa_pushback_list(lsa);
+#ifdef SIM
+  ospf6_print_pushback_list_sim(lsa);
+#endif //SIM
+
+  if (!lsa->pushback_neighbor_list)
+    return cover;  //from neighbor covers because no pushback neighbors exist
+
+  //find router lsa for "from" neighbor
+  r_lsa = ospf6_lsdb_lookup(htons(OSPF6_LSTYPE_ROUTER), htonl(0),
+                          from->router_id, from->ospf6_if->area->lsdb);
+  if (!r_lsa)
+    return cover;
+  router_lsa = (struct ospf6_router_lsa *)
+               ((char *) r_lsa->header + sizeof (struct ospf6_lsa_header));
+  start = (char *) router_lsa + sizeof (struct ospf6_router_lsa);
+  end = (char *) r_lsa->header + ntohs (r_lsa->header->length);
+
+  //loop over pushback neighbor list
+  n = listhead(lsa->pushback_neighbor_list);
+  while(n)
+  {
+    opbn = (struct ospf6_pushback_neighbor *) getdata(n);
+    nextnode(n);
+    cover = false;
+    //loop over neighbors in router lsa
+    for (current=start; current + sizeof (struct ospf6_router_lsdesc) <= end;
+         current += sizeof (struct ospf6_router_lsdesc))
+    {
+      router_lsd = (struct ospf6_router_lsdesc *) current;
+      if (ntohl(router_lsd->interface_id) != from->ifindex)
+        continue;  //link must be on MANET subnet
+      if (router_lsd->neighbor_router_id == opbn->router_id)
+      {  //from's neighbor covers this pushback neighbor
+        cover = true;
+        break;
+      }
+    }
+    if (!cover)
+      return cover;
+  }
+  return cover;
+}
+
+int ospf6_pushback_expiration (struct thread *thread)
+{
+  struct ospf6_lsa *lsa = (struct ospf6_lsa *) THREAD_ARG (thread);
+  struct listnode *n, *i;
+  struct list *eligible_interfaces;
+  struct ospf6_pushback_neighbor *opbn;
+  struct ospf6_neighbor *on;
+  struct ospf6_interface *oi;
+
+  lsa->pushBackTimer = NULL;
+  ospf6_refresh_lsa_pushback_list(lsa);
+  if (!lsa->pushback_neighbor_list)
+    return 0;
+
+  eligible_interfaces = list_new ();
+  n = listhead(lsa->pushback_neighbor_list);
+  while(n)
+  {
+    opbn = (struct ospf6_pushback_neighbor *) getdata(n);
+    nextnode(n);
+
+    //neighbor should exist because pushback list was just refreshed
+    oi = ospf6_interface_lookup_by_ifindex(opbn->ifindex);
+    on = ospf6_neighbor_lookup (opbn->router_id, oi);
+    assert(on);
+
+    if (!listnode_lookup(eligible_interfaces, oi))
+      listnode_add (eligible_interfaces, oi);
+
+    ospf6_pushback_lsa_neighbor_delete(lsa,on);
+
+#ifdef OSPF6_MANET_MDR_FLOOD
+    if (oi->flooding == OSPF6_FLOOD_MDR_SICDS)
+    {
+      //if LSA is on ack list, this will count as an implict ack
+      //remove LSA from ack list (MANET always on interface ack list)
+      struct ospf6_lsa *ack_lsa;
+      struct ospf6_lsa *rxmt_lsa;
+
+      // Reset rxmt time if LSA is in retrans list.
+      rxmt_lsa = ospf6_lsdb_lookup (lsa->header->type, lsa->header->id,
+                                   lsa->header->adv_router, on->retrans_list);
+      if (rxmt_lsa)
+        set_time(&rxmt_lsa->rxmt_time);
+
+      //if LSA is on ack list, this will count as an implict ack
+      //remove LSA from ack list (MANET always on interface ack list)
+      ack_lsa = ospf6_lsdb_lookup (lsa->header->type, lsa->header->id,
+                                   lsa->header->adv_router, oi->lsack_list);
+
+      if (ack_lsa)
+        ospf6_lsdb_remove (ack_lsa, oi->lsack_list);
+
+      continue;
+    }
+#endif //OSPF6_MANET_MDR_FLOOD
+
+    if (IS_OSPF6_DEBUG_FLOODING)
+      zlog_info ("  Add copy of %s to retrans-list of %s",
+                 lsa->name, on->name);
+    ospf6_increment_retrans_count (lsa);
+    set_time(&lsa->rxmt_time);
+    ospf6_lsdb_add (ospf6_lsa_copy (lsa), on->retrans_list);
+#ifdef OSPF6_DELAYED_FLOOD
+    on->thread_send_lsupdate =
+    ospf6_send_lsupdate_delayed_msec(master, ospf6_lsupdate_send_neighbor,
+                                     on, on->ospf6_if->rxmt_interval*1000, 
+                                     on->thread_send_lsupdate);
+#else
+    if (on->thread_send_lsupdate == NULL)
+      on->thread_send_lsupdate = 
+        thread_add_timer (master, ospf6_lsupdate_send_neighbor,
+                          on, on->ospf6_if->rxmt_interval);
+#endif //OSPF6_DELAYED_FLOOD
+  }
+
+  for (i = listhead(eligible_interfaces); i; nextnode(i))
+  {
+    oi = (struct ospf6_interface *) getdata(i);
+    if (IS_OSPF6_DEBUG_FLOODING)
+      zlog_info ("  Add copy of %s to lsupdate_list of %s",
+                 lsa->name, oi->interface->name);
+#ifdef SIM_ETRACE_STAT
+    char id[16], adv_router[16];
+    inet_ntop (AF_INET, &lsa->header->id, id, sizeof (id));
+    inet_ntop (AF_INET, &lsa->header->adv_router, adv_router,
+               sizeof (adv_router));
+    TraceEvent_sim(2,"Schedule Pushback Flood LSA %s -id %s -advrt %s -age %d -seq %lu -len %d",
+                   ospf6_lstype_name(lsa->header->type), id, adv_router,
+                   ntohs(age_mask(lsa->header)), ntohl(lsa->header->seqnum),
+                   ntohs(lsa->header->length));
+    update_statistics(OSPF6_LSA_FLOOD_NONRELAY,1);
+#endif //SIM_ETRACE_STAT
+  
+  ospf6_lsdb_add (ospf6_lsa_copy (lsa), oi->lsupdate_list);
+#ifdef OSPF6_DELAYED_FLOOD
+  //XXX BOEING LSAs after this are gone from the perspective of pushback
+  //with delay equal to 1msec no coalescing takes place
+  //with a higher delay pushBackInterval is effectively increased
+  oi->thread_send_lsupdate = 
+    ospf6_send_lsupdate_delayed_msec(master, ospf6_lsupdate_send_interface,
+                                     oi, 1, oi->thread_send_lsupdate);
+#else
+    if (oi->thread_send_lsupdate == NULL)
+      oi->thread_send_lsupdate =
+        thread_add_event (master, ospf6_lsupdate_send_interface, oi, 0);
+#endif //OSPF6_DELAYED_FLOOD
+  }
+  list_delete (eligible_interfaces);
+  return 0;
+}
+
+void
+ospf6_refresh_lsa_pushback_list(struct ospf6_lsa *lsa)
+{
+  struct listnode *n;
+  struct ospf6_neighbor *on;
+  struct ospf6_interface *oi;
+  struct ospf6_pushback_neighbor *opbn;
+
+  //The neighbor state of pushback neighbors could have changed
+  //remove those pushback neighbors in a state below EXCHANGE
+
+  if (!lsa->pushback_neighbor_list)
+    return;
+
+  n = listhead(lsa->pushback_neighbor_list);
+  while(n)
+  {
+    opbn = (struct ospf6_pushback_neighbor *) getdata(n);
+    nextnode(n);
+    oi = ospf6_interface_lookup_by_ifindex(opbn->ifindex);
+    on = ospf6_neighbor_lookup(opbn->router_id, oi);
+
+    //For SICDS, delete neighbors that are below TWOWAY.
+    if (oi->flooding == OSPF6_FLOOD_MDR_SICDS)
+    {
+      if (!on || on->state < OSPF6_NEIGHBOR_TWOWAY)
+      { //pushback neighbor fell below state TWOWAY
+        listnode_delete(lsa->pushback_neighbor_list, opbn);
+        free(opbn);
+      }
+    }
+    else if (!on || on->state < OSPF6_NEIGHBOR_EXCHANGE)
+    { //pushback neighbor fell below state EXCHANGE
+      listnode_delete(lsa->pushback_neighbor_list, opbn);
+      free(opbn);
+    }
+  }
+  //there are no pushback neigbors left, cancel the pushback timer
+  if (lsa->pushback_neighbor_list->count == 0)
+  {
+    ospf6_pushback_lsa_delete(lsa);
+  }
+}
+
+//return pushback jitter in msec
+long pushback_jitter(struct ospf6_interface *oi)
+{
+  long jitter = 0;
+  int rand_;
+
+#ifdef SIM
+  rand_= rand_sim();
+#else
+  rand_ = rand();
+#endif //SIM
+
+#ifdef OSPF6_MANET_MPR_FLOOD
+  if (oi->flooding == OSPF6_FLOOD_MPR_SDCDS)
+    jitter = (long) ((double)rand_/RAND_MAX*oi->pushBackInterval);
+#endif //OSPF6_MANET_MPR_FLOOD
+
+#ifdef OSPF6_MANET_MDR_FLOOD
+  if (oi->flooding == OSPF6_FLOOD_MDR_SICDS)
+    jitter = (long) ((double)rand_/RAND_MAX*oi->BackupWaitInterval);
+#endif //OSPF6_MANET_MDR_FLOOD
+
+  if (!oi->flooding == OSPF6_FLOOD_MDR_SICDS ||
+      !oi->flooding == OSPF6_FLOOD_MPR_SDCDS)
+  {
+    printf("Interface flooding %d should not call pushback_jitter()\n",
+           oi->flooding);
+    exit(0);
+  }
+  return jitter;
+}
+#endif //OSPF6_MANET
+
+#ifdef SIM_ETRACE_STAT
+void update_statistics(int element, double add)
+{
+  if (!collect_stats_sim(ospf6))
+    return;
+  ospf6->statistics[element] += add;
+}
+#endif //SIM_ETRACE_STAT

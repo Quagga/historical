@@ -27,7 +27,7 @@
 #include "thread.h"
 #include "vty.h"
 #include "command.h"
-#include "if.h"
+#include "lib/if.h"
 #include "prefix.h"
 #include "table.h"
 
@@ -148,6 +148,16 @@ ospf6_area_create (u_int32_t area_id, struct ospf6 *o)
   oa->lsdb_self = ospf6_lsdb_create (oa);
 
   oa->spf_table = ospf6_route_table_create ();
+#ifdef OSPF6_MANET_MPR_SP
+//Changes by:  Stan Ratliff
+//Date:  November 1st, 2005
+//Reason: Support for an unsynchronized adjacency SPF table
+// Copyright (C) 2005
+
+  //Roy-01 4.1
+  //create an unsynchronized adjacency SPF table
+  oa->spf_table_sync = ospf6_route_table_create ();
+#endif //OSPF6_MANET_MPR_SP
   oa->route_table = ospf6_route_table_create ();
   oa->route_table->hook_add = ospf6_area_route_hook_add;
   oa->route_table->hook_remove = ospf6_area_route_hook_remove;
@@ -157,9 +167,15 @@ ospf6_area_create (u_int32_t area_id, struct ospf6 *o)
   oa->summary_router = ospf6_route_table_create ();
 
   /* set default options */
+#ifdef OSPF6_MANET
+  OSPF6_OPT_SET (oa->options, OSPF6_OPT_V6, 2);
+  OSPF6_OPT_SET (oa->options, OSPF6_OPT_E, 2);
+  OSPF6_OPT_SET (oa->options, OSPF6_OPT_R, 2);
+#else
   OSPF6_OPT_SET (oa->options, OSPF6_OPT_V6);
   OSPF6_OPT_SET (oa->options, OSPF6_OPT_E);
   OSPF6_OPT_SET (oa->options, OSPF6_OPT_R);
+#endif //OSPF6_MANET
 
   oa->ospf6 = o;
   listnode_add_sort (o->area_list, oa);
@@ -543,7 +559,15 @@ DEFUN (show_ipv6_ospf6_simulate_spf_tree_root,
   conf_debug_ospf6_spf = 0;
 
   spf_table = ospf6_route_table_create ();
+#ifdef OSPF6_MANET_MPR_SP
+//Changes by:  Stan Ratliff
+//Date:  November 1st, 2005
+//Reason: Support for an unsynchronized adjacency SPF table
+// Copyright (C) 2005
+  ospf6_spf_calculation (router_id, spf_table, oa, false);
+#else
   ospf6_spf_calculation (router_id, spf_table, oa);
+#endif //OSPF6_MANET_MPR_SP
 
   conf_debug_ospf6_spf = tmp_debug_ospf6_spf;
 

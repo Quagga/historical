@@ -36,7 +36,9 @@
 #include "ospf6_lsa.h"
 #include "ospf6_lsdb.h"
 #include "ospf6_route.h"
+#ifndef SIM
 #include "ospf6_zebra.h"
+#endif //SIM
 #include "ospf6_message.h"
 
 #include "ospf6_top.h"
@@ -409,7 +411,9 @@ ospf6_asbr_is_asbr (struct ospf6 *o)
 void
 ospf6_asbr_redistribute_set (int type)
 {
+#ifndef SIM
   ospf6_zebra_redistribute (type);
+#endif //SIM
 }
 
 void
@@ -418,7 +422,9 @@ ospf6_asbr_redistribute_unset (int type)
   struct ospf6_route *route;
   struct ospf6_external_info *info;
 
+#ifndef SIM
   ospf6_zebra_no_redistribute (type);
+#endif //SIM	
 
   for (route = ospf6_route_head (ospf6->external_table); route;
        route = ospf6_route_next (route))
@@ -447,8 +453,10 @@ ospf6_asbr_redistribute_add (int type, int ifindex, struct prefix *prefix,
   struct listnode *lnode;
   struct ospf6_area *oa;
 
+#ifndef SIM
   if (! ospf6_zebra_is_redistribute (type))
     return;
+#endif //SIM
 
   if (IS_OSPF6_DEBUG_ASBR)
     {
@@ -751,8 +759,10 @@ ospf6_redistribute_config_write (struct vty *vty)
     {
       if (type == ZEBRA_ROUTE_OSPF6)
         continue;
+#ifndef SIM
       if (! ospf6_zebra_is_redistribute (type))
         continue;
+#endif //SIM
 
       if (ospf6->rmap[type].name)
         vty_out (vty, " redistribute %s route-map %s%s",
@@ -790,8 +800,10 @@ ospf6_redistribute_show_config (struct vty *vty)
     {
       if (type == ZEBRA_ROUTE_OSPF6)
         continue;
+#ifndef SIM
       if (! ospf6_zebra_is_redistribute (type))
         continue;
+#endif //SIM
 
       if (ospf6->rmap[type].name)
         vty_out (vty, "    %d: %s with route-map \"%s\"%s%s", nroute[type],
@@ -852,8 +864,8 @@ route_map_result_t
 ospf6_routemap_rule_set_metric_type (void *rule, struct prefix *prefix,
                                      route_map_object_t type, void *object)
 {
-  char *metric_type = rule;
-  struct ospf6_route *route = object;
+  char *metric_type = (char *) rule;
+  struct ospf6_route *route = (struct ospf6_route *) object;
 
   if (type != RMAP_OSPF6)
     return RMAP_OKAY;
@@ -893,8 +905,8 @@ route_map_result_t
 ospf6_routemap_rule_set_metric (void *rule, struct prefix *prefix,
                                 route_map_object_t type, void *object)
 {
-  char *metric = rule;
-  struct ospf6_route *route = object;
+  char *metric = (char *) rule;
+  struct ospf6_route *route = (struct ospf6_route *) object;
 
   if (type != RMAP_OSPF6)
     return RMAP_OKAY;
@@ -933,8 +945,8 @@ route_map_result_t
 ospf6_routemap_rule_set_forwarding (void *rule, struct prefix *prefix,
                                     route_map_object_t type, void *object)
 {
-  char *forwarding = rule;
-  struct ospf6_route *route = object;
+  char *forwarding = (char *) rule;
+  struct ospf6_route *route = (struct ospf6_route *) object;
   struct ospf6_external_info *info = route->route_option;
 
   if (type != RMAP_OSPF6)

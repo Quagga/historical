@@ -33,6 +33,12 @@
 #include "ospf6_lsdb.h"
 #include "ospf6_route.h"
 #include "ospf6d.h"
+#ifdef SIM
+#include "sim.h"
+#endif //SIM
+#ifdef OSPF6_MANET_MPR_FLOOD
+#include "linklist.h" //Needed in gtnets
+#endif //OSPF6_MANET_MPR_FLOOD
 
 unsigned char conf_debug_ospf6_route = 0;
 
@@ -80,7 +86,8 @@ struct ospf6_route *
 ospf6_route_create ()
 {
   struct ospf6_route *route;
-  route = XCALLOC (MTYPE_OSPF6_ROUTE, sizeof (struct ospf6_route));
+  route = (struct ospf6_route *)
+          XCALLOC (MTYPE_OSPF6_ROUTE, sizeof (struct ospf6_route));
   return route;
 }
 
@@ -93,15 +100,15 @@ ospf6_route_delete (struct ospf6_route *route)
 struct ospf6_route *
 ospf6_route_copy (struct ospf6_route *route)
 {
-  struct ospf6_route *new;
+  struct ospf6_route *new_;
 
-  new = ospf6_route_create ();
-  memcpy (new, route, sizeof (struct ospf6_route));
-  new->rnode = NULL;
-  new->prev = NULL;
-  new->next = NULL;
-  new->lock = 0;
-  return new;
+  new_ = ospf6_route_create ();
+  memcpy (new_, route, sizeof (struct ospf6_route));
+  new_->rnode = NULL;
+  new_->prev = NULL;
+  new_->next = NULL;
+  new_->lock = 0;
+  return new_;
 }
 
 void
@@ -254,13 +261,18 @@ ospf6_route_add (struct ospf6_route *route,
   if (IS_OSPF6_DEBUG_ROUTE (TABLE))
     zlog_debug ("route add %s", buf);
 
+#ifdef SIM
+  gettimeofday_sim (&now, NULL);
+#else
   gettimeofday (&now, NULL);
+#endif //SIM
 
   node = route_node_get (table->table, &route->prefix);
   route->rnode = node;
 
   /* find place to insert */
-  for (current = node->info; current; current = current->next)
+  for (current = (struct ospf6_route *) node->info; 
+       current; current = current->next)
     {
       if (! ospf6_route_is_same (current, route))
         next = current;
@@ -289,6 +301,7 @@ ospf6_route_add (struct ospf6_route *route,
           SET_FLAG (old->flag, OSPF6_ROUTE_ADD);
           ospf6_route_count_assert (table);
 
+//XXX Tracing 
           return old;
         }
 
@@ -311,6 +324,11 @@ ospf6_route_add (struct ospf6_route *route,
 
       route->installed = old->installed;
       route->changed = now;
+
+#if defined(BUGFIX) && !defined(SIM)
+      if (table->hook_remove)
+        (*table->hook_remove) (old);
+#endif //BUGFIX && SIM
 
       ospf6_route_unlock (old); /* will be deleted later */
       ospf6_route_lock (route);
@@ -389,7 +407,7 @@ ospf6_route_add (struct ospf6_route *route,
     {
       route_unlock_node (nextnode);
 
-      next = nextnode->info;
+      next = (struct ospf6_route *) nextnode->info;
       route->next = next;
       next->prev = route;
     }
@@ -408,7 +426,7 @@ ospf6_route_add (struct ospf6_route *route,
     {
       route_unlock_node (prevnode);
 
-      prev = prevnode->info;
+      prev = (struct ospf6_route *) prevnode->info;
       while (prev->next && ospf6_route_is_same (prev, prev->next))
         prev = prev->next;
       route->prev = prev;
@@ -446,7 +464,7 @@ ospf6_route_remove (struct ospf6_route *route,
 
   /* find the route to remove, making sure that the route pointer
      is from the route table. */
-  current = node->info;
+  current = (struct ospf6_route *) node->info;
   while (current && ospf6_route_is_same (current, route))
     {
       if (current == route)
@@ -569,7 +587,7 @@ ospf6_route_match_head (struct prefix *prefix,
   if (! prefix_match (prefix, &node->p))
     return NULL;
 
-  route = node->info;
+  route = (struct ospf6_route *) node->info;
   ospf6_route_lock (route);
   return route;
 }
@@ -602,10 +620,11 @@ ospf6_route_remove_all (struct ospf6_route_table *table)
 struct ospf6_route_table *
 ospf6_route_table_create ()
 {
-  struct ospf6_route_table *new;
-  new = XCALLOC (MTYPE_OSPF6_ROUTE, sizeof (struct ospf6_route_table));
-  new->table = route_table_init ();
-  return new;
+  struct ospf6_route_table *new_;
+  new_ = (struct ospf6_route_table *)
+         XCALLOC (MTYPE_OSPF6_ROUTE, sizeof (struct ospf6_route_table));
+  new_->table = route_table_init ();
+  return new_;
 }
 
 void
@@ -627,7 +646,11 @@ ospf6_route_show (struct vty *vty, struct ospf6_route *route)
   char duration[16], ifname[IFNAMSIZ];
   struct timeval now, res;
 
+#ifdef SIM
+  gettimeofday_sim (&now, (struct timezone *) NULL);
+#else
   gettimeofday (&now, (struct timezone *) NULL);
+#endif //SIM
   timersub (&now, &route->changed, &res);
   timerstring (&res, duration, sizeof (duration));
 
@@ -676,7 +699,11 @@ ospf6_route_show_detail (struct vty *vty, struct ospf6_route *route)
   char duration[16];
   int i;
 
+#ifdef SIM
+  gettimeofday_sim (&now, (struct timezone *) NULL);
+#else
   gettimeofday (&now, (struct timezone *) NULL);
+#endif //SIM
 
   /* destination */
   if (route->type == OSPF6_DEST_TYPE_LINKSTATE)

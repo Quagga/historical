@@ -138,6 +138,8 @@ AC_ARG_ENABLE(ospfclient,
                           (this is the default if --disable-ospfapi is set)])
 AC_ARG_ENABLE(ospf-te,
 [  --enable-ospf-te        enable Traffic Engineering Extension to OSPF])
+AC_ARG_ENABLE(ospf6_manet,
+[  --enable-ospf6-manet	   enable OSPFv3 draft MANET extensions])
 AC_ARG_ENABLE(multipath,
 [  --enable-multipath=ARG  enable multipath function, ARG must be digit])
 AC_ARG_ENABLE(quagga_user,
@@ -194,6 +196,17 @@ fi
 if test "${enable_ospf_te}" = "yes"; then
   AC_DEFINE(HAVE_OPAQUE_LSA,,OSPF Opaque LSA)
   AC_DEFINE(HAVE_OSPF_TE,,OSPF TE)
+fi
+
+if test "${enable_ospf6_manet}" = "yes"; then
+  AC_DEFINE([OSPF6_CONFIG], [], [OSPF6 MANET extensions])
+  AC_DEFINE([OSPF6_DELAYED_FLOOD], [], [OSPF6 MANET extensions])
+  AC_DEFINE([OSPF6_MANET], [], [OSPF6 MANET extensions])
+  AC_DEFINE([OSPF6_MANET_MPR_FLOOD], [], [OSPF6 MANET extensions])
+  AC_DEFINE([OSPF6_MANET_MDR_FLOOD], [], [OSPF6 MANET extensions])
+  AC_DEFINE([OSPF6_MANET_DIFF_HELLO], [], [OSPF6 MANET extensions])
+  AC_DEFINE([OSPF6_MANET_MDR_FLOOD_DD], [], [OSPF6 MANET extensions])
+  AC_DEFINE([OSPF6_MANET_MPR_SP], [], [OSPF6 MANET extensions])
 fi
 
 AC_MSG_CHECKING(if zebra should be configurable to send Route Advertisements)

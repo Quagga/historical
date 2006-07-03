@@ -54,9 +54,20 @@ void ospf6_flood_clear (struct ospf6_lsa *lsa);
 void ospf6_flood (struct ospf6_neighbor *from, struct ospf6_lsa *lsa);
 
 /* receive & install */
+void ospf6_install_lsa (struct ospf6_lsa *lsa);
+
+#ifdef OSPF6_MANET
+void ospf6_receive_lsa (struct ospf6_lsa_header *header,
+                        struct ospf6_neighbor *from,
+                        struct in6_addr *dst);
+#else
 void ospf6_receive_lsa (struct ospf6_neighbor *from,
                         struct ospf6_lsa_header *header);
-void ospf6_install_lsa (struct ospf6_lsa *lsa);
+#endif //OSPF6_MANET_MPR_FLOOD
+#ifdef OSPF6_MANET_TEMPORARY_LSDB
+void ospf6_receive_lsa_below_exchange (struct ospf6_lsa_header *lsa_header,
+                                    struct ospf6_interface *oi);
+#endif //OSPF6_MANET_TEMPORARY_LSDB
 
 int config_write_ospf6_debug_flood (struct vty *vty);
 void install_element_ospf6_debug_flood ();

@@ -1,3 +1,4 @@
+#ifndef SIM
 /* OSPFv3 SNMP support
  * Copyright (C) 2004 Yasuhiro Ohara
  *
@@ -531,3 +532,4 @@ ospf6_snmp_init (struct thread_master *master)
 
 #endif /* HAVE_SNMP */
 
+#endif //SIM
