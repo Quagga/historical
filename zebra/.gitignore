@@ -4,6 +4,7 @@ Makefile.in
 zebra
 zebra.conf
 client
+testzebra
 tags
 TAGS
 .deps
@@ -11,3 +12,5 @@ TAGS
 .libs
 .arch-inventory
 .arch-ids
+*~
+*.loT

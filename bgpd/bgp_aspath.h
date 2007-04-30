@@ -79,7 +79,7 @@ extern void aspath_unintern (struct aspath *);
 extern const char *aspath_print (struct aspath *);
 extern void aspath_print_vty (struct vty *, const char *, struct aspath *);
 extern void aspath_print_all_vty (struct vty *);
-extern unsigned int aspath_key_make (struct aspath *);
+extern unsigned int aspath_key_make (void *);
 extern int aspath_loop_check (struct aspath *, as_t);
 extern int aspath_private_as_check (struct aspath *);
 extern int aspath_firstas_check (struct aspath *, as_t);
@@ -87,6 +87,7 @@ extern unsigned long aspath_count (void);
 extern unsigned int aspath_count_hops (struct aspath *);
 extern unsigned int aspath_count_confeds (struct aspath *);
 extern unsigned int aspath_size (struct aspath *);
+extern as_t aspath_highest (struct aspath *);
 extern void aspath_put (struct stream *, struct aspath *);
 
 /* For SNMP BGP4PATHATTRASPATHSEGMENT, might be useful for debug */

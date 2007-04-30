@@ -289,7 +289,7 @@ ospf_if_cleanup (struct ospf_interface *oi)
 
   /* Cleanup Link State Acknowlegdment list. */
   for (ALL_LIST_ELEMENTS (oi->ls_ack, node, nnode, lsa))
-    ospf_lsa_unlock (lsa);
+    ospf_lsa_unlock (&lsa); /* oi->ls_ack */
   list_delete_all_node (oi->ls_ack);
 
   oi->crypt_seqnum = 0;
@@ -302,7 +302,7 @@ ospf_if_cleanup (struct ospf_interface *oi)
   oi->nbr_self = ospf_nbr_new (oi);
   ospf_nbr_add_self (oi);
   
-  ospf_lsa_unlock (oi->network_lsa_self);
+  ospf_lsa_unlock (&oi->network_lsa_self);
   oi->network_lsa_self = NULL;
   OSPF_TIMER_OFF (oi->t_network_lsa_self);
 }
@@ -354,28 +354,18 @@ ospf_if_is_configured (struct ospf *ospf, struct in_addr *address)
   addr.family = AF_INET;
   addr.prefix = *address;
   addr.prefixlen = IPV4_MAX_PREFIXLEN;
-  
+
   for (ALL_LIST_ELEMENTS (ospf->oiflist, node, nnode, oi))
     if (oi->type != OSPF_IFTYPE_VIRTUALLINK)
       {
-	if (oi->type == OSPF_IFTYPE_POINTOPOINT)
+        if (oi->type == OSPF_IFTYPE_POINTOPOINT)
 	  {
-	    if (CONNECTED_DEST_HOST(oi->connected))
-	      {
-		/* match only destination addr, since local addr is most likely
-		 * not unique (borrowed from another interface) */
-		if (IPV4_ADDR_SAME (address,
-				    &oi->connected->destination->u.prefix4))
-		return oi;
-	      }
-	    else
-	      {
-		/* special leniency: match if addr is anywhere on PtP subnet */
-		if (prefix_match(oi->address,(struct prefix *)&addr))
-		  return oi;
-	      }
+	    /* special leniency: match if addr is anywhere on peer subnet */
+	    if (prefix_match(CONNECTED_PREFIX(oi->connected),
+			     (struct prefix *)&addr))
+	      return oi;
 	  }
-	else
+        else
 	  {
 	    if (IPV4_ADDR_SAME (address, &oi->address->u.prefix4))
 	      return oi;
@@ -432,22 +422,15 @@ ospf_if_lookup_by_prefix (struct ospf *ospf, struct prefix_ipv4 *p)
 {
   struct listnode *node;
   struct ospf_interface *oi;
-  struct prefix ptmp;
   
   /* Check each Interface. */
   for (ALL_LIST_ELEMENTS_RO (ospf->oiflist, node, oi))
     {
       if (oi->type != OSPF_IFTYPE_VIRTUALLINK)
 	{
-	  if ((oi->type == OSPF_IFTYPE_POINTOPOINT) &&
-	      CONNECTED_DEST_HOST(oi->connected))
-	    {
-	      prefix_copy (&ptmp, oi->connected->destination);
-	      ptmp.prefixlen = IPV4_MAX_BITLEN;
-	    }
-	  else
-	    prefix_copy (&ptmp, oi->address);
-	
+	  struct prefix ptmp;
+
+	  prefix_copy (&ptmp, CONNECTED_PREFIX(oi->connected));
 	  apply_mask (&ptmp);
 	  if (prefix_same (&ptmp, (struct prefix *) p))
 	    return oi;
@@ -477,22 +460,14 @@ ospf_if_lookup_recv_if (struct ospf *ospf, struct in_addr src)
       
       if (if_is_loopback (oi->ifp))
         continue;
-      
-      if ((oi->type == OSPF_IFTYPE_POINTOPOINT) &&
-	  CONNECTED_DEST_HOST(oi->connected))
+
+      if (prefix_match (CONNECTED_PREFIX(oi->connected),
+      			(struct prefix *) &addr))
 	{
-	  if (IPV4_ADDR_SAME (&oi->connected->destination->u.prefix4, &src))
-	    return oi;
-	}
-      else
-	{
-	  if (prefix_match (oi->address, (struct prefix *) &addr))
-	    {
-	      if ( (match == NULL) || 
-	           (match->address->prefixlen < oi->address->prefixlen)
-	         )
-	        match = oi;
-	    }
+	  if ( (match == NULL) || 
+	       (match->address->prefixlen < oi->address->prefixlen)
+	     )
+	    match = oi;
 	}
     }
 
@@ -682,9 +657,6 @@ ospf_if_new_hook (struct interface *ifp)
 
   IF_DEF_PARAMS (ifp)->mtu_ignore = OSPF_MTU_IGNORE_DEFAULT;
 
-  SET_IF_PARAM (IF_DEF_PARAMS (ifp), passive_interface);
-  IF_DEF_PARAMS (ifp)->passive_interface = OSPF_IF_ACTIVE;
-
   SET_IF_PARAM (IF_DEF_PARAMS (ifp), v_hello);
   IF_DEF_PARAMS (ifp)->v_hello = OSPF_HELLO_INTERVAL_DEFAULT;
 
@@ -745,50 +717,56 @@ ospf_if_set_multicast(struct ospf_interface *oi)
   if ((oi->state > ISM_Loopback) &&
       (oi->type != OSPF_IFTYPE_LOOPBACK) &&
       (oi->type != OSPF_IFTYPE_VIRTUALLINK) &&
-      (OSPF_IF_PARAM(oi, passive_interface) == OSPF_IF_ACTIVE))
+      (OSPF_IF_PASSIVE_STATUS(oi) == OSPF_IF_ACTIVE))
     {
       /* The interface should belong to the OSPF-all-routers group. */
-      if (!CHECK_FLAG(oi->multicast_memberships, MEMBER_ALLROUTERS) &&
+      if (!OI_MEMBER_CHECK(oi, MEMBER_ALLROUTERS) &&
 	  (ospf_if_add_allspfrouters(oi->ospf, oi->address,
 				     oi->ifp->ifindex) >= 0))
-	/* Set the flag only if the system call to join succeeded. */
-        SET_FLAG(oi->multicast_memberships, MEMBER_ALLROUTERS);
+	  /* Set the flag only if the system call to join succeeded. */
+	  OI_MEMBER_JOINED(oi, MEMBER_ALLROUTERS);
     }
   else
     {
       /* The interface should NOT belong to the OSPF-all-routers group. */
-      if (CHECK_FLAG(oi->multicast_memberships, MEMBER_ALLROUTERS))
+      if (OI_MEMBER_CHECK(oi, MEMBER_ALLROUTERS))
         {
-	  ospf_if_drop_allspfrouters (oi->ospf, oi->address, oi->ifp->ifindex);
+          /* Only actually drop if this is the last reference */
+          if (OI_MEMBER_COUNT(oi, MEMBER_ALLROUTERS) == 1)
+	    ospf_if_drop_allspfrouters (oi->ospf, oi->address,
+	                                oi->ifp->ifindex);
 	  /* Unset the flag regardless of whether the system call to leave
 	     the group succeeded, since it's much safer to assume that
 	     we are not a member. */
-	  UNSET_FLAG(oi->multicast_memberships, MEMBER_ALLROUTERS);
+          OI_MEMBER_LEFT(oi,MEMBER_ALLROUTERS);
         }
     }
 
   if (((oi->type == OSPF_IFTYPE_BROADCAST) ||
        (oi->type == OSPF_IFTYPE_POINTOPOINT)) &&
       ((oi->state == ISM_DR) || (oi->state == ISM_Backup)) &&
-      (OSPF_IF_PARAM(oi, passive_interface) == OSPF_IF_ACTIVE))
+      (OSPF_IF_PASSIVE_STATUS(oi) == OSPF_IF_ACTIVE))
     {
       /* The interface should belong to the OSPF-designated-routers group. */
-      if (!CHECK_FLAG(oi->multicast_memberships, MEMBER_DROUTERS) &&
+      if (!OI_MEMBER_CHECK(oi, MEMBER_DROUTERS) &&
 	  (ospf_if_add_alldrouters(oi->ospf, oi->address,
 	  			   oi->ifp->ifindex) >= 0))
 	/* Set the flag only if the system call to join succeeded. */
-        SET_FLAG(oi->multicast_memberships, MEMBER_DROUTERS);
+	OI_MEMBER_JOINED(oi, MEMBER_DROUTERS);
     }
   else
     {
       /* The interface should NOT belong to the OSPF-designated-routers group */
-      if (CHECK_FLAG(oi->multicast_memberships, MEMBER_DROUTERS))
+      if (OI_MEMBER_CHECK(oi, MEMBER_DROUTERS))
         {
-	  ospf_if_drop_alldrouters(oi->ospf, oi->address, oi->ifp->ifindex);
+          /* drop only if last reference */
+          if (OI_MEMBER_COUNT(oi, MEMBER_DROUTERS) == 1)
+	    ospf_if_drop_alldrouters(oi->ospf, oi->address, oi->ifp->ifindex);
+          
 	  /* Unset the flag regardless of whether the system call to leave
 	     the group succeeded, since it's much safer to assume that
 	     we are not a member. */
-          UNSET_FLAG(oi->multicast_memberships, MEMBER_DROUTERS);
+          OI_MEMBER_LEFT(oi, MEMBER_DROUTERS);
         }
     }
 }

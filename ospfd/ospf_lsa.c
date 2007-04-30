@@ -141,7 +141,7 @@ ospf_lsa_refresh_delay (struct ospf_lsa *lsa)
   struct timeval delta, now;
   int delay = 0;
 
-  gettimeofday (&now, NULL);
+  quagga_gettime (QUAGGA_CLK_MONOTONIC, &now);
   delta = tv_sub (now, lsa->tv_orig);
 
   if (tv_cmp (delta, int2tv (OSPF_MIN_LS_INTERVAL)) < 0)
@@ -163,10 +163,9 @@ int
 get_age (struct ospf_lsa *lsa)
 {
   int age;
-  struct timeval now;
 
-  gettimeofday (&now, NULL);
-  age = ntohs (lsa->data->ls_age) + tv_floor (tv_sub (now, lsa->tv_recv));
+  age = ntohs (lsa->data->ls_age) 
+        + tv_floor (tv_sub (recent_relative_time (), lsa->tv_recv));
 
   return age;
 }
@@ -229,7 +228,7 @@ ospf_lsa_new ()
   new->flags = 0;
   new->lock = 1;
   new->retransmit_counter = 0;
-  gettimeofday (&new->tv_recv, NULL);
+  new->tv_recv = recent_relative_time ();
   new->tv_orig = new->tv_recv;
   new->refresh_list = -1;
   
@@ -294,20 +293,21 @@ ospf_lsa_lock (struct ospf_lsa *lsa)
 
 /* Unlock LSA. */
 void
-ospf_lsa_unlock (struct ospf_lsa *lsa)
+ospf_lsa_unlock (struct ospf_lsa **lsa)
 {
   /* This is sanity check. */
-  if (!lsa)
+  if (!lsa || !*lsa)
     return;
   
-  lsa->lock--;
+  (*lsa)->lock--;
 
-  assert (lsa->lock >= 0);
+  assert ((*lsa)->lock >= 0);
 
-  if (lsa->lock == 0)
+  if ((*lsa)->lock == 0)
     {
-      assert (CHECK_FLAG (lsa->flags, OSPF_LSA_DISCARD));
-      ospf_lsa_free (lsa);
+      assert (CHECK_FLAG ((*lsa)->flags, OSPF_LSA_DISCARD));
+      ospf_lsa_free (*lsa);
+      *lsa = NULL;
     }
 }
 
@@ -318,7 +318,7 @@ ospf_lsa_discard (struct ospf_lsa *lsa)
   if (!CHECK_FLAG (lsa->flags, OSPF_LSA_DISCARD))
     {
       SET_FLAG (lsa->flags, OSPF_LSA_DISCARD);
-      ospf_lsa_unlock (lsa);
+      ospf_lsa_unlock (&lsa);
     }
 }
 
@@ -437,7 +437,8 @@ router_lsa_flags (struct ospf_area *area)
 	SET_FLAG (flags, ROUTER_LSA_SHORTCUT);
 
   /* ASBR can't exit in stub area. */
-  if (area->external_routing == OSPF_AREA_STUB)
+  if (area->external_routing == OSPF_AREA_STUB
+      || area->external_routing == OSPF_AREA_NSSA)
     UNSET_FLAG (flags, ROUTER_LSA_EXTERNAL);
   /* If ASBR set External flag */
   else if (IS_OSPF_ASBR (area->ospf))
@@ -542,7 +543,7 @@ link_info_set (struct stream *s, struct in_addr id,
   return 1;
 }
 
-/* Describe Point-to-Point link. */
+/* Describe Point-to-Point link (Section 12.4.1.1). */
 static int
 lsa_link_ptop_set (struct stream *s, struct ospf_interface *oi)
 {
@@ -563,28 +564,13 @@ lsa_link_ptop_set (struct stream *s, struct ospf_interface *oi)
 		                LSA_LINK_TYPE_POINTOPOINT, 0, cost);
       }
 
-  if (CONNECTED_DEST_HOST(oi->connected))
-    {
-      /* Option 1:
-	 link_type = LSA_LINK_TYPE_STUB;
-	 link_id = nbr->address.u.prefix4;
-	 link_data.s_addr = 0xffffffff;
-	 link_cost = o->output_cost; */
-      
-      id.s_addr = oi->connected->destination->u.prefix4.s_addr;
-      mask.s_addr = 0xffffffff;
-      links += link_info_set (s, id, mask, LSA_LINK_TYPE_STUB, 0,
-                              oi->output_cost);
-    }
-  else
-    {
-       /* Option 2:  We need to include link to a stub
-	 network regardless of the state of the neighbor */
-      masklen2ip (oi->address->prefixlen, &mask);
-      id.s_addr = oi->address->u.prefix4.s_addr & mask.s_addr;
-      links += link_info_set (s, id, mask, LSA_LINK_TYPE_STUB, 0, 
-                              oi->output_cost);
-    }
+  /* Regardless of the state of the neighboring router, we must
+     add a Type 3 link (stub network).
+     N.B. Options 1 & 2 share basically the same logic. */
+  masklen2ip (oi->address->prefixlen, &mask);
+  id.s_addr = CONNECTED_PREFIX(oi->connected)->u.prefix4.s_addr & mask.s_addr;
+  links += link_info_set (s, id, mask, LSA_LINK_TYPE_STUB, 0,
+			  oi->output_cost);
   return links;
 }
 
@@ -1043,7 +1029,7 @@ ospf_router_lsa_update_timer (struct thread *thread)
 	    zlog_debug("LSA[Type%d:%s]: Refresh router-LSA for Area %s",
 		      lsa->data->type, inet_ntoa (lsa->data->id), area_str);
 	  ospf_lsa_flush_area (lsa, area);
-	  ospf_lsa_unlock (area->router_lsa_self);
+	  ospf_lsa_unlock (&area->router_lsa_self);
 	  area->router_lsa_self = NULL;
 
 	  /* Refresh router-LSA, (not install) and flood through area. */
@@ -1849,7 +1835,7 @@ ospf_install_flood_nssa (struct ospf *ospf,
 	  {
 	    if (IS_DEBUG_OSPF_NSSA)
 	      zlog_debug ("LSA[Type-7]: Could not build FWD-ADDR");
-	    ospf_lsa_discard(new);
+	    ospf_lsa_discard (new);
 	    return;
 	  }
 	}
@@ -2089,7 +2075,7 @@ ospf_translated_nssa_refresh (struct ospf *ospf, struct ospf_lsa *type7,
       if (IS_DEBUG_OSPF_NSSA)
         zlog_debug ("ospf_translated_nssa_refresh(): Could not install "
                    "translated LSA, Id %s",
-                   inet_ntoa (new->data->id));
+                   inet_ntoa (type7->data->id));
       return NULL;
     }
   
@@ -2458,9 +2444,6 @@ ospf_external_lsa_refresh (struct ospf *ospf, struct ospf_lsa *lsa,
   
   new->data->ls_seqnum = lsa_seqnum_increment (lsa);
 
-  /* Record timestamp. */
-  gettimeofday (&new->tv_orig, NULL);
-
   /* Re-calculate checksum. */
   ospf_lsa_checksum (new->data);
 
@@ -2517,7 +2500,7 @@ ospf_router_lsa_install (struct ospf *ospf,
                           ospf_router_lsa_timer, OSPF_LS_REFRESH_TIME);
       
       /* Set self-originated router-LSA. */
-      ospf_lsa_unlock (area->router_lsa_self);
+      ospf_lsa_unlock (&area->router_lsa_self);
       area->router_lsa_self = ospf_lsa_lock (new);
 
       if (IS_DEBUG_OSPF (lsa, LSA_INSTALL))
@@ -2561,7 +2544,7 @@ ospf_network_lsa_install (struct ospf *ospf,
 			       ospf_network_lsa_refresh_timer,
 			       OSPF_LS_REFRESH_TIME);
 
-      ospf_lsa_unlock (oi->network_lsa_self);
+      ospf_lsa_unlock (&oi->network_lsa_self);
       oi->network_lsa_self = ospf_lsa_lock (new);
     }
 
@@ -2678,6 +2661,17 @@ ospf_discard_from_db (struct ospf *ospf,
 		      struct ospf_lsdb *lsdb, struct ospf_lsa *lsa)
 {
   struct ospf_lsa *old;
+  
+  if (!lsdb)
+    {
+      zlog_warn ("%s: Called with NULL lsdb!", __func__);
+      if (!lsa)
+        zlog_warn ("%s: and NULL LSA!", __func__);
+      else
+        zlog_warn ("LSA[Type%d:%s]: not associated with LSDB!",
+                   lsa->data->type, inet_ntoa (lsa->data->id));
+      return;
+    }
   
   old = ospf_lsdb_lookup (lsdb, lsa);
 
@@ -3014,8 +3008,14 @@ ospf_maxage_lsa_remover (struct thread *thread)
           }
 
 	/* Remove from lsdb. */
-        ospf_discard_from_db (ospf, lsa->lsdb, lsa);
-        ospf_lsdb_delete (lsa->lsdb, lsa);
+	if (lsa->lsdb)
+	  {
+	    ospf_discard_from_db (ospf, lsa->lsdb, lsa);
+	    ospf_lsdb_delete (lsa->lsdb, lsa);
+          }
+        else
+          zlog_warn ("%s: LSA[Type%d:%s]: No associated LSDB!", __func__,
+                     lsa->data->type, inet_ntoa (lsa->data->id));
       }
 
   /*    A MaxAge LSA must be removed immediately from the router's link
@@ -3049,7 +3049,7 @@ ospf_lsa_maxage_delete (struct ospf *ospf, struct ospf_lsa *lsa)
   if ((n = listnode_lookup (ospf->maxage_lsa, lsa)))
     {
       list_delete_node (ospf->maxage_lsa, n);
-      ospf_lsa_unlock (lsa);
+      ospf_lsa_unlock (&lsa); /* maxage_lsa */
     }
 }
 
@@ -3464,7 +3464,7 @@ ospf_flush_self_originated_lsas_now (struct ospf *ospf)
             zlog_debug ("LSA[Type%d:%s]: Schedule self-originated LSA to FLUSH", lsa->data->type, inet_ntoa (lsa->data->id));
 
           ospf_lsa_flush_area (lsa, area);
-          ospf_lsa_unlock (area->router_lsa_self);
+          ospf_lsa_unlock (&area->router_lsa_self);
           area->router_lsa_self = NULL;
           OSPF_TIMER_OFF (area->t_router_lsa_self);
         }
@@ -3479,7 +3479,7 @@ ospf_flush_self_originated_lsas_now (struct ospf *ospf)
                 zlog_debug ("LSA[Type%d:%s]: Schedule self-originated LSA to FLUSH", lsa->data->type, inet_ntoa (lsa->data->id));
 
               ospf_lsa_flush_area (oi->network_lsa_self, area);
-              ospf_lsa_unlock (oi->network_lsa_self);
+              ospf_lsa_unlock (&oi->network_lsa_self);
               oi->network_lsa_self = NULL;
               OSPF_TIMER_OFF (oi->t_network_lsa_self);
             }
@@ -3648,7 +3648,7 @@ ospf_lsa_action (struct thread *t)
       break;
     }
 
-  ospf_lsa_unlock (data->lsa);
+  ospf_lsa_unlock (&data->lsa); /* Message */
   XFREE (MTYPE_OSPF_MESSAGE, data);
   return 0;
 }
@@ -3663,7 +3663,7 @@ ospf_schedule_lsa_flood_area (struct ospf_area *area, struct ospf_lsa *lsa)
 
   data->action = LSA_ACTION_FLOOD_AREA;
   data->area = area;
-  data->lsa  = ospf_lsa_lock (lsa);
+  data->lsa  = ospf_lsa_lock (lsa); /* Message / Flood area */
 
   thread_add_event (master, ospf_lsa_action, data, 0);
 }
@@ -3678,7 +3678,7 @@ ospf_schedule_lsa_flush_area (struct ospf_area *area, struct ospf_lsa *lsa)
 
   data->action = LSA_ACTION_FLUSH_AREA;
   data->area = area;
-  data->lsa  = ospf_lsa_lock (lsa);
+  data->lsa  = ospf_lsa_lock (lsa); /* Message / Flush area */
 
   thread_add_event (master, ospf_lsa_action, data, 0);
 }
@@ -3751,7 +3751,7 @@ ospf_refresher_register_lsa (struct ospf *ospf, struct ospf_lsa *lsa)
 	delay = 0;
 
       current_index = ospf->lsa_refresh_queue.index +
-	(time (NULL) - ospf->lsa_refresher_started)/OSPF_LSA_REFRESHER_GRANULARITY;
+	(quagga_time (NULL) - ospf->lsa_refresher_started)/OSPF_LSA_REFRESHER_GRANULARITY;
       
       index = (current_index + delay/OSPF_LSA_REFRESHER_GRANULARITY)
 	% (OSPF_LSA_REFRESHER_SLOTS);
@@ -3761,7 +3761,8 @@ ospf_refresher_register_lsa (struct ospf *ospf, struct ospf_lsa *lsa)
 		   inet_ntoa (lsa->data->id), LS_AGE (lsa), index);
       if (!ospf->lsa_refresh_queue.qs[index])
 	ospf->lsa_refresh_queue.qs[index] = list_new ();
-      listnode_add (ospf->lsa_refresh_queue.qs[index], ospf_lsa_lock (lsa));
+      listnode_add (ospf->lsa_refresh_queue.qs[index],
+                    ospf_lsa_lock (lsa)); /* lsa_refresh_queue */
       lsa->refresh_list = index;
       if (IS_DEBUG_OSPF (lsa, LSA_REFRESH))
         zlog_debug ("LSA[Refresh:%s]: ospf_refresher_register_lsa(): "
@@ -3783,7 +3784,7 @@ ospf_refresher_unregister_lsa (struct ospf *ospf, struct ospf_lsa *lsa)
 	  list_free (refresh_list);
 	  ospf->lsa_refresh_queue.qs[lsa->refresh_list] = NULL;
 	}
-      ospf_lsa_unlock (lsa);
+      ospf_lsa_unlock (&lsa); /* lsa_refresh_queue */
       lsa->refresh_list = -1;
     }
 }
@@ -3809,7 +3810,7 @@ ospf_lsa_refresh_walker (struct thread *t)
      modulus. */
   ospf->lsa_refresh_queue.index =
    ((unsigned long)(ospf->lsa_refresh_queue.index +
-		    (time (NULL) - ospf->lsa_refresher_started) /
+		    (quagga_time (NULL) - ospf->lsa_refresher_started) /
 		    OSPF_LSA_REFRESHER_GRANULARITY)) % OSPF_LSA_REFRESHER_SLOTS;
 
   if (IS_DEBUG_OSPF (lsa, LSA_REFRESH))
@@ -3837,7 +3838,7 @@ ospf_lsa_refresh_walker (struct thread *t)
 		           inet_ntoa (lsa->data->id), lsa, i);
 	      
 	      list_delete_node (refresh_list, node);
-	      ospf_lsa_unlock (lsa);
+	      ospf_lsa_unlock (&lsa); /* lsa_refresh_queue */
 	      lsa->refresh_list = -1;
 	      listnode_add (lsa_to_refresh, lsa);
 	    }
@@ -3847,7 +3848,7 @@ ospf_lsa_refresh_walker (struct thread *t)
 
   ospf->t_lsa_refresher = thread_add_timer (master, ospf_lsa_refresh_walker,
 					   ospf, ospf->lsa_refresh_interval);
-  ospf->lsa_refresher_started = time (NULL);
+  ospf->lsa_refresher_started = quagga_time (NULL);
 
   for (ALL_LIST_ELEMENTS (lsa_to_refresh, node, nnode, lsa))
     ospf_lsa_refresh (ospf, lsa);

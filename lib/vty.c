@@ -149,17 +149,28 @@ vty_out (struct vty *vty, const char *format, ...)
 
 static int
 vty_log_out (struct vty *vty, const char *level, const char *proto_str,
-	     const char *format, va_list va)
+	     const char *format, struct timestamp_control *ctl, va_list va)
 {
   int ret;
   int len;
   char buf[1024];
 
+  if (!ctl->already_rendered)
+    {
+      ctl->len = quagga_timestamp(ctl->precision, ctl->buf, sizeof(ctl->buf));
+      ctl->already_rendered = 1;
+    }
+  if (ctl->len+1 >= sizeof(buf))
+    return -1;
+  memcpy(buf, ctl->buf, len = ctl->len);
+  buf[len++] = ' ';
+  buf[len] = '\0';
+
   if (level)
-    len = snprintf(buf, sizeof(buf), "%s: %s: ", level, proto_str);
+    ret = snprintf(buf+len, sizeof(buf)-len, "%s: %s: ", level, proto_str);
   else
-    len = snprintf(buf, sizeof(buf), "%s: ", proto_str);
-  if ((len < 0) || ((size_t)len >= sizeof(buf)))
+    ret = snprintf(buf+len, sizeof(buf)-len, "%s: ", proto_str);
+  if ((ret < 0) || ((size_t)(len += ret) >= sizeof(buf)))
     return -1;
 
   if (((ret = vsnprintf(buf+len, sizeof(buf)-len, format, va)) < 0) ||
@@ -176,10 +187,14 @@ vty_log_out (struct vty *vty, const char *level, const char *proto_str,
 	   drop the data and ignore. */
 	return -1;
       /* Fatal I/O error. */
+      vty->monitor = 0; /* disable monitoring to avoid infinite recursion */
       zlog_warn("%s: write failed to vty client fd %d, closing: %s",
 		__func__, vty->fd, safe_strerror(errno));
       buffer_reset(vty->obuf);
-      vty_close(vty);
+      /* cannot call vty_close, because a parent routine may still try
+         to access the vty struct */
+      vty->status = VTY_CLOSE;
+      shutdown(vty->fd, SHUT_RDWR);
       return -1;
     }
   return 0;
@@ -189,19 +204,11 @@ vty_log_out (struct vty *vty, const char *level, const char *proto_str,
 void
 vty_time_print (struct vty *vty, int cr)
 {
-  time_t clock;
-  struct tm *tm;
-#define TIME_BUF 25
-  char buf [TIME_BUF];
-  int ret;
+  char buf [25];
   
-  time (&clock);
-  tm = localtime (&clock);
-
-  ret = strftime (buf, TIME_BUF, "%Y/%m/%d %H:%M:%S", tm);
-  if (ret == 0)
+  if (quagga_timestamp(0, buf, sizeof(buf)) == 0)
     {
-      zlog (NULL, LOG_INFO, "strftime error");
+      zlog (NULL, LOG_INFO, "quagga_timestamp error");
       return;
     }
   if (cr)
@@ -1343,6 +1350,7 @@ vty_read (struct thread *thread)
 	      vty_event (VTY_READ, vty_sock, vty);
 	      return 0;
 	    }
+	  vty->monitor = 0; /* disable monitoring to avoid infinite recursion */
 	  zlog_warn("%s: read error on vty client fd %d, closing: %s",
 		    __func__, vty->fd, safe_strerror(errno));
 	}
@@ -1565,6 +1573,7 @@ vty_flush (struct thread *thread)
   switch (flushrc)
     {
     case BUFFER_ERROR:
+      vty->monitor = 0; /* disable monitoring to avoid infinite recursion */
       zlog_warn("buffer_flush failed on vty client fd %d, closing",
 		vty->fd);
       buffer_reset(vty->obuf);
@@ -2012,6 +2021,7 @@ vtysh_flush(struct vty *vty)
       vty_event(VTYSH_WRITE, vty->fd, vty);
       break;
     case BUFFER_ERROR:
+      vty->monitor = 0; /* disable monitoring to avoid infinite recursion */
       zlog_warn("%s: write error to fd %d, closing", __func__, vty->fd);
       buffer_reset(vty->obuf);
       vty_close(vty);
@@ -2047,6 +2057,7 @@ vtysh_read (struct thread *thread)
 	      vty_event (VTYSH_READ, sock, vty);
 	      return 0;
 	    }
+	  vty->monitor = 0; /* disable monitoring to avoid infinite recursion */
 	  zlog_warn("%s: read failed on vtysh client fd %d, closing: %s",
 		    __func__, sock, safe_strerror(errno));
 	}
@@ -2130,7 +2141,10 @@ vty_serv_sock (const char *addr, unsigned short port, const char *path)
 #endif /* VTYSH */
 }
 
-/* Close vty interface. */
+/* Close vty interface.  Warning: call this only from functions that
+   will be careful not to access the vty afterwards (since it has
+   now been freed).  This is safest from top-level functions (called
+   directly by the thread dispatcher). */
 void
 vty_close (struct vty *vty)
 {
@@ -2400,7 +2414,7 @@ vty_read_config (char *config_file,
 /* Small utility function which output log to the VTY. */
 void
 vty_log (const char *level, const char *proto_str,
-	 const char *format, va_list va)
+	 const char *format, struct timestamp_control *ctl, va_list va)
 {
   unsigned int i;
   struct vty *vty;
@@ -2414,7 +2428,7 @@ vty_log (const char *level, const char *proto_str,
 	{
 	  va_list ac;
 	  va_copy(ac, va);
-	  vty_log_out (vty, level, proto_str, format, ac);
+	  vty_log_out (vty, level, proto_str, format, ctl, ac);
 	  va_end(ac);
 	}
 }

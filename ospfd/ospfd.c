@@ -84,8 +84,17 @@ ospf_router_id_update (struct ospf *ospf)
 
   router_id_old = ospf->router_id;
 
+  /* Select the router ID based on these priorities:
+       1. Statically assigned router ID is always the first choice.
+       2. If there is no statically assigned router ID, then try to stick
+          with the most recent value, since changing router ID's is very
+	  disruptive.
+       3. Last choice: just go with whatever the zebra daemon recommends.
+  */
   if (ospf->router_id_static.s_addr != 0)
     router_id = ospf->router_id_static;
+  else if (ospf->router_id.s_addr != 0)
+    router_id = ospf->router_id;
   else
     router_id = router_id_zebra;
 
@@ -158,6 +167,8 @@ ospf_new (void)
 
   new->default_originate = DEFAULT_ORIGINATE_NONE;
 
+  new->passive_interface_default = OSPF_IF_ACTIVE;
+  
   new->new_external_route = route_table_init ();
   new->old_external_route = route_table_init ();
   new->external_lsas = route_table_init ();
@@ -193,7 +204,7 @@ ospf_new (void)
   new->lsa_refresh_interval = OSPF_LSA_REFRESH_INTERVAL_DEFAULT;
   new->t_lsa_refresher = thread_add_timer (master, ospf_lsa_refresh_walker,
 					   new, new->lsa_refresh_interval);
-  new->lsa_refresher_started = time (NULL);
+  new->lsa_refresher_started = quagga_time (NULL);
 
   if ((new->fd = ospf_sock_init()) < 0)
     {
@@ -344,6 +355,10 @@ ospf_terminate (void)
   
   SET_FLAG (om->options, OSPF_MASTER_SHUTDOWN);
 
+  /* exit immediately if OSPF not actually running */
+  if (listcount(om->ospf) == 0)
+    exit(0);
+
   for (ALL_LIST_ELEMENTS (om->ospf, node, nnode, ospf))
     ospf_finish (ospf);
 
@@ -389,6 +404,7 @@ ospf_finish_final (struct ospf *ospf)
   /* Unregister redistribution */
   for (i = 0; i < ZEBRA_ROUTE_MAX; i++)
     ospf_redistribute_unset (ospf, i);
+  ospf_redistribute_default_unset (ospf);
 
   for (ALL_LIST_ELEMENTS (ospf->areas, node, nnode, area))
     ospf_remove_vls_through_area (ospf, area);
@@ -475,7 +491,7 @@ ospf_finish_final (struct ospf *ospf)
   ospf_lsdb_free (ospf->lsdb);
 
   for (ALL_LIST_ELEMENTS (ospf->maxage_lsa, node, nnode, lsa))
-    ospf_lsa_unlock (lsa);
+    ospf_lsa_unlock (&lsa); /* maxage_lsa */
 
   list_delete (ospf->maxage_lsa);
 
@@ -592,7 +608,7 @@ ospf_area_free (struct ospf_area *area)
   ospf_lsdb_delete_all (area->lsdb);
   ospf_lsdb_free (area->lsdb);
 
-  ospf_lsa_unlock (area->router_lsa_self);
+  ospf_lsa_unlock (&area->router_lsa_self);
   
   route_table_finish (area->ranges);
   list_delete (area->oiflist);
@@ -783,6 +799,23 @@ ospf_network_unset (struct ospf *ospf, struct prefix_ipv4 *p,
 int 
 ospf_network_match_iface(struct connected *co, struct prefix *net)
 {
+#define COMPATIBILITY_MODE
+  /* The old code used to have a special case for PtP interfaces:
+
+     if (if_is_pointopoint (co->ifp) && co->destination &&
+	 IPV4_ADDR_SAME ( &(co->destination->u.prefix4), &(net->u.prefix4)))
+       return 1;
+
+     The new approach is much more general.  If a peer address is supplied,
+     then we are routing to that prefix, so that's the address to compare
+     against (not the local address, which may not be unique).
+  */
+#ifndef COMPATIBILITY_MODE
+  /* new approach: more elegant and conceptually clean */
+  return prefix_match(net, CONNECTED_PREFIX(co));
+#else /* COMPATIBILITY_MODE */
+  /* match old (strange?) behavior */
+
   /* Behaviour to match both Cisco where:
    *   iface address lies within network specified -> ospf
    * and zebra 0.9[2ish-3]:
@@ -794,7 +827,7 @@ ospf_network_match_iface(struct connected *co, struct prefix *net)
    * exactly; this is not a test for falling within the prefix.  This
    * test is solely for compatibility with zebra.
    */
-  if (if_is_pointopoint (co->ifp) && co->destination &&
+  if (CONNECTED_PEER(co) &&
       IPV4_ADDR_SAME ( &(co->destination->u.prefix4), &(net->u.prefix4)))
     return 1;
 
@@ -814,6 +847,8 @@ ospf_network_match_iface(struct connected *co, struct prefix *net)
     return 1;
 
   return 0;			/* no match */
+
+#endif /* COMPATIBILITY_MODE */
 }
 
 void
@@ -844,10 +879,7 @@ ospf_network_run (struct ospf *ospf, struct prefix *p, struct ospf_area *area)
           if (CHECK_FLAG(co->flags,ZEBRA_IFA_SECONDARY))
             continue;
 
-	  if (CONNECTED_POINTOPOINT_HOST(co))
-	    addr = co->destination;
-	  else 
-	    addr = co->address;
+	  addr = CONNECTED_ID(co);
 
 	  if (p->family == co->address->family 
 	      && ! ospf_if_is_configured (ospf, &(addr->u.prefix4))
@@ -884,8 +916,6 @@ ospf_network_run (struct ospf *ospf, struct prefix *p, struct ospf_area *area)
 		if ((ospf->router_id.s_addr != 0)
 		    && if_is_operative (ifp)) 
 		  ospf_if_up (oi);
-
-		break;
 	      }
 	}
     }
@@ -905,7 +935,7 @@ ospf_ls_upd_queue_empty (struct ospf_interface *oi)
     if ((lst = (struct list *) rn->info))
       {
 	for (ALL_LIST_ELEMENTS (lst, node, nnode, lsa))
-          ospf_lsa_unlock (lsa);
+          ospf_lsa_unlock (&lsa); /* oi->ls_upd_queue */
 	list_free (lst);
 	rn->info = NULL;
       }
@@ -1308,7 +1338,7 @@ ospf_timers_refresh_set (struct ospf *ospf, int interval)
     return 1;
 
   time_left = ospf->lsa_refresh_interval -
-    (time (NULL) - ospf->lsa_refresher_started);
+    (quagga_time (NULL) - ospf->lsa_refresher_started);
   
   if (time_left > interval)
     {
@@ -1327,7 +1357,7 @@ ospf_timers_refresh_unset (struct ospf *ospf)
   int time_left;
 
   time_left = ospf->lsa_refresh_interval -
-    (time (NULL) - ospf->lsa_refresher_started);
+    (quagga_time (NULL) - ospf->lsa_refresher_started);
 
   if (time_left > OSPF_LSA_REFRESH_INTERVAL_DEFAULT)
     {
@@ -1648,5 +1678,5 @@ ospf_master_init ()
   om = &ospf_master;
   om->ospf = list_new ();
   om->master = thread_master_create ();
-  om->start_time = time (NULL);
+  om->start_time = quagga_time (NULL);
 }

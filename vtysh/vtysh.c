@@ -1572,6 +1572,30 @@ DEFUNSH (VTYSH_ALL,
 }
 
 DEFUNSH (VTYSH_ALL,
+	 vtysh_log_timestamp_precision,
+	 vtysh_log_timestamp_precision_cmd,
+	 "log timestamp precision <0-6>",
+	 "Logging control\n"
+	 "Timestamp configuration\n"
+	 "Set the timestamp precision\n"
+	 "Number of subsecond digits\n")
+{
+  return CMD_SUCCESS;
+}
+
+DEFUNSH (VTYSH_ALL,
+	 no_vtysh_log_timestamp_precision,
+	 no_vtysh_log_timestamp_precision_cmd,
+	 "no log timestamp precision",
+	 NO_STR
+	 "Logging control\n"
+	 "Timestamp configuration\n"
+	 "Reset the timestamp precision to the default value of 0\n")
+{
+  return CMD_SUCCESS;
+}
+
+DEFUNSH (VTYSH_ALL,
 	 vtysh_service_password_encrypt,
 	 vtysh_service_password_encrypt_cmd,
 	 "service password-encryption",
@@ -2119,18 +2143,28 @@ vtysh_connect (struct vtysh_client *vclient)
   return 0;
 }
 
-void
-vtysh_connect_all(void)
+int
+vtysh_connect_all(const char *daemon_name)
 {
   u_int i;
+  int rc = 0;
+  int matches = 0;
 
   for (i = 0; i < VTYSH_INDEX_MAX; i++)
     {
-      vtysh_connect(&vtysh_client[i]);
-      /* We need direct access to ripd in vtysh_exit_ripd_only. */
-      if (vtysh_client[i].flag == VTYSH_RIPD)
-        ripd_client = &vtysh_client[i];
+      if (!daemon_name || !strcmp(daemon_name, vtysh_client[i].name))
+	{
+	  matches++;
+	  if (vtysh_connect(&vtysh_client[i]) == 0)
+	    rc++;
+	  /* We need direct access to ripd in vtysh_exit_ripd_only. */
+	  if (vtysh_client[i].flag == VTYSH_RIPD)
+	    ripd_client = &vtysh_client[i];
+	}
     }
+  if (!matches)
+    fprintf(stderr, "Error: no daemons match name %s!\n", daemon_name);
+  return rc;
 }
 
 /* To disable readline's filename completion. */
@@ -2155,7 +2189,7 @@ vtysh_readline_init (void)
 char *
 vtysh_prompt (void)
 {
-  struct utsname names;
+  static struct utsname names;
   static char buf[100];
   const char*hostname;
   extern struct host host;
@@ -2164,7 +2198,8 @@ vtysh_prompt (void)
 
   if (!hostname)
     {
-      uname (&names);
+      if (!names.nodename[0])
+	uname (&names);
       hostname = names.nodename;
     }
 
@@ -2397,6 +2432,8 @@ vtysh_init_vty (void)
   install_element (CONFIG_NODE, &no_vtysh_log_facility_cmd);
   install_element (CONFIG_NODE, &vtysh_log_record_priority_cmd);
   install_element (CONFIG_NODE, &no_vtysh_log_record_priority_cmd);
+  install_element (CONFIG_NODE, &vtysh_log_timestamp_precision_cmd);
+  install_element (CONFIG_NODE, &no_vtysh_log_timestamp_precision_cmd);
 
   install_element (CONFIG_NODE, &vtysh_service_password_encrypt_cmd);
   install_element (CONFIG_NODE, &no_vtysh_service_password_encrypt_cmd);

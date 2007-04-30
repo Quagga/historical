@@ -224,7 +224,8 @@ static void irdp_advertisement (struct interface *ifp, struct prefix *p)
   struct stream *s;
   s = stream_new (128);
   make_advertisement_packet (ifp, p, s);
-  irdp_send(ifp, p, s); 
+  irdp_send(ifp, p, s);
+  stream_free (s);
 }
 
 int irdp_send_thread(struct thread *t_advert)
@@ -243,6 +244,10 @@ int irdp_send_thread(struct thread *t_advert)
     for (ALL_LIST_ELEMENTS (ifp->connected, node, nnode, ifc))
       {
         p = ifc->address;
+        
+        if (p->family != AF_INET)
+          continue;
+        
         irdp_advertisement(ifp, p);
         irdp->irdp_sent++;
       }

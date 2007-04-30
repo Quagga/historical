@@ -1,3 +1,63 @@
+2007-04-29 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* basic.texi: Document the new 'log timestamp precision' command.
+
+2007-03-21 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* Makefile.am: Patch rule for draft-zebra-00.txt to work
+	  in VPATH build environments.
+
+2006-07-28 Paul Jakma <paul.jakma@sun.com>
+
+	* main.texi: link-detect works on Solaris too.
+	* ospfd.texi: Twiddle around with anchors a bit more.
+	  Clarify how setting MD5 auth by area and by interface interact,
+	  and add cross-references, as well as to the required
+	  command for setting key material.
+
+2006-07-27 Paul Jakma <paul.jakma@sun.com>
+
+	* quagga.texi: Remove unused index definitions
+	  Add an Index node - for the concept index.
+	* routeserver.texi: Set exampleindex to 0, so the example configs
+	  with long IPv6 addresses stand better chance of fitting.
+	* overview.texi: 'Supported RFC' -> 'Supported RFCs'
+	  Remove paragraph indentation - texinfo does that.
+	  Revise the supported OS list slightly.
+	  Remove the IPv6 stack list, seems very dated and irrelevant.
+	  Revise the 'How to get Quagga' section.
+	* ospfd.texi: minor tweaks: add some anchors, fix some minor
+	  format issues.
+	  Revise the help for 'abr-type'.
+	  Note that text authentication is unwise, recc'd MD5.
+	  Add some extra text for redistribute and passive-interface,
+	  about how latter can substitute for redist connected.
+
+2006-07-27 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* vtysh.1: Document new options -d and -E, and note that now multiple
+	  -c options may be supplied, with embedded linefeed now supported.
+	  In BUGS section, remove warning about vtysh causing a daemon
+	  to freeze, since this has been fixed.
+
+2006-07-04 Paul Jakma <paul.jakma@sun.com>
+
+	* quagga.info: remove auto-generated file. It will still be
+	  present in dist tarballs, so shouldn't affect anyone but
+	  direct users of CVS. Required texinfo version should be
+	  widely available.
+
+2006-06-28 Erik Muller <erikm@internap.com>
+
+	* ospfd.texi: Document new ospf router subcommand
+	  "log-adjacency-changes [detail]".
+
+2006-06-26 Paul Jakma <paul.jakma@sun.com>
+
+	* ospfd.texi: Document that MD5 keyid is part of the protocol.
+	* bgpd.texi: shut texinfo warnings up by replacing brackets in
+	  variable with angle brackets.
+
 2006-05-23 Paul Jakma <paul.jakma@sun.com>
 
 	* bgpd.texi: Document the update-source command.

@@ -249,25 +249,82 @@ ALIAS (no_ospf_router_id,
        NO_STR
        "router-id for the OSPF process\n")
 
+static void
+ospf_passive_interface_default (struct ospf *ospf, u_char newval)
+{
+  struct listnode *ln;
+  struct interface *ifp;
+  struct ospf_interface *oi;
+  
+  ospf->passive_interface_default = newval;
+
+  for (ALL_LIST_ELEMENTS_RO (om->iflist, ln, ifp))
+    {
+      if (ifp &&
+          OSPF_IF_PARAM_CONFIGURED (IF_DEF_PARAMS (ifp), passive_interface))
+        UNSET_IF_PARAM (IF_DEF_PARAMS (ifp), passive_interface);
+    }
+  for (ALL_LIST_ELEMENTS_RO (ospf->oiflist, ln, oi))
+    {
+      if (OSPF_IF_PARAM_CONFIGURED (oi->params, passive_interface))
+        UNSET_IF_PARAM (oi->params, passive_interface);
+      /* update multicast memberships */
+      ospf_if_set_multicast(oi);
+    }
+}
+
+static void
+ospf_passive_interface_update (struct ospf *ospf, struct interface *ifp,
+                               struct in_addr addr, 
+                               struct ospf_if_params *params, u_char value)
+{
+  u_char dflt;
+  
+  params->passive_interface = value;
+  if (params != IF_DEF_PARAMS (ifp))
+    {
+      if (OSPF_IF_PARAM_CONFIGURED (IF_DEF_PARAMS (ifp), passive_interface))
+        dflt = IF_DEF_PARAMS (ifp)->passive_interface;
+      else
+        dflt = ospf->passive_interface_default;
+      
+      if (value != dflt)
+        SET_IF_PARAM (params, passive_interface);
+      else
+        UNSET_IF_PARAM (params, passive_interface);
+      
+      ospf_free_if_params (ifp, addr);
+      ospf_if_update_params (ifp, addr);
+    }
+  else
+    {
+      if (value != ospf->passive_interface_default)
+        SET_IF_PARAM (params, passive_interface);
+      else
+        UNSET_IF_PARAM (params, passive_interface);
+    }
+}
+
 DEFUN (ospf_passive_interface,
        ospf_passive_interface_addr_cmd,
        "passive-interface IFNAME A.B.C.D",
        "Suppress routing updates on an interface\n"
        "Interface's name\n")
 {
- struct interface *ifp;
- struct in_addr addr;
- int ret;
- struct ospf_if_params *params;
- struct route_node *rn;
+  struct interface *ifp;
+  struct in_addr addr;
+  int ret;
+  struct ospf_if_params *params;
+  struct route_node *rn;
+  struct ospf *ospf = vty->index;
 
- ifp = if_lookup_by_name (argv[0]);
- 
- if (ifp == NULL)
-   {
-     vty_out (vty, "Please specify an existing interface%s", VTY_NEWLINE);
-     return CMD_WARNING;
-   }
+  if (argc == 0)
+    {
+      ospf_passive_interface_default (ospf, OSPF_IF_PASSIVE);
+      return CMD_SUCCESS;
+    }
+
+  ifp = if_get_by_name (argv[0]);
 
   params = IF_DEF_PARAMS (ifp);
 
@@ -284,9 +341,7 @@ DEFUN (ospf_passive_interface,
       params = ospf_get_if_params (ifp, addr);
       ospf_if_update_params (ifp, addr);
     }
-
-  SET_IF_PARAM (params, passive_interface);
-  params->passive_interface = OSPF_IF_PASSIVE;
+  ospf_passive_interface_update (ospf, ifp, addr, params, OSPF_IF_PASSIVE);
 
   /* XXX We should call ospf_if_set_multicast on exactly those
    * interfaces for which the passive property changed.  It is too much
@@ -295,12 +350,13 @@ DEFUN (ospf_passive_interface,
    * record of joined groups to avoid systems calls if the desired
    * memberships match the current memership.
    */
+
   for (rn = route_top(IF_OIFS(ifp)); rn; rn = route_next (rn))
     {
       struct ospf_interface *oi = rn->info;
 
       if (oi && (OSPF_IF_PARAM(oi, passive_interface) == OSPF_IF_PASSIVE))
-        ospf_if_set_multicast(oi);
+	ospf_if_set_multicast(oi);
     }
   /*
    * XXX It is not clear what state transitions the interface needs to
@@ -318,6 +374,12 @@ ALIAS (ospf_passive_interface,
        "Suppress routing updates on an interface\n"
        "Interface's name\n")
 
+ALIAS (ospf_passive_interface,
+       ospf_passive_interface_default_cmd,
+       "passive-interface default",
+       "Suppress routing updates on an interface\n"
+       "Suppress routing updates on interfaces by default\n")
+
 DEFUN (no_ospf_passive_interface,
        no_ospf_passive_interface_addr_cmd,
        "no passive-interface IFNAME A.B.C.D",
@@ -330,14 +392,15 @@ DEFUN (no_ospf_passive_interface,
   struct ospf_if_params *params;
   int ret;
   struct route_node *rn;
-    
-  ifp = if_lookup_by_name (argv[0]);
-  
-  if (ifp == NULL)
+  struct ospf *ospf = vty->index;
+
+  if (argc == 0)
     {
-      vty_out (vty, "Please specify an existing interface%s", VTY_NEWLINE);
-      return CMD_WARNING;
+      ospf_passive_interface_default (ospf, OSPF_IF_ACTIVE);
+      return CMD_SUCCESS;
     }
+    
+  ifp = if_get_by_name (argv[0]);
 
   params = IF_DEF_PARAMS (ifp);
 
@@ -355,15 +418,7 @@ DEFUN (no_ospf_passive_interface,
       if (params == NULL)
 	return CMD_SUCCESS;
     }
-
-  UNSET_IF_PARAM (params, passive_interface);
-  params->passive_interface = OSPF_IF_ACTIVE;
-  
-  if (params != IF_DEF_PARAMS (ifp))
-    {
-      ospf_free_if_params (ifp, addr);
-      ospf_if_update_params (ifp, addr);
-    }
+  ospf_passive_interface_update (ospf, ifp, addr, params, OSPF_IF_ACTIVE);
 
   /* XXX We should call ospf_if_set_multicast on exactly those
    * interfaces for which the passive property changed.  It is too much
@@ -390,6 +445,13 @@ ALIAS (no_ospf_passive_interface,
        "Allow routing updates on an interface\n"
        "Interface's name\n")
 
+ALIAS (no_ospf_passive_interface,
+       no_ospf_passive_interface_default_cmd,
+       "no passive-interface default",
+       NO_STR
+       "Allow routing updates on an interface\n"
+       "Allow routing updates on interfaces by default\n")
+       
 DEFUN (ospf_network_area,
        ospf_network_area_cmd,
        "network A.B.C.D/M area (A.B.C.D|<0-4294967295>)",
@@ -2068,6 +2130,56 @@ DEFUN (no_ospf_abr_type,
   return CMD_SUCCESS;
 }
 
+DEFUN (ospf_log_adjacency_changes,
+       ospf_log_adjacency_changes_cmd,
+       "log-adjacency-changes",
+       "Log changes in adjacency state\n")
+{
+  struct ospf *ospf = vty->index;
+
+  SET_FLAG(ospf->config, OSPF_LOG_ADJACENCY_CHANGES);
+  return CMD_SUCCESS;
+}
+
+DEFUN (ospf_log_adjacency_changes_detail,
+       ospf_log_adjacency_changes_detail_cmd,
+       "log-adjacency-changes detail",
+       "Log changes in adjacency state\n"
+       "Log all state changes\n")
+{
+  struct ospf *ospf = vty->index;
+
+  SET_FLAG(ospf->config, OSPF_LOG_ADJACENCY_CHANGES);
+  SET_FLAG(ospf->config, OSPF_LOG_ADJACENCY_DETAIL);
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_ospf_log_adjacency_changes,
+       no_ospf_log_adjacency_changes_cmd,
+       "no log-adjacency-changes",
+       NO_STR
+       "Log changes in adjacency state\n")
+{
+  struct ospf *ospf = vty->index;
+
+  UNSET_FLAG(ospf->config, OSPF_LOG_ADJACENCY_DETAIL);
+  UNSET_FLAG(ospf->config, OSPF_LOG_ADJACENCY_CHANGES);
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_ospf_log_adjacency_changes_detail,
+       no_ospf_log_adjacency_changes_detail_cmd,
+       "no log-adjacency-changes detail",
+       NO_STR
+       "Log changes in adjacency state\n"
+       "Log all state changes\n")
+{
+  struct ospf *ospf = vty->index;
+
+  UNSET_FLAG(ospf->config, OSPF_LOG_ADJACENCY_DETAIL);
+  return CMD_SUCCESS;
+}
+
 DEFUN (ospf_compatible_rfc1583,
        ospf_compatible_rfc1583_cmd,
        "compatible rfc1583",
@@ -2653,7 +2765,7 @@ DEFUN (show_ip_ospf,
   vty_out (vty, " SPF algorithm ");
   if (ospf->ts_spf.tv_sec || ospf->ts_spf.tv_usec)
     {
-      result = tv_sub (recent_time, ospf->ts_spf);
+      result = tv_sub (recent_relative_time (), ospf->ts_spf);
       vty_out (vty, "last executed %s ago%s",
                ospf_timeval_dump (&result, timebuf, sizeof (timebuf)),
                VTY_NEWLINE);
@@ -2688,8 +2800,18 @@ DEFUN (show_ip_ospf,
 	   ospf_lsdb_checksum (ospf->lsdb, OSPF_OPAQUE_AS_LSA), VTY_NEWLINE);
 #endif /* HAVE_OPAQUE_LSA */
   /* Show number of areas attached. */
-  vty_out (vty, " Number of areas attached to this router: %d%s%s",
-           listcount (ospf->areas), VTY_NEWLINE, VTY_NEWLINE);
+  vty_out (vty, " Number of areas attached to this router: %d%s",
+           listcount (ospf->areas), VTY_NEWLINE);
+
+  if (CHECK_FLAG(ospf->config, OSPF_LOG_ADJACENCY_CHANGES))
+    {
+      if (CHECK_FLAG(ospf->config, OSPF_LOG_ADJACENCY_DETAIL))
+	vty_out(vty, " All adjacency changes are logged%s",VTY_NEWLINE);
+      else
+	vty_out(vty, " Adjacency changes are logged%s",VTY_NEWLINE);
+    }
+
+  vty_out (vty, "%s",VTY_NEWLINE);
 
   /* Show each area status. */
   for (ALL_LIST_ELEMENTS (ospf->areas, node, nnode, area))
@@ -2743,8 +2865,8 @@ show_ip_ospf_interface_sub (struct vty *vty, struct ospf *ospf,
           struct in_addr *dest;
           const char *dstr;
           
-          if ((ifp->flags & IFF_POINTOPOINT)
-              || oi->type == OSPF_IFTYPE_VIRTUALLINK)
+	  if (CONNECTED_PEER(oi->connected)
+	      || oi->type == OSPF_IFTYPE_VIRTUALLINK)
             dstr = "Peer";
           else
             dstr = "Broadcast";
@@ -2811,12 +2933,15 @@ show_ip_ospf_interface_sub (struct vty *vty, struct ospf *ospf,
 	}
 
       vty_out (vty, "  Multicast group memberships:");
-      if (CHECK_FLAG(oi->multicast_memberships, MEMBER_ALLROUTERS))
-        vty_out (vty, " OSPFAllRouters");
-      if (CHECK_FLAG(oi->multicast_memberships, MEMBER_DROUTERS))
-        vty_out (vty, " OSPFDesignatedRouters");
-      if (!CHECK_FLAG(oi->multicast_memberships,
-		      MEMBER_ALLROUTERS|MEMBER_DROUTERS))
+      if (OI_MEMBER_CHECK(oi, MEMBER_ALLROUTERS)
+          || OI_MEMBER_CHECK(oi, MEMBER_DROUTERS))
+        {
+          if (OI_MEMBER_CHECK(oi, MEMBER_ALLROUTERS))
+            vty_out (vty, " OSPFAllRouters");
+          if (OI_MEMBER_CHECK(oi, MEMBER_DROUTERS))
+            vty_out (vty, " OSPFDesignatedRouters");
+        }
+      else
         vty_out (vty, " <None>");
       vty_out (vty, "%s", VTY_NEWLINE);
 
@@ -2832,14 +2957,14 @@ show_ip_ospf_interface_sub (struct vty *vty, struct ospf *ospf,
 	       OSPF_IF_PARAM (oi, retransmit_interval),
 	       VTY_NEWLINE);
       
-      if (OSPF_IF_PARAM (oi, passive_interface) == OSPF_IF_ACTIVE)
+      if (OSPF_IF_PASSIVE_STATUS (oi) == OSPF_IF_ACTIVE)
         {
 	  char timebuf[OSPF_TIME_DUMP_SIZE];
 	  vty_out (vty, "    Hello due in %s%s",
 		   ospf_timer_dump (oi->t_hello, timebuf, sizeof(timebuf)), 
 		   VTY_NEWLINE);
         }
-      else /* OSPF_IF_PASSIVE is set */
+      else /* passive-interface is set */
 	vty_out (vty, "    No Hellos (Passive interface)%s", VTY_NEWLINE);
       
       vty_out (vty, "  Neighbor Count is %d, Adjacent neighbor count is %d%s",
@@ -3104,7 +3229,25 @@ show_ip_ospf_neighbor_detail_sub (struct vty *vty, struct ospf_interface *oi,
 	   nbr->priority, LOOKUP (ospf_nsm_state_msg, nbr->state));
   /* Show state changes. */
   vty_out (vty, " %d state changes%s", nbr->state_change, VTY_NEWLINE);
-
+  if (nbr->ts_last_progress.tv_sec || nbr->ts_last_progress.tv_usec)
+    {
+      struct timeval res
+        = tv_sub (recent_relative_time (), nbr->ts_last_progress);
+      vty_out (vty, "    Most recent state change statistics:%s",
+               VTY_NEWLINE);
+      vty_out (vty, "      Progressive change %s ago%s",
+               ospf_timeval_dump (&res, timebuf, sizeof(timebuf)),
+               VTY_NEWLINE);
+    }
+  if (nbr->ts_last_regress.tv_sec || nbr->ts_last_regress.tv_usec)
+    {
+      struct timeval res
+        = tv_sub (recent_relative_time (), nbr->ts_last_regress);
+      vty_out (vty, "      Regressive change %s ago, due to %s%s",
+               ospf_timeval_dump (&res, timebuf, sizeof(timebuf)),
+               (nbr->last_regress_str ? nbr->last_regress_str : "??"),
+               VTY_NEWLINE);
+    }
   /* Show Designated Rotuer ID. */
   vty_out (vty, "    DR is %s,", inet_ntoa (nbr->d_router));
   /* Show Backup Designated Rotuer ID. */
@@ -3171,12 +3314,8 @@ DEFUN (show_ip_ospf_neighbor_id,
 
   for (ALL_LIST_ELEMENTS_RO (ospf->oiflist, node, oi))
     if ((nbr = ospf_nbr_lookup_by_routerid (oi->nbrs, &router_id)))
-      {
-        show_ip_ospf_neighbor_detail_sub (vty, oi, nbr);
-        return CMD_SUCCESS;
-      }
+      show_ip_ospf_neighbor_detail_sub (vty, oi, nbr);
 
-  /* Nothing to show. */
   return CMD_SUCCESS;
 }
 
@@ -5571,13 +5710,10 @@ ALIAS (no_ip_ospf_transmit_delay,
 
 DEFUN (ospf_redistribute_source_metric_type,
        ospf_redistribute_source_metric_type_routemap_cmd,
-       "redistribute (kernel|connected|static|rip|bgp) metric <0-16777214> metric-type (1|2) route-map WORD",
-       "Redistribute information from another routing protocol\n"
-       "Kernel routes\n"
-       "Connected\n"
-       "Static routes\n"
-       "Routing Information Protocol (RIP)\n"
-       "Border Gateway Protocol (BGP)\n"
+       "redistribute " QUAGGA_REDIST_STR_OSPFD 
+         " metric <0-16777214> metric-type (1|2) route-map WORD",
+       REDIST_STR
+       QUAGGA_REDIST_HELP_STR_OSPFD
        "Metric for redistributed routes\n"
        "OSPF default metric\n"
        "OSPF exterior metric type for redistributed routes\n"
@@ -5615,13 +5751,10 @@ DEFUN (ospf_redistribute_source_metric_type,
 
 ALIAS (ospf_redistribute_source_metric_type,
        ospf_redistribute_source_metric_type_cmd,
-       "redistribute (kernel|connected|static|rip|bgp) metric <0-16777214> metric-type (1|2)",
-       "Redistribute information from another routing protocol\n"
-       "Kernel routes\n"
-       "Connected\n"
-       "Static routes\n"
-       "Routing Information Protocol (RIP)\n"
-       "Border Gateway Protocol (BGP)\n"
+       "redistribute " QUAGGA_REDIST_STR_OSPFD 
+       " metric <0-16777214> metric-type (1|2)",
+       REDIST_STR
+       QUAGGA_REDIST_HELP_STR_OSPFD
        "Metric for redistributed routes\n"
        "OSPF default metric\n"
        "OSPF exterior metric type for redistributed routes\n"
@@ -5630,25 +5763,18 @@ ALIAS (ospf_redistribute_source_metric_type,
 
 ALIAS (ospf_redistribute_source_metric_type,
        ospf_redistribute_source_metric_cmd,
-       "redistribute (kernel|connected|static|rip|bgp) metric <0-16777214>",
-       "Redistribute information from another routing protocol\n"
-       "Kernel routes\n"
-       "Connected\n"
-       "Static routes\n"
-       "Routing Information Protocol (RIP)\n"
-       "Border Gateway Protocol (BGP)\n"
+       "redistribute " QUAGGA_REDIST_STR_OSPFD " metric <0-16777214>",
+       REDIST_STR
+       QUAGGA_REDIST_HELP_STR_OSPFD
        "Metric for redistributed routes\n"
        "OSPF default metric\n")
 
 DEFUN (ospf_redistribute_source_type_metric,
        ospf_redistribute_source_type_metric_routemap_cmd,
-       "redistribute (kernel|connected|static|rip|bgp) metric-type (1|2) metric <0-16777214> route-map WORD",
-       "Redistribute information from another routing protocol\n"
-       "Kernel routes\n"
-       "Connected\n"
-       "Static routes\n"
-       "Routing Information Protocol (RIP)\n"
-       "Border Gateway Protocol (BGP)\n"
+       "redistribute " QUAGGA_REDIST_STR_OSPFD 
+         " metric-type (1|2) metric <0-16777214> route-map WORD",
+       REDIST_STR
+       QUAGGA_REDIST_HELP_STR_OSPFD
        "OSPF exterior metric type for redistributed routes\n"
        "Set OSPF External Type 1 metrics\n"
        "Set OSPF External Type 2 metrics\n"
@@ -5686,13 +5812,10 @@ DEFUN (ospf_redistribute_source_type_metric,
 
 ALIAS (ospf_redistribute_source_type_metric,
        ospf_redistribute_source_type_metric_cmd,
-       "redistribute (kernel|connected|static|rip|bgp) metric-type (1|2) metric <0-16777214>",
-       "Redistribute information from another routing protocol\n"
-       "Kernel routes\n"
-       "Connected\n"
-       "Static routes\n"
-       "Routing Information Protocol (RIP)\n"
-       "Border Gateway Protocol (BGP)\n"
+       "redistribute " QUAGGA_REDIST_STR_OSPFD 
+         " metric-type (1|2) metric <0-16777214>",
+       REDIST_STR
+       QUAGGA_REDIST_HELP_STR_OSPFD
        "OSPF exterior metric type for redistributed routes\n"
        "Set OSPF External Type 1 metrics\n"
        "Set OSPF External Type 2 metrics\n"
@@ -5701,36 +5824,25 @@ ALIAS (ospf_redistribute_source_type_metric,
 
 ALIAS (ospf_redistribute_source_type_metric,
        ospf_redistribute_source_type_cmd,
-       "redistribute (kernel|connected|static|rip|bgp) metric-type (1|2)",
-       "Redistribute information from another routing protocol\n"
-       "Kernel routes\n"
-       "Connected\n"
-       "Static routes\n"
-       "Routing Information Protocol (RIP)\n"
-       "Border Gateway Protocol (BGP)\n"
+       "redistribute " QUAGGA_REDIST_STR_OSPFD " metric-type (1|2)",
+       REDIST_STR
+       QUAGGA_REDIST_HELP_STR_OSPFD
        "OSPF exterior metric type for redistributed routes\n"
        "Set OSPF External Type 1 metrics\n"
        "Set OSPF External Type 2 metrics\n")
 
 ALIAS (ospf_redistribute_source_type_metric,
        ospf_redistribute_source_cmd,
-       "redistribute (kernel|connected|static|rip|bgp)",
-       "Redistribute information from another routing protocol\n"
-       "Kernel routes\n"
-       "Connected\n"
-       "Static routes\n"
-       "Routing Information Protocol (RIP)\n"
-       "Border Gateway Protocol (BGP)\n")
+       "redistribute " QUAGGA_REDIST_STR_OSPFD,
+       REDIST_STR
+       QUAGGA_REDIST_HELP_STR_OSPFD)
 
 DEFUN (ospf_redistribute_source_metric_routemap,
        ospf_redistribute_source_metric_routemap_cmd,
-       "redistribute (kernel|connected|static|rip|bgp) metric <0-16777214> route-map WORD",
-       "Redistribute information from another routing protocol\n"
-       "Kernel routes\n"
-       "Connected\n"
-       "Static routes\n"
-       "Routing Information Protocol (RIP)\n"
-       "Border Gateway Protocol (BGP)\n"
+       "redistribute " QUAGGA_REDIST_STR_OSPFD 
+         " metric <0-16777214> route-map WORD",
+       REDIST_STR
+       QUAGGA_REDIST_HELP_STR_OSPFD
        "Metric for redistributed routes\n"
        "OSPF default metric\n"
        "Route map reference\n"
@@ -5759,13 +5871,10 @@ DEFUN (ospf_redistribute_source_metric_routemap,
 
 DEFUN (ospf_redistribute_source_type_routemap,
        ospf_redistribute_source_type_routemap_cmd,
-       "redistribute (kernel|connected|static|rip|bgp) metric-type (1|2) route-map WORD",
-       "Redistribute information from another routing protocol\n"
-       "Kernel routes\n"
-       "Connected\n"
-       "Static routes\n"
-       "Routing Information Protocol (RIP)\n"
-       "Border Gateway Protocol (BGP)\n"
+       "redistribute " QUAGGA_REDIST_STR_OSPFD 
+         " metric-type (1|2) route-map WORD",
+       REDIST_STR
+       QUAGGA_REDIST_HELP_STR_OSPFD
        "OSPF exterior metric type for redistributed routes\n"
        "Set OSPF External Type 1 metrics\n"
        "Set OSPF External Type 2 metrics\n"
@@ -5795,13 +5904,9 @@ DEFUN (ospf_redistribute_source_type_routemap,
 
 DEFUN (ospf_redistribute_source_routemap,
        ospf_redistribute_source_routemap_cmd,
-       "redistribute (kernel|connected|static|rip|bgp) route-map WORD",
-       "Redistribute information from another routing protocol\n"
-       "Kernel routes\n"
-       "Connected\n"
-       "Static routes\n"
-       "Routing Information Protocol (RIP)\n"
-       "Border Gateway Protocol (BGP)\n"
+       "redistribute " QUAGGA_REDIST_STR_OSPFD " route-map WORD",
+       REDIST_STR
+       QUAGGA_REDIST_HELP_STR_OSPFD
        "Route map reference\n"
        "Pointer to route-map entries\n")
 {
@@ -5822,14 +5927,10 @@ DEFUN (ospf_redistribute_source_routemap,
 
 DEFUN (no_ospf_redistribute_source,
        no_ospf_redistribute_source_cmd,
-       "no redistribute (kernel|connected|static|rip|bgp)",
+       "no redistribute " QUAGGA_REDIST_STR_OSPFD,
        NO_STR
-       "Redistribute information from another routing protocol\n"
-       "Kernel routes\n"
-       "Connected\n"
-       "Static routes\n"
-       "Routing Information Protocol (RIP)\n"
-       "Border Gateway Protocol (BGP)\n")
+       REDIST_STR
+       QUAGGA_REDIST_HELP_STR_OSPFD)
 {
   struct ospf *ospf = vty->index;
   int source;
@@ -5843,15 +5944,11 @@ DEFUN (no_ospf_redistribute_source,
 
 DEFUN (ospf_distribute_list_out,
        ospf_distribute_list_out_cmd,
-       "distribute-list WORD out (kernel|connected|static|rip|bgp)",
+       "distribute-list WORD out " QUAGGA_REDIST_STR_OSPFD,
        "Filter networks in routing updates\n"
        "Access-list name\n"
        OUT_STR
-       "Kernel routes\n"
-       "Connected\n"
-       "Static routes\n"
-       "Routing Information Protocol (RIP)\n"
-       "Border Gateway Protocol (BGP)\n")
+       QUAGGA_REDIST_HELP_STR_OSPFD)
 {
   struct ospf *ospf = vty->index;
   int source;
@@ -5865,16 +5962,12 @@ DEFUN (ospf_distribute_list_out,
 
 DEFUN (no_ospf_distribute_list_out,
        no_ospf_distribute_list_out_cmd,
-       "no distribute-list WORD out (kernel|connected|static|rip|bgp)",
+       "no distribute-list WORD out " QUAGGA_REDIST_STR_OSPFD,
        NO_STR
        "Filter networks in routing updates\n"
        "Access-list name\n"
        OUT_STR
-       "Kernel routes\n"
-       "Connected\n"
-       "Static routes\n"
-       "Routing Information Protocol (RIP)\n"
-       "Border Gateway Protocol (BGP)\n")
+       QUAGGA_REDIST_HELP_STR_OSPFD)
 {
   struct ospf *ospf = vty->index;
   int source;
@@ -7807,6 +7900,15 @@ ospf_config_write (struct vty *vty)
         vty_out (vty, " ospf abr-type %s%s", 
                  ospf_abr_type_str[ospf->abr_type], VTY_NEWLINE);
 
+      /* log-adjacency-changes flag print. */
+      if (CHECK_FLAG(ospf->config, OSPF_LOG_ADJACENCY_CHANGES))
+	{
+	  vty_out(vty, " log-adjacency-changes");
+	  if (CHECK_FLAG(ospf->config, OSPF_LOG_ADJACENCY_DETAIL))
+	    vty_out(vty, " detail");
+	  vty_out(vty, "%s", VTY_NEWLINE);
+	}
+
       /* RFC1583 compatibility flag print -- Compatible with CISCO 12.1. */
       if (CHECK_FLAG (ospf->config, OSPF_RFC1583_COMPATIBLE))
 	vty_out (vty, " compatible rfc1583%s", VTY_NEWLINE);
@@ -7840,17 +7942,36 @@ ospf_config_write (struct vty *vty)
       config_write_ospf_redistribute (vty, ospf);
 
       /* passive-interface print. */
+      if (ospf->passive_interface_default == OSPF_IF_PASSIVE)
+        vty_out (vty, " passive-interface default%s", VTY_NEWLINE);
+      
       for (ALL_LIST_ELEMENTS_RO (om->iflist, node, ifp))
-        if (IF_DEF_PARAMS (ifp)->passive_interface == OSPF_IF_PASSIVE)
-          vty_out (vty, " passive-interface %s%s",
-                   ifp->name, VTY_NEWLINE);
-
+        if (OSPF_IF_PARAM_CONFIGURED (IF_DEF_PARAMS (ifp), passive_interface)
+            && IF_DEF_PARAMS (ifp)->passive_interface != 
+                              ospf->passive_interface_default)
+          {
+            vty_out (vty, " %spassive-interface %s%s",
+                     IF_DEF_PARAMS (ifp)->passive_interface ? "" : "no ",
+                     ifp->name, VTY_NEWLINE);
+          }
       for (ALL_LIST_ELEMENTS_RO (ospf->oiflist, node, oi))
-        if (OSPF_IF_PARAM_CONFIGURED (oi->params, passive_interface) &&
-            oi->params->passive_interface == OSPF_IF_PASSIVE)
-          vty_out (vty, " passive-interface %s %s%s",
+        {
+          if (!OSPF_IF_PARAM_CONFIGURED (oi->params, passive_interface))
+            continue;
+          if (OSPF_IF_PARAM_CONFIGURED (IF_DEF_PARAMS (oi->ifp),
+                                        passive_interface))
+            {
+              if (oi->params->passive_interface == IF_DEF_PARAMS (oi->ifp)->passive_interface)
+                continue;
+            }
+          else if (oi->params->passive_interface == ospf->passive_interface_default)
+            continue;
+          
+          vty_out (vty, " %spassive-interface %s %s%s",
+                   oi->params->passive_interface ? "" : "no ",
                    oi->ifp->name,
                    inet_ntoa (oi->address->u.prefix4), VTY_NEWLINE);
+        }
       
       /* Network area print. */
       config_write_network_area (vty, ospf);
@@ -8171,12 +8292,20 @@ ospf_vty_init (void)
   /* "passive-interface" commands. */
   install_element (OSPF_NODE, &ospf_passive_interface_addr_cmd);
   install_element (OSPF_NODE, &ospf_passive_interface_cmd);
+  install_element (OSPF_NODE, &ospf_passive_interface_default_cmd);
   install_element (OSPF_NODE, &no_ospf_passive_interface_addr_cmd);
   install_element (OSPF_NODE, &no_ospf_passive_interface_cmd);
+  install_element (OSPF_NODE, &no_ospf_passive_interface_default_cmd);
 
   /* "ospf abr-type" commands. */
   install_element (OSPF_NODE, &ospf_abr_type_cmd);
   install_element (OSPF_NODE, &no_ospf_abr_type_cmd);
+
+  /* "ospf log-adjacency-changes" commands. */
+  install_element (OSPF_NODE, &ospf_log_adjacency_changes_cmd);
+  install_element (OSPF_NODE, &ospf_log_adjacency_changes_detail_cmd);
+  install_element (OSPF_NODE, &no_ospf_log_adjacency_changes_cmd);
+  install_element (OSPF_NODE, &no_ospf_log_adjacency_changes_detail_cmd);
 
   /* "ospf rfc1583-compatible" commands. */
   install_element (OSPF_NODE, &ospf_rfc1583_flag_cmd);

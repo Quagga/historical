@@ -66,32 +66,88 @@ const char *zlog_priority[] =
 
 
 /* For time string format. */
-#define TIME_BUF 27
+
+size_t
+quagga_timestamp(int timestamp_precision, char *buf, size_t buflen)
+{
+  static struct {
+    time_t last;
+    size_t len;
+    char buf[28];
+  } cache;
+  struct timeval clock;
+
+  /* would it be sufficient to use global 'recent_time' here?  I fear not... */
+  gettimeofday(&clock, NULL);
+
+  /* first, we update the cache if the time has changed */
+  if (cache.last != clock.tv_sec)
+    {
+      struct tm *tm;
+      cache.last = clock.tv_sec;
+      tm = localtime(&cache.last);
+      cache.len = strftime(cache.buf, sizeof(cache.buf),
+      			   "%Y/%m/%d %H:%M:%S", tm);
+    }
+  /* note: it's not worth caching the subsecond part, because
+     chances are that back-to-back calls are not sufficiently close together
+     for the clock not to have ticked forward */
+
+  if (buflen > cache.len)
+    {
+      memcpy(buf, cache.buf, cache.len);
+      if ((timestamp_precision > 0) &&
+	  (buflen > cache.len+1+timestamp_precision))
+	{
+	  /* should we worry about locale issues? */
+	  static const int divisor[] = {0, 100000, 10000, 1000, 100, 10, 1};
+	  int prec;
+	  char *p = buf+cache.len+1+(prec = timestamp_precision);
+	  *p-- = '\0';
+	  while (prec > 6)
+	    /* this is unlikely to happen, but protect anyway */
+	    {
+	      *p-- = '0';
+	      prec--;
+	    }
+	  clock.tv_usec /= divisor[prec];
+	  do
+	    {
+	      *p-- = '0'+(clock.tv_usec % 10);
+	      clock.tv_usec /= 10;
+	    }
+	  while (--prec > 0);
+	  *p = '.';
+	  return cache.len+1+timestamp_precision;
+	}
+      buf[cache.len] = '\0';
+      return cache.len;
+    }
+  if (buflen > 0)
+    buf[0] = '\0';
+  return 0;
+}
 
 /* Utility routine for current time printing. */
 static void
-time_print (FILE *fp)
+time_print(FILE *fp, struct timestamp_control *ctl)
 {
-  int ret;
-  char buf [TIME_BUF];
-  time_t clock;
-  struct tm *tm;
-  
-  time (&clock);
-  tm = localtime (&clock);
-
-  ret = strftime (buf, TIME_BUF, "%Y/%m/%d %H:%M:%S", tm);
-  if (ret == 0) {
-    zlog_warn ("strftime error");
-  }
-
-  fprintf (fp, "%s ", buf);
+  if (!ctl->already_rendered)
+    {
+      ctl->len = quagga_timestamp(ctl->precision, ctl->buf, sizeof(ctl->buf));
+      ctl->already_rendered = 1;
+    }
+  fprintf(fp, "%s ", ctl->buf);
 }
+  
 
 /* va_list version of zlog. */
 static void
 vzlog (struct zlog *zl, int priority, const char *format, va_list args)
 {
+  struct timestamp_control tsctl;
+  tsctl.already_rendered = 0;
+
   /* If zlog is not specified, use default one. */
   if (zl == NULL)
     zl = zlog_default;
@@ -99,7 +155,8 @@ vzlog (struct zlog *zl, int priority, const char *format, va_list args)
   /* When zlog_default is also NULL, use stderr for logging. */
   if (zl == NULL)
     {
-      time_print (stderr);
+      tsctl.precision = 0;
+      time_print(stderr, &tsctl);
       fprintf (stderr, "%s: ", "unknown");
       vfprintf (stderr, format, args);
       fprintf (stderr, "\n");
@@ -108,6 +165,7 @@ vzlog (struct zlog *zl, int priority, const char *format, va_list args)
       /* In this case we return at here. */
       return;
     }
+  tsctl.precision = zl->timestamp_precision;
 
   /* Syslog output */
   if (priority <= zl->maxlvl[ZLOG_DEST_SYSLOG])
@@ -122,7 +180,7 @@ vzlog (struct zlog *zl, int priority, const char *format, va_list args)
   if ((priority <= zl->maxlvl[ZLOG_DEST_FILE]) && zl->fp)
     {
       va_list ac;
-      time_print (zl->fp);
+      time_print (zl->fp, &tsctl);
       if (zl->record_priority)
 	fprintf (zl->fp, "%s: ", zlog_priority[priority]);
       fprintf (zl->fp, "%s: ", zlog_proto_names[zl->protocol]);
@@ -137,7 +195,7 @@ vzlog (struct zlog *zl, int priority, const char *format, va_list args)
   if (priority <= zl->maxlvl[ZLOG_DEST_STDOUT])
     {
       va_list ac;
-      time_print (stdout);
+      time_print (stdout, &tsctl);
       if (zl->record_priority)
 	fprintf (stdout, "%s: ", zlog_priority[priority]);
       fprintf (stdout, "%s: ", zlog_proto_names[zl->protocol]);
@@ -151,7 +209,7 @@ vzlog (struct zlog *zl, int priority, const char *format, va_list args)
   /* Terminal monitor. */
   if (priority <= zl->maxlvl[ZLOG_DEST_MONITOR])
     vty_log ((zl->record_priority ? zlog_priority[priority] : NULL),
-	     zlog_proto_names[zl->protocol], format, args);
+	     zlog_proto_names[zl->protocol], format, &tsctl, args);
 }
 
 static char *
@@ -458,8 +516,8 @@ zlog_backtrace(int priority)
       ((size_t)size > sizeof(array)/sizeof(array[0])))
     {
       zlog_err("Cannot get backtrace, returned invalid # of frames %d "
-	       "(valid range is between 1 and %u)",
-	       size, sizeof(array)/sizeof(array[0]));
+	       "(valid range is between 1 and %lu)",
+	       size, (unsigned long)(sizeof(array)/sizeof(array[0])));
       return;
     }
   zlog(NULL, priority, "Backtrace for %d stack frames:", size);
@@ -693,17 +751,32 @@ lookup (struct message *mes, int key)
   return "";
 }
 
-/* Very old hacky version of message lookup function.  Still partly
-   used in bgpd and ospfd. FIXME Seems that it's not used any more. */
+/* Older/faster version of message lookup function, but requires caller to pass
+   in the array size (instead of relying on a 0 key to terminate the search). */
 const char *
 mes_lookup (struct message *meslist, int max, int index)
 {
-  if (index < 0 || index >= max) 
-    {
-      zlog_err ("message index out of bound: %d", max);
-      return NULL;
-    }
-  return meslist[index].str;
+  /* first check for best case: index is in range and matches the key
+     value in that slot */
+  if ((index >= 0) && (index < max) && (meslist[index].key == index))
+    return meslist[index].str;
+
+  /* fall back to linear search */
+  {
+    int i;
+
+    for (i = 0; i < max; i++, meslist++)
+      {
+	if (meslist->key == index)
+	  {
+	    zlog_warn("message index %d [%s] found in position %d (max is %d)",
+		      index, meslist->str, i, max);
+	    return meslist->str;
+	  }
+      }
+  }
+  zlog_err("message index %d not found (max is %d)", index, max);
+  return NULL;
 }
 
 /* Wrapper around strerror to handle case where it returns NULL. */

@@ -123,8 +123,8 @@ ifstat_dev_fields (int version, char *buf, struct interface *ifp)
 }
 
 /* Update interface's statistics. */
-int
-ifstat_update_proc ()
+void
+ifstat_update_proc (void)
 {
   FILE *fp;
   char buf[PROCBUFSIZ];
@@ -139,7 +139,7 @@ ifstat_update_proc ()
     {
       zlog_warn ("Can't open proc file %s: %s",
 		 _PATH_PROC_NET_DEV, safe_strerror (errno));
-      return -1;
+      return;
     }
 
   /* Drop header lines. */
@@ -162,7 +162,7 @@ ifstat_update_proc ()
       ifstat_dev_fields (version, stat, ifp);
     }
   fclose(fp);
-  return 0;
+  return;
 }
 
 /* Interface structure allocation by proc filesystem. */
@@ -240,7 +240,7 @@ ifaddr_proc_ipv6 ()
       str2in6_addr (addr, &p.prefix);
       p.prefixlen = plen;
 
-      connected_add_ipv6 (ifp, &p.prefix, p.prefixlen, NULL, ifname);
+      connected_add_ipv6 (ifp, 0, &p.prefix, p.prefixlen, NULL, ifname);
     }
   fclose (fp);
   return 0;

@@ -2,7 +2,7 @@ Makefile
 Makefile.in
 mdate-sh
 draft-zebra-00.txt
-zebra.info-*
+quagga.info-*
 zebra.html
 defines.texi
 version.texi
@@ -29,3 +29,5 @@ stamp-vti
 *.vr
 .arch-inventory
 .arch-ids
+*~
+*.loT

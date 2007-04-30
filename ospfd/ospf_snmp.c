@@ -50,6 +50,7 @@
 #include "ospfd/ospf_nsm.h"
 #include "ospfd/ospf_flood.h"
 #include "ospfd/ospf_ism.h"
+#include "ospfd/ospf_dump.h"
 
 /* OSPF2-MIB. */
 #define OSPF2MIB 1,3,6,1,2,1,14
@@ -1438,10 +1439,7 @@ ospf_snmp_if_update (struct interface *ifp)
   /* Lookup first IPv4 address entry. */
   for (ALL_LIST_ELEMENTS_RO (ifp->connected, node, ifc))
     {
-      if (CONNECTED_POINTOPOINT_HOST(ifc))
-	p = ifc->destination;
-      else
-	p = ifc->address;
+      p = CONNECTED_ID(ifc);
 
       if (p->family == AF_INET)
 	{
@@ -1491,19 +1489,13 @@ ospf_snmp_if_update (struct interface *ifp)
 int
 ospf_snmp_is_if_have_addr (struct interface *ifp)
 {
-  struct prefix *p;
   struct listnode *nn;
   struct connected *ifc;
 
   /* Is this interface having any connected IPv4 address ? */
   for (ALL_LIST_ELEMENTS_RO (ifp->connected, nn, ifc))
   {
-    if (if_is_pointopoint (ifp))
-      p = ifc->destination;
-    else
-      p = ifc->address;
-
-    if (p->family == AF_INET)
+    if (CONNECTED_PREFIX(ifc)->family == AF_INET)
       return 1;
   }
   
@@ -2224,6 +2216,44 @@ ospfNbrLookup (struct variable *v, oid *name, size_t *length,
   return NULL;
 }
 
+/* map internal quagga neighbor states to official MIB values:
+
+ospfNbrState OBJECT-TYPE
+        SYNTAX   INTEGER    {
+                    down (1),
+                    attempt (2),
+                    init (3),
+                    twoWay (4),
+                    exchangeStart (5),
+                    exchange (6),
+                    loading (7),
+                    full (8)
+                  }
+*/
+static int32_t
+ospf_snmp_neighbor_state(u_char nst)
+{
+  switch (nst)
+    {
+    case NSM_Attempt:
+      return 2;
+    case NSM_Init:
+      return 3;
+    case NSM_TwoWay:
+      return 4;
+    case NSM_ExStart:
+      return 5;
+    case NSM_Exchange:
+      return 6;
+    case NSM_Loading:
+      return 7;
+    case NSM_Full:
+      return 8;
+    default:
+      return 1; /* down */
+    }
+}
+
 static u_char *
 ospfNbrEntry (struct variable *v, oid *name, size_t *length, int exact,
 	      size_t  *var_len, WriteMethod **write_method)
@@ -2262,7 +2292,7 @@ ospfNbrEntry (struct variable *v, oid *name, size_t *length, int exact,
       return SNMP_INTEGER (nbr->priority);
       break;
     case OSPFNBRSTATE:
-      return SNMP_INTEGER (nbr->state);
+      return SNMP_INTEGER (ospf_snmp_neighbor_state(nbr->state));
       break;
     case OSPFNBREVENTS:
       return SNMP_INTEGER (nbr->state_change);
@@ -2565,8 +2595,11 @@ void
 ospfTrapNbrStateChange (struct ospf_neighbor *on)
 {
   oid index[sizeof (oid) * (IN_ADDR_SIZE + 1)];
+  char msgbuf[16];
   
-  zlog (NULL, LOG_INFO, "ospfTrapNbrStateChange trap sent");
+  ospf_nbr_state_message(on, msgbuf, sizeof(msgbuf));
+  zlog (NULL, LOG_INFO, "ospfTrapNbrStateChange trap sent: %s now %s",
+	inet_ntoa(on->address.u.prefix4), msgbuf);
 
   oid_copy_addr (index, &(on->address.u.prefix4), IN_ADDR_SIZE);
   index[IN_ADDR_SIZE] = 0;
@@ -2600,7 +2633,9 @@ ospfTrapIfStateChange (struct ospf_interface *oi)
 {
   oid index[sizeof (oid) * (IN_ADDR_SIZE + 1)];
 
-  zlog (NULL, LOG_INFO, "ospfTrapIfStateChange trap sent");
+  zlog (NULL, LOG_INFO, "ospfTrapIfStateChange trap sent: %s now %s",
+  	inet_ntoa(oi->address->u.prefix4),
+	LOOKUP(ospf_ism_state_msg, oi->state));
   
   oid_copy_addr (index, &(oi->address->u.prefix4), IN_ADDR_SIZE);
   index[IN_ADDR_SIZE] = 0;

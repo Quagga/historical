@@ -478,11 +478,11 @@ bgp_scan (afi_t afi, safi_t safi)
 		    {
 		      bgp_aggregate_decrement (bgp, &rn->p, bi,
 					       afi, SAFI_UNICAST);
-		      UNSET_FLAG (bi->flags, BGP_INFO_VALID);
+		      bgp_info_unset_flag (rn, bi, BGP_INFO_VALID);
 		    }
 		  else
 		    {
-		      SET_FLAG (bi->flags, BGP_INFO_VALID);
+		      bgp_info_set_flag (rn, bi, BGP_INFO_VALID);
 		      bgp_aggregate_increment (bgp, &rn->p, bi,
 					       afi, SAFI_UNICAST);
 		    }
@@ -543,7 +543,6 @@ bgp_connected_add (struct connected *ifc)
 {
   struct prefix p;
   struct prefix *addr;
-  struct prefix *dest;
   struct interface *ifp;
   struct bgp_node *rn;
   struct bgp_connected_ref *bc;
@@ -557,19 +556,10 @@ bgp_connected_add (struct connected *ifc)
     return;
 
   addr = ifc->address;
-  dest = ifc->destination;
 
   if (addr->family == AF_INET)
     {
-      memset (&p, 0, sizeof (struct prefix));
-      p.family = AF_INET;
-      p.prefixlen = addr->prefixlen;
-
-      if (CONNECTED_POINTOPOINT_HOST(ifc))
-	p.u.prefix4 = dest->u.prefix4;
-      else
-	p.u.prefix4 = addr->u.prefix4;
-
+      PREFIX_COPY_IPV4(&p, CONNECTED_PREFIX(ifc));
       apply_mask_ipv4 ((struct prefix_ipv4 *) &p);
 
       if (prefix_ipv4_any ((struct prefix_ipv4 *) &p))
@@ -590,17 +580,9 @@ bgp_connected_add (struct connected *ifc)
 	}
     }
 #ifdef HAVE_IPV6
-  if (addr->family == AF_INET6)
+  else if (addr->family == AF_INET6)
     {
-      memset (&p, 0, sizeof (struct prefix));
-      p.family = AF_INET6;
-      p.prefixlen = addr->prefixlen;
-
-      if (if_is_pointopoint (ifp) && dest)
-	p.u.prefix6 = dest->u.prefix6;
-      else
-	p.u.prefix6 = addr->u.prefix6;
-
+      PREFIX_COPY_IPV6(&p, CONNECTED_PREFIX(ifc));
       apply_mask_ipv6 ((struct prefix_ipv6 *) &p);
 
       if (IN6_IS_ADDR_UNSPECIFIED (&p.u.prefix6))
@@ -631,7 +613,6 @@ bgp_connected_delete (struct connected *ifc)
 {
   struct prefix p;
   struct prefix *addr;
-  struct prefix *dest;
   struct interface *ifp;
   struct bgp_node *rn;
   struct bgp_connected_ref *bc;
@@ -642,19 +623,10 @@ bgp_connected_delete (struct connected *ifc)
     return;
 
   addr = ifc->address;
-  dest = ifc->destination;
 
   if (addr->family == AF_INET)
     {
-      memset (&p, 0, sizeof (struct prefix));
-      p.family = AF_INET;
-      p.prefixlen = addr->prefixlen;
-
-      if (CONNECTED_POINTOPOINT_HOST(ifc))
-	p.u.prefix4 = dest->u.prefix4;
-      else
-	p.u.prefix4 = addr->u.prefix4;
-
+      PREFIX_COPY_IPV4(&p, CONNECTED_PREFIX(ifc));
       apply_mask_ipv4 ((struct prefix_ipv4 *) &p);
 
       if (prefix_ipv4_any ((struct prefix_ipv4 *) &p))
@@ -677,15 +649,7 @@ bgp_connected_delete (struct connected *ifc)
 #ifdef HAVE_IPV6
   else if (addr->family == AF_INET6)
     {
-      memset (&p, 0, sizeof (struct prefix));
-      p.family = AF_INET6;
-      p.prefixlen = addr->prefixlen;
-
-      if (if_is_pointopoint (ifp) && dest)
-	p.u.prefix6 = dest->u.prefix6;
-      else
-	p.u.prefix6 = addr->u.prefix6;
-
+      PREFIX_COPY_IPV6(&p, CONNECTED_PREFIX(ifc));
       apply_mask_ipv6 ((struct prefix_ipv6 *) &p);
 
       if (IN6_IS_ADDR_UNSPECIFIED (&p.u.prefix6))

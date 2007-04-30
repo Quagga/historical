@@ -1,3 +1,215 @@
+2007-04-29 Paul Jakma <paul.jakma@sun.com>
+
+	* ioctl{_solaris,}.c: (if_get_mtu) Fix missing ; in last commit.
+	* if_ioctl_solaris.c: (if_get_index) Fix bogus argument passed
+	  to lifreq_set_name().
+
+2007-04-10 Paul Jakma <paul.jakma@sun.com>
+
+	* ioctl{_solaris,}.c: (if_get_mtu) Ping clients via
+          zebra_interface_up_update if MTU is changed.
+
+2007-04-08 Paul Jakma <paul.jakma@sun.com>
+
+	* {ioctl,kernel}_null.c: Install of IP address should
+	  reflect back to zebra via kernel_address_add..., makes
+	  testzebra more useful.
+	* interface.c: (if_delete_update) Address removal triggered
+	  by kernel shouldn't remove configured IPv4 address from connected
+	  list.
+
+2007-04-07 Paul Jakma <paul.jakma@sun.com>
+
+	* redistribute.c: (zebra_check_addr) Don't redistribute routes
+	  to IPv4 link-local prefixes, fixes bug #351.
+	* redistribute.h: Export zebra_check_addr.
+	* router-id.c: (router_id_bad_address) re-use zebra_check_addr
+	  rather than implementing similar logic.
+
+2007-03-06 Paul Jakma <paul.jakma@sun.com>
+
+	* kernel_socket.c: (ifam_read) Do not update interface metric on
+	  receipt of NEW/DEL ADDR messages, bogus as: a) some systems
+	  dont include iface metric for address events b) we didn't
+	  update clients either. Initial diagnosis by Eugene Grosbein.
+
+2007-02-26 Robert Olsson <Robert.Olsson@data.slu.se>
+
+	* irdp_main.c: (irdp_send_thread) Skip non-AF_INET addresses,
+	   i.e. do not try interpret IPv6 addresses as IPv4 addresses
+	   to broadcast in IRDP announcements..
+
+2006-12-13 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* if_ioctl_solaris.c: (if_get_addr) For IPv6, stop assuming
+	  that all IFF_POINTOPOINT have prefixlen of IPV6_MAX_BITLEN.
+	  Instead, always try the SIOCGLIFSUBNET ioctl; if that fails,
+	  then we fall back to IPV6_MAX_BITLEN for PtP interfaces.
+
+2006-12-12 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* connected.c: (connected_up_ipv4, connected_down_ipv4,
+	  connected_up_ipv6, connected_down_ipv6) Simplify logic using the
+	  new CONNECTED_PREFIX macro.
+	  (connected_add_ipv4) Set prefixlen in destination addresses (required
+	  by the CONNECTED_PREFIX macro).  Use CONNECTED_PEER macro instead
+	  of testing for IFF_POINTOPOINT.  Delete invalid warning message.
+	  Warn about cases where the ZEBRA_IFA_PEER is set but no
+	  destination address has been supplied (and turn off the flag).
+	  (connected_add_ipv6) Add new flags argument so callers may set
+	  the ZEBRA_IFA_PEER flag.  If peer/broadcast address satisfies
+	  IN6_IS_ADDR_UNSPECIFIED, then reject it with a warning.
+	  Set prefixlen in destination address so CONNECTED_PREFIX will work.
+	* connected.h: (connected_add_ipv6) Add new flags argument so
+	  callers may set the ZEBRA_IFA_PEER flag.
+	* interface.c: (connected_dump_vty) Use CONNECTED_PEER macro
+	  to decide whether the destination address is a peer or broadcast
+	  address (instead of checking IFF_BROADCAST and IFF_POINTOPOINT).
+	* if_ioctl.c: (if_getaddrs) Instead of setting a peer address
+	  only when the IFF_POINTOPOINT is set, we now accept a peer
+	  address whenever it is available and not the same as the local
+	  address.  Otherwise (no peer address assigned), we check
+	  for a broadcast address (regardless of the IFF_BROADCAST flag).
+	  And must now pass a flags value of ZEBRA_IFA_PEER to 
+	  connected_add_ipv4 when a peer address is assigned.
+	  The same new logic is used with the IPv6 code as well (and we
+	  pass the new flags argument to connected_add_ipv6).
+	  (if_get_addr) Do not bother to check IFF_POINTOPOINT: just
+	  issue the SIOCGIFDSTADDR ioctl and see if we get back
+	  a peer address not matching the local address (and set
+	  the ZEBRA_IFA_PEER in that case).  If there's no peer address,
+	  try to grab SIOCGIFBRDADDR regardless of whether IFF_BROADCAST is set.
+	* if_ioctl_solaris.c: (if_get_addr) Just try the SIOCGLIFDSTADDR ioctl
+	  without bothering to check the IFF_POINTOPOINT flag.  And if
+	  no peer address was found, just try the SIOCGLIFBRDADDR ioctl
+	  without checking the IFF_BROADCAST flag.  Call connected_add_ipv4
+	  and connected_add_ipv6 with appropriate flags.
+	* if_proc.c: (ifaddr_proc_ipv6) Must pass new flags argument to
+	  connected_add_ipv6.
+	* kernel_socket.c: (ifam_read) Must pass new flags argument to
+	  connected_add_ipv6.
+	* rt_netlink.c: (netlink_interface_addr) Copy logic from iproute2
+	  to determine local and possible peer address (so there's no longer
+	  a test for IFF_POINTOPOINT).  Set ZEBRA_IFA_PEER flag appropriately.
+	  Pass new flags argument to connected_add_ipv6.
+	  (netlink_address) Test !CONNECTED_PEER instead of if_is_broadcast
+	  to determine whether the connected destination address is a
+	  broadcast address.
+
+2006-12-08 Piotr Chytla <pch@packetconsulting.pl>
+
+	* zebra_rib.c: (static_install_ipv{4,6}) Case where existing
+	  RIB is updated must explicitely rib_addqueue the route_node,
+	  to ensure the update actually takes effect.
+
+2006-09-13 Tom Everett <tom@khubla.com>
+
+	* kernel_socket.c (rtm_type_str): ifdef RTM_OLD{ADD,DEL} to
+	compile on systems that no longer define them.
+
+2006-08-06 Paul Jakma <paul.jakma@sun.com>
+
+	* interface.h: (ifstat_update_proc) declaration should match
+	  ifstat_update_sysctl really, which is to not return status, as
+	  such status is not used anywhere.
+	* if_{proc,sysctl}.c: Make ifstat_update_* definitions and return values
+	  consistent with each other and their declarations, ie: 
+	  (void) (*) (void).
+	* rtadv.h: depends on interface.h, so should include it.
+
+2006-08-04 Paul Jakma <paul.jakma@sun.com>
+
+	* misc_null.c: Add ifstat_update_sysctl, add another required
+	  header.
+
+2006-08-02 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* misc_null.c: Must include header files to get older versions of gcc
+	  to process the #pragma statements properly.
+
+2006-08-01 Paul Jakma <paul.jakma@sun.com>
+
+	* irdp_main.c: (irdp_advertisement) free the stream here, when done,
+	  right under where it was allocated so it's blindingly obvious
+	  it's correct. This possibly fixes a very slow leak of streams in
+	  zebra.
+	* irdp_packet.c: (send_packet) don't free the stream here as
+	  it's hard to tell if right, plus an error case seemed to
+	  returning before free anyway.
+
+2006-07-27 Paul Jakma <paul.jakma@sun.com>
+
+	* {ioctl,kernel}_null.c: Dummy/Null kernel method implementations,
+	  useful for testing zebra code that calls such methods.
+	* {redistribute,misc}_null.c: Dummy/Null methods, as above. But
+	  for zclient, and for various misc functions.
+	* test_main.c: Test harness for zebra, currently just to test the
+	  RIB.
+	* Makefile.am: Build testzebra using above.
+	* debug.{c,h}: Add 'debug zebra rib' and 'debug zebra rib queue'.
+	* rib.h: (struct rib) Add a route_node rn_status flag field,
+	  this has to be copied every time head RIB of a route_node
+	  changes.
+	  Remove the rib lock field, not needed - see below. 
+	  Add a status field for RIB-private flags.
+	* zebra_rib.c: Add a global for the workqueue hold time, useful
+	  for testing.
+	  (general) Fix for bug #268. Problem originally detailed by
+	  Simon Bryden in [quagga-dev 4001].
+	  Essentially, add/delete of a RIB must happen /before/ the
+	  queue. Best-path selection (ie rib_process) and reaping of
+	  freed RIBs can then be done after queueing. Only the route_node
+	  is queued - no important RIB state (i.e. whether a RIB is to be
+	  deleted) is queued.
+	  (struct zebra_queue_node_t) Disappears, no longer need to
+	  track multiple things on the queue, only the route_node.
+	  (rib_{lock,unlock}) removed, RIBs no longer need to be
+	  refcounted, no longer queued.
+	  (rib_queue_qnode_del) Removed, deleted RIBs no longer deleted
+	  via the queue.
+	  (rib_queue_add_qnode) deleted
+	  (rib_queue_add) Only the route_node is queued for best-path
+	  selection, we can check whether it is already queued or
+	  not and avoid queueing same node twice - struct rib * argument
+	  is not needed.
+	  (rib_link/unlink) (un)link RIB from route_node.
+	  (rib_{add,del}node) Front-end to updates of a RIB.
+	  (rib_process) Reap any deleted RIBs via rib_unlink.
+	  Unset the route_node 'QUEUED' flag.
+	  (General) Remove calls to rib_queue_add where add/del node was
+	  called - not needed, update calls where not.
+	  Ignore RIB_ENTRY_REMOVEd ribs in loops through route_nodes
+
+2006-07-27 Rumen Svobodnikov <rumen@telecoms.bg>
+
+	* connected.c: (connected_up_ipv4) interface connected routes always
+	  go to table main (or otherwise they cannot be used by linux as
+          nexthops)
+	* zserv.c: (zread_ipv4_add) send route to the correct routing table
+	* zebra_rib.c (static_install_ipv4) set routing table
+
+2006-07-02 Paul Jakma <paul.jakma@sun.com>
+
+	* rt_netlink.c: (netlink_interface_addr) Fix CID #104, can not
+	  proceed if addr is NULL.
+	* zebra_rib.c: (static_add_ipv6) Fix CID #18, double check
+	  required arguments are supplied for the given nexthop type.
+	
+2006-06-15 Paul Jakma <paul.jakma@sun.com>
+
+	* interface.c: (if_flag_dump_vty) redundant code, remove.
+	  (if_dump_vty) use libzebra if_flag_dump.
+	  (ip_address_uninstall) Unset the configured flag.
+	* connected.c: (connected_same) new helper, check whether
+	  two connected are same.
+	  (connected_implicit_withdraw) new helper, consolidation of
+	  existing code in connected_add_ipv{4,6}.
+	  Try filter out unneeded Zserv address delete/adds when
+	  address is exact same.
+	  Where old address is implicitely removed, be sure to preserve
+	  the IFC_CONFIGURED flag if set, fixes bug where configured
+	  addresses were being lost on FreeBSD (Andrew Schorr).	  
+
 2006-05-21 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
 
 	* connected.c: (connected_withdraw) Do not delete the connected

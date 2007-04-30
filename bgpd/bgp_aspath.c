@@ -434,6 +434,26 @@ aspath_size (struct aspath *aspath)
   return size;
 }
 
+/* Return highest public ASN in path */
+as_t
+aspath_highest (struct aspath *aspath)
+{
+  struct assegment *seg = aspath->segments;
+  as_t highest = 0;
+  unsigned int i;
+  
+  while (seg)
+    {
+      for (i = 0; i < seg->length; i++)
+        if (seg->as[i] > highest
+            && (seg->as[i] < BGP_PRIVATE_AS_MIN
+                || seg->as[i] > BGP_PRIVATE_AS_MAX))
+	  highest = seg->as[i];
+      seg = seg->next;
+    }
+  return highest;
+}
+
 /* Convert aspath structure to string expression. */
 static char *
 aspath_make_str_count (struct aspath *as)
@@ -926,14 +946,14 @@ aspath_firstas_check (struct aspath *aspath, as_t asno)
   return 0;
 }
 
-/* AS path loop check.  If aspath contains asno then return 1. */
+/* AS path loop check.  If aspath contains asno then return >= 1. */
 int
 aspath_loop_check (struct aspath *aspath, as_t asno)
 {
   struct assegment *seg;
   int count = 0;
 
-  if ( (aspath == NULL) || (aspath->segments) )
+  if ( (aspath == NULL) || (aspath->segments == NULL) )
     return 0;
   
   seg = aspath->segments;
@@ -1223,13 +1243,13 @@ aspath_as_add (struct aspath *as, as_t asno)
 {
   struct assegment *seg = as->segments;
 
-  /* Last segment search procedure. */
-  while (seg && seg->next)
-    seg = seg->next;
-  
   if (!seg)
     return;
   
+  /* Last segment search procedure. */
+  while (seg->next)
+    seg = seg->next;
+
   assegment_append_asns (seg, &asno, 1);
 }
 
@@ -1240,13 +1260,14 @@ aspath_segment_add (struct aspath *as, int type)
   struct assegment *seg = as->segments;
   struct assegment *new = assegment_new (type, 0);
 
-  while (seg && seg->next)
-    seg = seg->next;
-  
-  if (seg == NULL)
-    as->segments = new;
+  if (seg)
+    {
+      while (seg->next)
+	seg = seg->next;
+      seg->next = new;
+    }
   else
-    seg->next = new;
+    as->segments = new;
 }
 
 struct aspath *
@@ -1363,7 +1384,7 @@ aspath_str2aspath (const char *str)
 {
   enum as_token token = as_token_unknown;
   u_short as_type;
-  u_short asno = NULL;
+  u_short asno = 0;
   struct aspath *aspath;
   int needtype;
 
@@ -1426,8 +1447,9 @@ aspath_str2aspath (const char *str)
 
 /* Make hash value by raw aspath data. */
 unsigned int
-aspath_key_make (struct aspath *aspath)
+aspath_key_make (void *p)
 {
+  struct aspath * aspath = (struct aspath *) p;
   unsigned int key = 0;
   unsigned int i;
   struct assegment *seg = aspath->segments;

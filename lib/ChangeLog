@@ -1,3 +1,172 @@
+2007-04-29 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* log.c: (quagga_timestamp) Optimize the subsecond timestamp generation.
+
+2007-04-28 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* command.c: (config_write_host) Save "log timestamp precision"
+	  if not default value.
+	  (show_logging) Show configured timestamp precision.
+	  (config_log_timestamp_precision) Enable configuration of timestamp
+	  precision.
+	  (no_config_log_timestamp_precision) Restore default timestamp
+	  precision.
+	  (cmd_init) Install new timestamp precision commands.
+	* log.h: (struct zlog) New timestamp_precision field.
+	  (quagga_timestamp) New function to generate a timestamp with the
+	  desired precision.
+	  (struct timestamp_control) Declare a structure for use in avoiding
+	  repeated duplicate calls to quagga_timestamp.
+	* log.c: (quagga_timestamp) New function to generate a timestamp
+	  of the desired precision.
+	  (time_print) Call quagga_timestamp if the time hasn't already been
+	  calculated.
+	  (vzlog) Initialize a timestamp_control structure and pass it to
+	  time_print and vty_log.
+	  (zlog_backtrace) Fix 64-bit problem: cannot print size_t with %u.
+	* vty.h: Must now include "log.h".
+	  (vty_log) Takes an additional struct timestamp_control argument.
+	* vty.c: (vty_log_out) Use new struct timestamp_control and new
+	  quagga_timestamp function to print timestamps of the desired
+	  precision.
+	  (vty_time_print) Use new quagga_timestamp function.
+	  (vty_log) Accept new struct timestamp_control argument and pass it
+	  down to vty_log_out.
+
+2007-04-27 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* smux.c: (smux_trap) Fix printf format to work with 64-bit size_t.
+
+2007-04-07 Paul Jakma <paul.jakma@sun.com>
+
+	* prefix.h: Add define to match IPv4 Link-Local addresses
+
+2007-03-20 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* log.c: (mes_lookup) Make the function more robust: check for
+	  cases where the index does not match the key value at that position.
+	  If so, give a warning and fall back to a linear search.
+	  And improve the error message in cases where even that fails.
+
+2006-12-12 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* if.h: (struct connected) Add new ZEBRA_IFA_PEER flag indicating
+	  whether a peer address has been configured.  Comment now shows
+	  the new interpretation of the destination addr: if ZEBRA_IFA_PEER
+	  is set, then it must contain the destination address, otherwise
+	  it may contain the broadcast address or be NULL.
+	  (CONNECTED_DEST_HOST,CONNECTED_POINTOPOINT_HOST) Remove obsolete
+	  macros that were specific to IPv4 and not fully general.
+	  (CONNECTED_PEER) New macro to check ZEBRA_IFA_PEER flag.
+	  (CONNECTED_PREFIX) New macro giving the prefix to insert into
+	  the RIB: if CONNECTED_PEER, then use the destination (peer) address,
+	  else use the address field.
+	  (CONNECTED_ID) New macro to come up with an identifying address
+	  for the struct connected.
+	* if.c: (if_lookup_address, connected_lookup_address) Streamline
+	  logic with new CONNECTED_PREFIX macro.
+	* prefix.h: (PREFIX_COPY_IPV4, PREFIX_COPY_IPV6) New macros
+	  for better performance than the general prefix_copy function.
+	* zclient.c: (zebra_interface_address_read) For non-null destination
+	  addresses, set prefixlen to equal the address prefixlen.  This
+	  is needed to get the new CONNECTED_PREFIX macro to work properly.
+
+2006-10-14 Paul Jakma <paul.jakma@sun.com>
+
+	* if.c: (general) Handle upgrades from SUNWzebra, which tried
+	  to track each logical interface as a seperate struct
+	  interface, to Quagga, which assigns only one struct interface
+	  per ifindex.
+	  (if_sunwzebra_get) Try decompose a logical interface name
+          (fooX:Y) to the 'primary' name (fooX), for Solaris.
+          (interface_cmd) Use if_sunwzebra_get on Solaris.
+
+2006-09-26 Pierre-Yves Ritschard <pierre-yves@spootnik.org>
+
+	* smux.c: (smux_open,smux_trap,smux_register) Fix various
+	  asn_build_* calls to pass the proper length in the final
+	  argument: use sizeof(<variable>) instead of sizeof(<type>),
+	  since there were several inconsistencies between the actual
+	  variable type and the size that was passed.  This should
+	  fix some problems on 64-bit architectures where sizeof(int)
+	  != sizeof(long).
+
+2006-08-25 Paul Jakma <paul.jakma@sun.com>
+
+	* thread.c: (general) Add support for monotonic clock, it may still
+	  jump forward by huge amounts, but should be immune to going
+	  backwards. Fixes bug #134.
+	  (quagga_gettimeofday_relative_adjust) helper, does what name
+	  says - adjusts gettimeofday based relative timer.
+	  (quagga_gettimeofday) helper to keep recent_time up to date.
+	  (quagga_get_relative) helper, update and getch the relative
+	  timer using gettimeofday(). POSIX CLOCK_MONOTONIC is also
+	  supported, but the code is not enabled yet nor tested.
+	  (quagga_real_stabilised) helper, retrieve absolute time but
+	  stabilised so as to never decrease.
+	  (quagga_gettime) Exported interface, analogous to POSIX
+	  clock_gettime() in interface, supporting several clocks.
+	  (quagga_time) Exported interface, analogous to traditional
+	  time(), will never decrease.
+	  (recent_relative_time) Convenience function to retrieve
+	  relative_time timeval, similar to existing recent_time absolute
+	  timeval, for when an approximately recent value will do.
+	  (remainder) Update to use above helpers.
+	  (thread_getrusage) Previously was a macro, but needs to be
+	  a function to twiddle with thread.c private stuff.
+	* thread.c: Point the GETRUSAGE macro at previous function.
+	  Export quagga_gettime, quagga_time and recent_relative_time for 
+	  general use.
+
+2006-07-25 Paul Jakma <paul.jakma@sun.com>
+
+	* thread.h: (struct thread) Add a cache pointer to the struct
+	  cpu_thread_history, if it is known - saving hash lookup on
+	  each thread_call.
+	* thread.c: (thread_call) Cache the pointer to the
+          cpu_thread_history, so that future thread_calls of same
+          thread can avoid the hash_lookup.
+
+2006-07-10 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* vty.c: (vty_log_out) Do not call vty_close, because this could
+	  result in a parent function's accessing the freed memory.
+	  Instead, set status VTY_CLOSE and call shutdown(vty->fd, SHUT_RDWR).
+	  And add a comment on vty_close.
+
+2006-07-10 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* vty.c: (vty_log_out, vty_read, vty_flush, vtysh_flush, vtysh_read)
+	  After an I/O error, must set vty->monitor to 0 before calling
+	  zlog_warn, otherwise an infinite recursion could occur
+	  (since zlog_warn triggers a message to be written to the vty,
+	  and that in turn triggers another error message when it fails, etc.).
+
+2006-07-03 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* vty.c: (vty_log_out) Debug messages to terminal vty sessions
+	  should include timestamps.
+
+2006-06-28 Paul Jakma <paul.jakma@sun.com>
+
+	* memory.c: Fix typo in cpp conditional around malloc.h, from
+	  comment in bug #269.
+
+2006-06-27 Paul Jakma <paul.jakma@sun.com>
+
+	* route_types.awk: Remove setting the 'bare' numeric route type
+	  in redist strings.
+
+2006-06-15 Paul Jakma <paul.jakma@sun.com>
+
+	* command.c: (cmd_describe_command_real) Fix leak, CID #38.
+	* memory.h: Experimental, have XFREE macro NULL out the freed
+	  pointer.
+	* linklist.c: (list_delete) call list_delete_all_node, don't
+	  duplicate it.
+	* if.c: (if_flag_dump) remove the whitespace indentation, callers
+	  should provide.
+
 2006-05-28 Paul Jakma <paul.jakma@sun.com>
 
 	* zebra.h: Include inttypes.h rather than stdint.h, best practice
@@ -12,8 +181,15 @@
 	  define.
 	  (zlog_backtrace_sigsafe) Ditto. Add printstack() version of the
 	  the DUMP macro in this function.
-	* memory.h: Experimental, have XFREE macro NULL out the freed
-	  pointer.
+
+2006-05-23 Paul Jakma <paul.jakma@sun.com>
+
+	* route_types.txt: New file, table of ZEBRA_ROUTE definitions.
+	* route_types.awk: New script, to parse previous and generate
+	  (for now) redistribute string defines.
+	* Makefile.am: build route_types.h using previous two, ala
+	  memtypes.h, include the script and table file in EXTRA_DIST.
+	* command.h: pull in route_types.h, add a REDIST_STR define.
 
 2006-05-21 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
 

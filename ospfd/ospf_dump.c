@@ -58,6 +58,7 @@ int ospf_ism_state_msg_max = OSPF_ISM_STATE_MAX;
 struct message ospf_nsm_state_msg[] =
 {
   { NSM_DependUpon, "DependUpon" },
+  { NSM_Deleted,    "Deleted"    },
   { NSM_Down,       "Down" },
   { NSM_Attempt,    "Attempt" },
   { NSM_Init,       "Init" },
@@ -299,7 +300,7 @@ ospf_timer_dump (struct thread *t, char *buf, size_t size)
   if (!t)
     return "inactive";
   
-  result = tv_sub (t->u.sands, recent_time);
+  result = tv_sub (t->u.sands, recent_relative_time());
   return ospf_timeval_dump (&result, buf, size);
 }
 
@@ -1544,7 +1545,7 @@ config_write_debug (struct vty *vty)
   else
     {
       if (IS_CONF_DEBUG_OSPF (nsm, NSM_STATUS))
-	vty_out (vty, "debug ospf ism status%s", VTY_NEWLINE);
+	vty_out (vty, "debug ospf nsm status%s", VTY_NEWLINE);
       if (IS_CONF_DEBUG_OSPF (nsm, NSM_EVENTS))
 	vty_out (vty, "debug ospf nsm event%s", VTY_NEWLINE);
       if (IS_CONF_DEBUG_OSPF (nsm, NSM_TIMERS))

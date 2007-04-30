@@ -1,3 +1,41 @@
+2007-04-27 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ripd.c: (rip_vty_out_uptime) Remove unused variable timer_now.
+
+2007-04-11 Emmanuel Vize <emmanuel.vize@6wind.com>
+
+	* ripd.c: (rip_vty_out_uptime) Use new thread_timer_remain_second
+	  to display properly the route timeout, displayed by "show ip rip"
+
+2007-03-21 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ripd.c: (show_ip_rip_status) Use new thread_timer_remain_second
+	  function instead of rip_next_thread_timer to display the time until
+	  next update properly.
+	  (rip_next_thread_timer) Remove obsolete function.
+
+2006-12-12 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* rip_interface.c: (rip_interface_multicast_set) Use new CONNECTED_ID
+	  macro to simplify logic.
+	  (rip_request_interface_send) Fix minor bug: ipv4_broadcast_addr does
+	  not give a useful result if prefixlen is 32 (we require a peer
+	  address in such cases).
+	* ripd.c: (rip_update_interface) Fix same bug as above.
+
+2006-09-11 Paul Jakma <paul.jakma@sun.com>
+
+	* ripd.c: (rip_read) remove gratuitous use of mid-function
+	  declaration of vrecv, bug #278.
+	* rip_routemap.c: (route_set_metric) underflow check needs to
+	  use signed, problem identified and diagnosed by Pavel
+	  Nikiforov in bug #293.
+
+2006-06-29 Paul Jakma <paul.jakma@sun.com>
+
+	* rip_zebra: (general) convert redistribute commands to use
+	  the auto-generated defines.
+
 2006-05-04 Paul Jakma <paul.jakma@sun.com>
 
 	* (general) Fixes for bugs #261 and 262. Thanks to

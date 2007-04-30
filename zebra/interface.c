@@ -372,15 +372,10 @@ if_add_update (struct interface *ifp)
 void 
 if_delete_update (struct interface *ifp)
 {
-  struct listnode *node;
-  struct listnode *next;
-  struct listnode *first;
-  struct listnode *last;
   struct connected *ifc;
   struct prefix *p;
   struct route_node *rn;
   struct zebra_if *zebra_if;
-  struct list *addr_list;
 
   zebra_if = ifp->info;
 
@@ -401,7 +396,9 @@ if_delete_update (struct interface *ifp)
   /* Delete connected routes from the kernel. */
   if (ifp->connected)
     {
-      last = NULL;
+      struct listnode *node;
+      struct listnode *last = NULL;
+
       while ((node = (last ? last->next : listhead (ifp->connected))))
 	{
 	  ifc = listgetdata (node);
@@ -410,21 +407,26 @@ if_delete_update (struct interface *ifp)
 	  if (p->family == AF_INET
 	      && (rn = route_node_lookup (zebra_if->ipv4_subnets, p)))
 	    {
+	      struct listnode *anode;
+	      struct listnode *next;
+	      struct listnode *first;
+	      struct list *addr_list;
+	      
 	      route_unlock_node (rn);
 	      addr_list = (struct list *) rn->info;
 	      
 	      /* Remove addresses, secondaries first. */
 	      first = listhead (addr_list);
-	      for (node = first->next; node || first; node = next)
+	      for (anode = first->next; anode || first; anode = next)
 		{
-		  if (! node)
+		  if (!anode)
 		    {
-		      node = first;
+		      anode = first;
 		      first = NULL;
 		    }
-		  next = node->next;
+		  next = anode->next;
 
-		  ifc = listgetdata (node);
+		  ifc = listgetdata (anode);
 		  p = ifc->address;
 
 		  connected_down_ipv4 (ifp, ifc);
@@ -434,12 +436,17 @@ if_delete_update (struct interface *ifp)
 		  UNSET_FLAG (ifc->conf, ZEBRA_IFC_REAL);
 
 		  /* Remove from subnet chain. */
-		  list_delete_node (addr_list, node);
+		  list_delete_node (addr_list, anode);
 		  route_unlock_node (rn);
 		  
 		  /* Remove from interface address list (unconditionally). */
-		  listnode_delete (ifp->connected, ifc);
-	      	  connected_free (ifc);
+		  if (!CHECK_FLAG (ifc->conf, ZEBRA_IFC_CONFIGURED))
+		    {
+		      listnode_delete (ifp->connected, ifc);
+		      connected_free (ifc);
+                    }
+                  else
+                    last = node;
 		}
 
 	      /* Free chain list and respective route node. */
@@ -548,46 +555,6 @@ if_refresh (struct interface *ifp)
   if_get_flags (ifp);
 }
 
-/* Printout flag information into vty */
-static void
-if_flag_dump_vty (struct vty *vty, uint64_t flag)
-{
-  int separator = 0;
-
-#define IFF_OUT_VTY(X, Y) \
-  if ((X) && (flag & (X))) \
-    { \
-      if (separator) \
-	vty_out (vty, ","); \
-      else \
-	separator = 1; \
-      vty_out (vty, Y); \
-    }
-
-  vty_out (vty, "<");
-  IFF_OUT_VTY (IFF_UP, "UP");
-  IFF_OUT_VTY (IFF_BROADCAST, "BROADCAST");
-  IFF_OUT_VTY (IFF_DEBUG, "DEBUG");
-  IFF_OUT_VTY (IFF_LOOPBACK, "LOOPBACK");
-  IFF_OUT_VTY (IFF_POINTOPOINT, "POINTOPOINT");
-  IFF_OUT_VTY (IFF_NOTRAILERS, "NOTRAILERS");
-  IFF_OUT_VTY (IFF_RUNNING, "RUNNING");
-  IFF_OUT_VTY (IFF_NOARP, "NOARP");
-  IFF_OUT_VTY (IFF_PROMISC, "PROMISC");
-  IFF_OUT_VTY (IFF_ALLMULTI, "ALLMULTI");
-  IFF_OUT_VTY (IFF_OACTIVE, "OACTIVE");
-  IFF_OUT_VTY (IFF_SIMPLEX, "SIMPLEX");
-  IFF_OUT_VTY (IFF_LINK0, "LINK0");
-  IFF_OUT_VTY (IFF_LINK1, "LINK1");
-  IFF_OUT_VTY (IFF_LINK2, "LINK2");
-  IFF_OUT_VTY (IFF_MULTICAST, "MULTICAST");
-#ifdef SOLARIS_IPV6
-  IFF_OUT_VTY (IFF_VIRTUAL, "IFF_VIRTUAL");
-  IFF_OUT_VTY (IFF_NOXMIT, "IFF_NOXMIT");
-#endif /* SOLARIS_IPV6 */
-  vty_out (vty, ">");
-}
-
 /* Output prefix string to vty. */
 static int
 prefix_vty_out (struct vty *vty, struct prefix *p)
@@ -604,10 +571,6 @@ static void
 connected_dump_vty (struct vty *vty, struct connected *connected)
 {
   struct prefix *p;
-  struct interface *ifp;
-
-  /* Set interface pointer. */
-  ifp = connected->ifp;
 
   /* Print interface address. */
   p = connected->address;
@@ -616,21 +579,10 @@ connected_dump_vty (struct vty *vty, struct connected *connected)
   vty_out (vty, "/%d", p->prefixlen);
 
   /* If there is destination address, print it. */
-  p = connected->destination;
-  if (p)
+  if (connected->destination)
     {
-      if (p->family == AF_INET)
-	if (ifp->flags & IFF_BROADCAST)
-	  {
-	    vty_out (vty, " broadcast ");
-	    prefix_vty_out (vty, p);
-	  }
-
-      if (ifp->flags & IFF_POINTOPOINT)
-	{
-	  vty_out (vty, " pointopoint ");
-	  prefix_vty_out (vty, p);
-	}
+      vty_out (vty, (CONNECTED_PEER(connected) ? " peer " : " broadcast "));
+      prefix_vty_out (vty, connected->destination);
     }
 
   if (CHECK_FLAG (connected->flags, ZEBRA_IFA_SECONDARY))
@@ -740,12 +692,9 @@ if_dump_vty (struct vty *vty, struct interface *ifp)
   if (ifp->mtu6 != ifp->mtu)
     vty_out (vty, "mtu6 %d ", ifp->mtu6);
 #endif 
-  vty_out (vty, "%s  flags: ", VTY_NEWLINE);
+  vty_out (vty, "%s  flags: %s%s", VTY_NEWLINE,
+           if_flag_dump (ifp->flags), VTY_NEWLINE);
   
-  if_flag_dump_vty (vty, ifp->flags);
-
-  vty_out (vty, "%s", VTY_NEWLINE);
-
   /* Hardware address. */
 #ifdef HAVE_STRUCT_SOCKADDR_DL
   sdl = &ifp->sdl;
@@ -1316,6 +1265,8 @@ ip_address_uninstall (struct vty *vty, struct interface *ifp,
   if (! CHECK_FLAG (ifc->conf, ZEBRA_IFC_CONFIGURED))
     return CMD_WARNING;
 
+  UNSET_FLAG (ifc->conf, ZEBRA_IFC_CONFIGURED);
+  
   /* This is not real address or interface is not active. */
   if (! CHECK_FLAG (ifc->conf, ZEBRA_IFC_REAL)
       || ! CHECK_FLAG (ifp->status, ZEBRA_INTERFACE_ACTIVE))

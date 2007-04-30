@@ -1,3 +1,423 @@
+2007-04-21 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ospf_interface.c: (ospf_if_set_multicast) Fix bug: was testing
+	  interface passive status improperly in light of the recent
+	  'passive-interface default' patch.  Now need to test
+	  OSPF_IF_PASSIVE_STATUS(oi) instead of
+	  OSPF_IF_PARAM(oi, passive_interface).
+
+2007-03-23 Paul Jakma <paul.jakma@sun.com>
+
+	* ospf_spf.c: (various) Add more debug statements.
+	  (ospf_nexthop_calculation) Fix silly regression causing ospfd
+	  to fail to calculate paths past networks not attached to root
+	  vertex, introduced with bug #330 fixes.
+
+2007-03-14 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ospf_snmp.c: (ospf_snmp_neighbor_state) New function to
+	  map internal quagga neighbor states to SNMP standard values.
+	  (ospfNbrEntry) Call new ospf_snmp_neighbor_state function.
+
+2007-03-14 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ospf_zebra.c: (ospf_zebra_add, ospf_zebra_delete) Fix bug
+	  where inet_ntoa was used twice in the same debug message,
+	  which doesn't work because there's a single shared buffer
+	  for the returned string.  The fix is to use inet_ntop.
+
+2007-02-27 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ospfd.c: (ospf_terminate) Exit immediately if ospf is not
+	  actually running (e.g. the config file was empty).  Fixes
+	  bug where SIGTERM would not kill ospfd.
+
+2007-02-26 Paul Jakma <paul.jakma@sun.com>
+
+	* ospf_spf.c: Fix regression introduced with bug #330 fix: The
+	  cost update added to ospf_spf_add_parent only handled PtP
+	  case, differing from same functionality in higher-level
+	  ospf_spf_next. Regression diagnosed by Anders Pedersen,
+	  mailnews+router-quagga-dev@news.cohaesio.com.
+	  (ospf_vertex_new) Initialise vertices to max-cost.
+	  (ospf_spf_init) Root vertex always creates with 0 cost.
+	  (ospf_spf_add_parent) Remove the buggy V->W cost calculating
+	  code, instead take the new distance as a parameter.
+	  (ospf_nexthop_calculation) Take distance as parameter, so it
+	  can be passed down to add_parent.
+	  (ospf_spf_next) Dont initialise candiate vertex distance,
+	  vertex_new does so already. Pass distance down to
+	  nexthop_calculation (see above).
+
+2007-01-24 Paul Jakma <paul.jakma@sun.com>
+
+	* ospf_spf.c: Bug #330: Nexthop calculation sometimes may fail,
+	  and it needs to indicate this result to SPF.
+	  (ospf_spf_add_parent) Flush of parent list needs to be done here,
+	  for simplicity.
+	  (ospf_nexthop_calculation) Caller needs to know whether
+	  nexthop calculation succeeded. Every return statement must
+	  correctly indicate such.
+	  (ospf_spf_next) Queueing/prioritisation of vertices in SPF
+	  must take into account whether nexthop_calculation succeeded,
+	  or SPF may fail to find best paths.
+
+2006-12-12 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ospf_interface.c: (ospf_if_is_configured, ospf_if_lookup_by_prefix,
+	  ospf_if_lookup_recv_if) Simplify logic using new CONNECTED_PREFIX
+	  macro.
+	* ospf_lsa.c: (lsa_link_ptop_set) Using the new CONNECTED_PREFIX
+	  macro, both options collapse into the same code.
+	* ospf_snmp.c: (ospf_snmp_if_update) Simplify logic using new
+	  CONNECTED_ID macro.
+	  (ospf_snmp_is_if_have_addr) Simplify logic using new CONNECTED_PREFIX
+	  macro.
+	* ospf_vty.c: (show_ip_ospf_interface_sub) Use new CONNECTED_PEER macro
+	  instead of testing the IFF_POINTOPOINT flag.
+	* ospfd.c: (ospf_network_match_iface) Use new CONNECTED_PEER macro
+	  instead of testing with if_is_pointopoint.  And add commented-out
+	  code to implement alternative (in my opinion) more elegant behavior
+	  that has no special-case treatment for PtP addresses.
+	  (ospf_network_run) Use new CONNECTED_ID macro to simplify logic.
+
+2006-12-04 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ospfd.c: (ospf_network_run) Remove an offending 'break' statement.
+	  Previously, after creating a single ospf_interface on a given
+	  network interface, the code would skip to the next interface
+	  without considering other connected addresses on the interface.
+	  After removing the 'break', we now consider all connected addresses.
+
+2006-11-30 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ospf_zebra.c: (ospf_router_id_update_zebra,
+	  ospf_interface_address_add, ospf_interface_address_delete)
+	  If (IS_DEBUG_OSPF (zebra, ZEBRA_INTERFACE)) is enabled, then
+	  add a debug message about what Zebra is telling us.
+	  (ospf_zebra_add_discard) Add a debug message matching the one
+	  already in ospf_zebra_delete_discard.
+
+2006-11-28 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ospf_vty.c: (ospf_passive_interface_default) Take additional
+	  'newval' arg so we can update ospf->passive_interface_default inside
+	  this function.  More importantly, we now call ospf_if_set_multicast
+	  on all ospf_interfaces.
+	  (ospf_passive_interface, no_ospf_passive_interface) Fix bug:
+	  for 'default' case, argv[0] is undefined, so we must test for
+	  (argc == 0) before using argv[0].  And since
+	  ospf_passive_interface_default now calls ospf_if_set_multicast as
+	  needed, we can just return after calling
+	  ospf_passive_interface_default.
+
+2006-10-24 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ospf_zebra.c: (ospf_redistribute_default_set) Fix bug where
+	  a new value for ospf->default_originate was being ignored
+	  if a previous 'default-information originate' command
+	  had already been processed.
+
+2006-10-22 Yar Tikhiy <yar@comp.chem.msu.su>
+
+	* (general) Add support for passive-interface default (with
+	  minor edits by Paul Jakma).
+	* ospf_interface.h: Add OSPF_IF_PASSIVE_STATUS macro, looking
+	  at configured value, or the global 'default' value, as
+	  required.
+	* ospf_interface.c: (ospf_if_new_hook) Leave passive
+	  unconfigured per default, allowing global 'default' to
+	  take effect for unconfigured interfaces.
+	* ospf_packet.c: (various) use OSPF_IF_PASSIVE_STATUS
+	* ospf_vty.c: (ospf_passive_interface_default) new function,
+	  unset passive from all interfaces if default is enabled, as
+	  the per-iface settings become redundant.
+	  (ospf_passive_interface_update) new func, update passive
+	  setting taking global default into account.
+	  ({no,}ospf_passive_interface_addr_cmd) Add support for
+	  'default' variant of command.
+	  (show_ip_ospf_interface_sub) Update to take global
+	  default into account when printing passive status.
+	  (ospf_config_write) ditto.
+	* ospfd.c: (ospf_new) set global passive-interface default.
+	* ospfd.h: (struct ospf) Add field for global
+          passive-interface.
+	  
+2006-09-25 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ospf_packet.c: (ospf_packet_dup, ospf_make_md5_digest) 
+	  Fix zlog_warn messages to eliminate compiler warnings.
+	  (ospf_hello) Improve warning messages to show why we
+	  are complaining.
+
+2006-08-28 Andy Gay <andy@andynet.net>
+
+	* ospf_packet.c: (ospf_make_db_desc) Assert added with More-bit
+	  fixes does not hold up with addition of Ogier DB-Exchange
+	  optimisation, which can empty the db-summary list in between
+	  sent DD packets. Remove assert, update More-bit always when
+	  in Exchange.
+
+2006-08-27 J.J. Krabbendam <jkrabbendam@aimsys.nl>
+
+	* ospfd.c: (ospf_finish_final) default redistribute should be
+	  unset too, fixes bug where reconfiguring ospfd completely
+	  can no longer enable default redistribution.
+
+2006-08-25 Paul Jakma <paul.jakma@sun.com>
+
+	* (general) Bug #134. Be more robust to backward time changes,
+	  use the newly added libzebra time functions.
+	  In most cases: recent_time -> recent_relative_time()
+	  gettimeofday -> quagga_gettime (QUAGGA_CLK_MONOTONIC, ..)
+	  time -> quagga_time.
+	  (ospf_make_md5_digest) time() call deliberately not changed.
+	  (ospf_external_lsa_refresh) remove useless gettimeofday, LSA
+	  tv_orig time was already set in ospf_lsa_new, called via
+	  ospf_external_lsa_new.
+
+2006-08-04 Paul Jakma <paul.jakma@sun.com>
+
+	* ospf_lsdb.c: (ospf_lsdb_delete_entry) new function, consolidate
+	  exact same functionality replicated in other functions.
+	  (ospf_lsdb_add) Strip out code by using ospf_lsdb_delete_entry.
+	  (ospf_lsdb_delete) ditto.
+	  (ospf_lsdb_delete_all) ditto.
+
+2006-08-03 Paul Jakma <paul.jakma@sun.com>
+
+	* ospf_packet.c: (ospf_make_db_desc) Unset the DD More bit
+	  after constructing the packet, if appropriate. 
+	  (ospf_db_desc_proc) Speed up Exchange, slave should raise
+	  ExchangeDone earlier, as RFC mandates, by forming its reply
+	  before deciding whether both sides are done, avoids a
+	  needless round of empty DD packet exchanges at the end of
+	  Exchange, hence speeding up ExchangeDone.
+	  Implement draft-ogier-ospf-dbex-opt DB-exchange optimisation.
+	  (ospf_db_desc) use UNSET_FLAG macro.
+
+2006-07-27 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ospfd.c: (ospf_router_id_update) Fix and document the algorithm for
+	  selecting the router ID: if there is not a statically configured ID,
+	  then stick to the most recent value to avoid disruptive changes.
+	  This should fix bug #288.
+
+2006-07-26 Paul Jakma <paul.jakma@sun.com>
+
+	* ospf_lsa.{c,h}: (ospf_lsa_unlock) Change to take a double pointer
+	  to the LSA to be 'unlocked', so that, if the LSA is freed, the
+	  callers pointer to the LSA can be NULLed out, allowing any further
+	  use of that pointer to provoke a crash sooner rather than later.
+	* ospf_*.c: (general) Adjust callers of ospf_lsa_unlock to match
+	  previous. Try annotate 'locking' somewhat to show which 'locks'
+	  are protecting what LSA reference, if not obvious.
+	* ospf_opaque.c: (ospf_opaque_lsa_install) Trivial: remove useless
+	  goto, replace with return.
+	* ospf_packet.c: (ospf_make_ls_ack) Trivial: merge two list loops,
+	  the dual-loop predated the delete-safe list-loop macro.
+
+2006-07-25 Paul Jakma <paul.jakma@sun.com>
+
+	* ospf_neigbor.h: (struct ospf_neighbor) Add some additional
+	  neighbour state statistics fields, timestamps for progressive
+	  and regressive state changes, and pointer to event string
+	  for the latter state change.
+	* ospf_nsm.c: (nsm_notice_state_change) Update new state changs
+	  history as required.
+	* ospf_vty.c: (show_ip_ospf_neighbor_detail_sub) Print out above
+	  new per-neighbour state change stats.
+
+2006-07-10 Paul Jakma <paul.jakma@sun.com>
+
+	* ospf_nsm.c: (nsm_change_state) call nsm_clear_adj for all
+	  adjacency losses, hence removing need for nsm_reset_nbr.
+	  (nsm_reset_nbr) kill it, clear_adj in previous does fine.
+	  (nsm_kill_nbr,nsm_start) remove nsm_reset_nbr call.
+	  (ospf_nsm_event) Allow NSM function to be NULL, this along with
+	  removal of nsm_reset_nbr, allows a bunch of now useless functiosn
+	  to be removed.
+	  Remove some useless variables.
+	  (nsm_ignore) now useless, remove.
+	  (nsm_bad_ls_req) ditto
+	  (nsm_seq_number_mismatch)   "
+	  (nsm_oneway_received)       "
+	  (nsm_inactivity_timer)      "
+	  (nsm_ll_down)               "
+	  (NSM) replace removed action functions with NULL.
+	  (nsm_notice_state_changes) Move state change logging code to new
+	  func to declutter nsm_change_state and ospf_nsm_event.
+	  Log event with AdjChange, it's useful to know.
+	  (nsm_change_state) move adjchange and snmp logging to previous.
+	  (ospf_nsm_event) call nsm_notice_state_changes from here.
+	  Move the debug message to entry of function, so it gets out
+	  even if something goes wrong.
+	  Record state change timestamp and event in nbr struct.
+	* ospf_neighbor.h: (struct ospf_neighbor) Add fields to record
+	  timestamp of last NSM change and event.
+	* ospf_vty.c: (show_ip_ospf_neighbor_detail_sub) Print 
+	  last state change timestamp and event, if available.
+
+2006-07-10 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ospf_packet.c: (ospf_hello) Improve NetworkMask mismatch warning
+	  message to include interface name and conflicting prefix lengths.
+
+2006-07-07 Paul Jakma <paul.jakma@sun.com>
+
+	* ospf_nsm.h: Add a NSM_Deleted neighbour state, to act as dummy
+	  state indicating the neighbour is to be deleted.
+	* ospf_nsm.c: (general) Use the NSM_Deleted state to delete
+	  neighbours, thus allowing code to be slightly more obvious
+	  in its flow.
+	  (nsm_timer_set) Add NSM_Deleted. Add another timer the code
+	  missed.
+	  (nsm_kill_nbr) No need for special case call to nsm_change_state
+	  anymore.
+	  Make the assert and error-handling for same case more readable
+	  (Andrew Schorr)
+	  Remove the call to ospf_nbr_delete, nsm_change_state can do
+	  this generally now via NSM_Deleted.
+	  (struct ... NSM) Add the dummy NSM_Deleted state, the 3 events
+	  that can lead to nsm_kill_nbr all now transition the NBR to
+	  NSM_Deleted and the general change_state function can be left
+	  to do the work.
+	  (ospf_nsm_event) Special casing of events and early-return can
+	  be removed now.
+	  On transition into Deleted, delete the nbr.
+	* ospf_dump.c: (ospf_nsm_state_msg) Add Deleted.
+
+2006-07-06 Paul Jakma <paul.jakma@sun.com>
+
+	* ospf_nsm.c: (ospf_nsm_event) LLDown event also results in nbr
+	  being deleted, requires early-return too. Likely explains
+	  some crash reports after interface events.
+
+2006-07-04 Paul Jakma <paul.jakma@sun.com>
+
+	* ospf_nsm.c: (general) Various small cleanups from Andrew's
+	  review of last set of patches.
+	  (nsm_timer_set) Loading, Full and default can share
+	  same code too.
+	  (nsm_should_adj) Can just be one big OR.
+	  (nsm_twoway_received) Collapse into return statement.
+
+2006-07-02 Paul Jakma <paul.jakma@sun.com>
+
+	* ospf_nsm.c: (nsm_should_adj) New function, just consolidate the
+	  10.4 adjacency check from nsm_twoway_received/nsm_adj_ok.
+	  (nsm_twoway_received/nsm_adj_ok) Use former.
+	  (nsm_clear_adj) clear adjacency related state for a
+	  neighbour, needed for some state changes from > ExStart down
+	  to ExStart or less, which need not go through nsm_reset_nbr.
+	  (nsm_reset_nbr) move code to former. Should be static.
+	  (ospf_nsm_event) Don't allow action functions to change
+	  next_state if the NSM tables do not indicate next_state is
+	  conditional, log warning if one tries - existing code
+	  appears fine though.
+	  Remove long dead code.
+	  Use nsm_clear_adj for state changes that take down
+	  adjacencies to TwoWay/ExStart.
+	  (nsm_timer_set) ls_req timer should be OFF in early states.
+	  Compact several identical sections.
+	  Set inactivity timer to OFF for Down, for documentary
+	  purposes.
+	  (nsm_kill_nbr) Oops, action function shouldn't try return
+	  1 for error.
+	* ospf_lsa.c: (ospf_translated_nssa_refresh) CID #13.
+
+2006-06-30 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ospf_vty.c: (show_ip_ospf_neighbor_id) Should show all instances
+	  of that neighbor (since it may appear on multiple interfaces)
+	  instead of bailing out after showing the first match.
+
+2006-06-29 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ospf_nsm.c: (nsm_twoway_received) When deciding whether to
+	  change from state Init to ExStart, the test for whether the
+	  neighboring router is DR or BDR should be against the
+	  local router's notion of DR/BDR, not the neighbor's view.
+
+2006-06-28 Erik Muller <erikm@internap.com>
+
+	* ospfd.h: Define 2 new struct ospf config flags:
+	  OSPF_LOG_ADJACENCY_CHANGES and OSPF_LOG_ADJACENCY_DETAIL
+	* ospf_nsm.c (nsm_change_state): Log adjacency changes if
+	  requested.
+	* ospf_vty.c (ospf_log_adjacency_changes): New command function
+	  to implement ospf subcommand "log-adjacency-changes [detail]".
+	  (no_ospf_log_adjacency_changes) Turn off log-adjacency-changes.
+	  (show_ip_ospf) Show whether adjacency changes are logged.
+	  (ospf_config_write) Add "log-adjacency-changes [detail]" to config.
+	  (ospf_vty_init) Add ospf_log_adjacency_changes and
+	  no_ospf_log_adjacency_changes.
+
+2006-06-26 Paul Jakma <paul.jakma@sun.com>
+
+	* ospf_abr.c: (general) NSSA translate-candidate ABRs need to
+	  be ASBRs, or other routers may rightfully refuse to install
+	  translated type-5s LSAs. reported by dendroot@gmail.com.
+	  (ospf_abr_nssa_check_status) Detect change in translator
+	  state when ABR, and inc/dec redistribute count as when we
+	  leave/enter the disabled state - so that translate-enabled
+	  ABR properly sets ASBR bit on non-NSSA areas.
+	  Run the resulting function through indent to clean it up.
+	* ospf_lsa.c: (router_lsa_flags) For purposes of ASBR bit,
+	  NSSA area is same as stub area.
+	  
+2006-06-24 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ospf_snmp.c: (ospfTrapNbrStateChange, ospfTrapIfStateChange) Improve
+	  info log message to indicate why the trap is being sent.
+
+2006-06-24 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ospf_dump.c: (config_write_debug) Fix typo to show debug ospf nsm
+	  status properly (not ism status).
+
+2006-06-17 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* ospf_vty.c: ({no_,}ospf_passive_interface) Replace if_lookup_by_name
+	  with a call to if_get_by_name -- if the interface does not exist
+	  already, it should be created.  And remove the obsolete warning
+	  message.
+
+2006-06-15 Paul Jakma <paul.jakma@sun.com>
+
+	* ospf_interface.h: (struct ospf_if_info) Add reference counts
+	  for multicast group memberships. Add various macros to help
+	  manipulate/check membership state.
+	* ospf_interface.c: (ospf_if_set_multicast) Maintain the
+	  ospf_if_info reference counts, and only actually drop
+	  memberships if it hits 0, to avoid losing membership when
+	  OSPF is disabled on an interface with multiple active OSPF
+	  interfaces.
+	* ospf_packet.c: (ospf_{hello,read}) Use the new macros to
+	  check/set
+	  multicast membership.
+	* ospf_vty.c: (show_ip_ospf_interface_sub) ditto.
+	  
+2006-05-31 Paul Jakma <paul.jakma@sun.com>
+
+	* ospf_lsdb.c: (ospf_lsdb_delete) robustify against NULL arguments,
+	  print warning.
+	* ospf_lsa.c: (ospf_discard_from_db) ditto.
+	  (ospf_maxage_lsa_remover) Check lsa->lsdb for validity, possible
+	  mitigation (but not solution) for bug #269.
+
+2006-05-30 Paul Jakma <paul.jakma@sun.com>
+
+	* ospf_packet.c: (ospf_read) Debug message about packets
+	  received on unenabled interfaces should be conditional on
+	  debug being set.
+
+2006-05-23 Paul Jakma <paul.jakma@sun.com>
+
+	* ospf_vty.c: (general) Replace in-place route redistribution
+	  command and help strings with the new auto-generated defines
+	  from lib/route_types.h
+
 2006-05-13 Paul Jakma <paul.jakma@sun.com>
 
 	* ospf_lsa.c: (ospf_translated_nssa_refresh) fix the sanity

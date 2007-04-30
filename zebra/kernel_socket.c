@@ -136,8 +136,12 @@ struct message rtm_type_str[] =
   {RTM_REDIRECT, "RTM_REDIRECT"},
   {RTM_MISS,     "RTM_MISS"},
   {RTM_LOCK,     "RTM_LOCK"},
+#ifdef OLDADD
   {RTM_OLDADD,   "RTM_OLDADD"},
+#endif /* RTM_OLDADD */
+#ifdef RTM_OLDDEL
   {RTM_OLDDEL,   "RTM_OLDDEL"},
+#endif /* RTM_OLDDEL */
   {RTM_RESOLVE,  "RTM_RESOLVE"},
   {RTM_NEWADDR,  "RTM_NEWADDR"},
   {RTM_DELADDR,  "RTM_DELADDR"},
@@ -581,8 +585,15 @@ ifam_read (struct ifa_msghdr *ifam)
   if (ifnlen && strncmp (ifp->name, ifname, INTERFACE_NAMSIZ))
     isalias = 1;
   
+#if 0
+  /* it might seem cute to grab the interface metric here, however
+   * we're processing an address update message, and so some systems
+   * (e.g. FBSD) dont bother to fill in ifam_metric. Disabled, but left
+   * in deliberately, as comment.
+   */
   ifp->metric = ifam->ifam_metric;
-  
+#endif
+
   /* Add connected address. */
   switch (sockunion_family (&addr))
     {
@@ -605,7 +616,7 @@ ifam_read (struct ifa_msghdr *ifam)
 	SET_IN6_LINKLOCAL_IFINDEX (addr.sin6.sin6_addr, 0);
 
       if (ifam->ifam_type == RTM_NEWADDR)
-	connected_add_ipv6 (ifp,
+	connected_add_ipv6 (ifp, 0,
 			    &addr.sin6.sin6_addr, 
 			    ip6_masklen (mask.sin6.sin6_addr),
 			    &brd.sin6.sin6_addr,

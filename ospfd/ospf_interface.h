@@ -50,6 +50,13 @@ struct ospf_if_params
   DECLARE_IF_PARAM (u_char, type);                   /* type of interface */
 #define OSPF_IF_ACTIVE                  0
 #define OSPF_IF_PASSIVE		        1
+
+#define OSPF_IF_PASSIVE_STATUS(O) \
+       (OSPF_IF_PARAM_CONFIGURED((O)->params, passive_interface) ? \
+         (O)->params->passive_interface : \
+         (OSPF_IF_PARAM_CONFIGURED(IF_DEF_PARAMS((O)->ifp), passive_interface) ? \
+           IF_DEF_PARAMS((O)->ifp)->passive_interface : \
+           (O)->ospf->passive_interface_default))
   
   DECLARE_IF_PARAM (u_int32_t, v_hello);             /* Hello Interval */
   DECLARE_IF_PARAM (u_int32_t, v_wait);              /* Router Dead Interval */
@@ -68,11 +75,19 @@ struct ospf_if_params
   DECLARE_IF_PARAM (int, auth_type);               /* OSPF authentication type */
 };
 
+enum
+{
+  MEMBER_ALLROUTERS = 0,
+  MEMBER_DROUTERS,
+  MEMBER_MAX,
+};
+
 struct ospf_if_info
 {
   struct ospf_if_params *def_params;
   struct route_table *params;
   struct route_table *oifs;
+  unsigned int membership_counts[MEMBER_MAX];	/* multicast group refcnts */
 };
 
 struct ospf_interface;
@@ -132,8 +147,20 @@ struct ospf_interface
 
   /* To which multicast groups do we currently belong? */
   u_char multicast_memberships;
-#define MEMBER_ALLROUTERS	0x1
-#define MEMBER_DROUTERS		0x2
+#define OI_MEMBER_FLAG(M) (1 << (M))
+#define OI_MEMBER_COUNT(O,M) (IF_OSPF_IF_INFO(oi->ifp)->membership_counts[(M)])
+#define OI_MEMBER_CHECK(O,M) \
+    (CHECK_FLAG((O)->multicast_memberships, OI_MEMBER_FLAG(M)))
+#define OI_MEMBER_JOINED(O,M) \
+  do { \
+    SET_FLAG ((O)->multicast_memberships, OI_MEMBER_FLAG(M)); \
+    IF_OSPF_IF_INFO((O)->ifp)->membership_counts[(M)]++; \
+  } while (0)
+#define OI_MEMBER_LEFT(O,M) \
+  do { \
+    UNSET_FLAG ((O)->multicast_memberships, OI_MEMBER_FLAG(M)); \
+    IF_OSPF_IF_INFO((O)->ifp)->membership_counts[(M)]--; \
+  } while (0)
 
   struct prefix *address;		/* Interface prefix */
   struct connected *connected;          /* Pointer to connected */ 
