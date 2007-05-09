@@ -2,6 +2,7 @@
 
 	* configure.ac: sys/conf.h depends on sys/param.h, at least on
 	  FBSD 6.2.
+	  (bug #363) Should check for in_pktinfo for IRDP
 
 2006-05-27 Paul Jakma <paul.jakma@sun.com>
 

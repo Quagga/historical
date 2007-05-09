@@ -529,7 +529,7 @@ case "${enable_vtysh}" in
          AC_DEFINE(VTYSH,,VTY shell)
 	 AC_PATH_PROG(PERL, perl)
 dnl	 Vtysh uses libreadline, which looks for termcap functions at
-dnl	 configure time.  We follow readline's search order.
+dnl	 configure time.  We follow readlines search order.
 dnl	 The required procedures are in libtermcap on NetBSD, in
 dnl	 [TODO] on Linux, and in [TODO] on Solaris.
 	 AC_CHECK_LIB(termcap, tputs, LIBREADLINE="$LIBREADLINE -ltermcap",
@@ -583,7 +583,7 @@ if test "$with_libpam" = "yes"; then
 fi
 
 if test "$with_libpam" = "yes"; then
-dnl took this test from proftpd's configure.in and suited to our needs
+dnl took this test from proftpds configure.in and suited to our needs
 dnl -------------------------------------------------------------------------
 dnl
 dnl This next check looks funky due to a linker problem with some versions
@@ -1210,6 +1210,17 @@ AC_CHECK_MEMBERS([struct sockaddr.sa_len,
 	struct if6_aliasreq.ifra_lifetime,
 	struct nd_opt_adv_interval.nd_opt_ai_type],
 	[], [], QUAGGA_INCLUDES)
+
+dnl ---------------------------
+dnl pktinfo checks
+dnl ---------------------------
+AC_CHECK_TYPES([struct in_pktinfo], 
+ [if test "${enable_irdp}" != "no"; then
+    AC_DEFINE(HAVE_IRDP,, IRDP)
+  fi],
+ [if test "${enable_irdp}" = "yes"; then
+    AC_MSG_ERROR(['IRDP requires in_pktinfo at the moment!'])
+  fi], [QUAGGA_INCLUDES])
 
 dnl --------------------------------------
 dnl checking for getrusage struct and call
