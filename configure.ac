@@ -376,7 +376,7 @@ AC_STRUCT_TM
 dnl -------------------------
 dnl Check other header files.
 dnl -------------------------
-AC_CHECK_HEADERS([stropts.h sys/conf.h sys/ksym.h sys/times.h sys/select.h \
+AC_CHECK_HEADERS([stropts.h sys/ksym.h sys/times.h sys/select.h \
 	sys/types.h linux/version.h netdb.h asm/types.h \
 	sys/param.h limits.h signal.h libutil.h \
 	sys/socket.h netinet/in.h])
@@ -399,6 +399,7 @@ m4_define([QUAGGA_INCLUDES],
 #if HAVE_SYS_TYPES_H
 # include <sys/types.h>
 #endif
+/* sys/conf.h depends on param.h on FBSD at least */
 #if HAVE_SYS_PARAM_H
 # include <sys/param.h>
 #endif
@@ -418,7 +419,7 @@ AC_CHECK_HEADERS([sys/un.h net/if.h netinet/in_systm.h netinet/in_var.h \
 	net/if_dl.h net/if_var.h net/netopt.h net/route.h \
 	inet/nd.h arpa/inet.h \
 	fcntl.h stddef.h sys/ioctl.h syslog.h wchar.h wctype.h \
-	sys/sysctl.h sys/sockio.h kvm.h],
+	sys/sysctl.h sys/sockio.h kvm.h sys/conf.h],
 	[], [], QUAGGA_INCLUDES)
 
 AC_CHECK_HEADERS([ucontext.h], [], [],
