@@ -19,6 +19,11 @@
 	  HAVE_* defines. I.e. HAVE_SA_LEN -> HAVE_STRUCT_SOCKADDR_SA_LEN,
 	* bgpd/Makefile.am: Add LIBM to bgpd's LDADD, for pow().
 
+2007-04-30 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
+
+	* configure.ac: Change gcc CFLAGS from '-std=c99' to '-std=gnu99'
+	  to improve portability.
+
 2007-04-29 Paul Jakma <paul.jakma@sun.com>
 
 	* configure.ac: Bump to 0.99.7
