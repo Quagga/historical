@@ -15,6 +15,7 @@
 	  LIBS, and all the binaries, with libm linkage.
 	  Remove the bad practice of using m4 changequote(), just
 	  quote the []'s in the case statements properly.
+	  This should fix bugs 162, 303 and 178.
 	* */*.{c,h}: Update all HAVE_* to the standard autoconf namespaced
 	  HAVE_* defines. I.e. HAVE_SA_LEN -> HAVE_STRUCT_SOCKADDR_SA_LEN,
 	* bgpd/Makefile.am: Add LIBM to bgpd's LDADD, for pow().
