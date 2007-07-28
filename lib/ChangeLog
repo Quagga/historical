@@ -1,3 +1,11 @@
+2007-07-26  Paul Jakma <paul.jakma@sun.com>
+
+	* log.c: (mes_lookup) warning about code not being in same-number
+	  array slot should be debug, not warning. E.g. BGP has several
+	  discontigious number spaces, allocating from different parts of a
+	  space is not uncommon (e.g. IANA assigned versus vendor-assigned
+	  code points in some number space).
+	  
 2007-06-01 Andrew J. Schorr <ajschorr@alumni.princeton.edu>
 
 	* zebra.h: On linux, we seem to need to include <linux/types.h> before
