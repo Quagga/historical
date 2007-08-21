@@ -472,6 +472,15 @@ ifm_read (struct if_msghdr *ifm)
             if_delete_update (ifp);
           }
 #endif /* RTM_IFANNOUNCE */
+      if (if_is_up (ifp))
+      {
+#if defined(__bsdi__)
+        if_kvm_get_mtu (ifp);
+#else
+        if_get_mtu (ifp);
+#endif /* __bsdi__ */
+        if_get_metric (ifp);
+      }
     }
 
 #ifdef HAVE_NET_RT_IFLIST
@@ -741,6 +750,8 @@ rtm_read (struct rt_msghdr *rtm)
   /* Read destination and netmask and gateway from rtm message
      structure. */
   flags = rtm_read_mesg (rtm, &dest, &mask, &gate, ifname, &ifnlen);
+  if (!(flags & RTF_DONE))
+    return;
   if (IS_ZEBRA_DEBUG_KERNEL)
     zlog_debug ("%s: got rtm of type %d (%s)", __func__, rtm->rtm_type,
       LOOKUP (rtm_type_str, rtm->rtm_type));
@@ -794,8 +805,6 @@ rtm_read (struct rt_msghdr *rtm)
       {
         char buf[INET_ADDRSTRLEN], gate_buf[INET_ADDRSTRLEN];
         int ret;
-        if (!(flags & RTF_DONE))
-          return;
         if (! IS_ZEBRA_DEBUG_RIB)
           return;
         ret = rib_lookup_ipv4_route (&p, &gate); 
