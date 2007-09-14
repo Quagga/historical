@@ -1,3 +1,23 @@
+2007-09-14 Denis Ovsienko
+
+	* rt_socket.c: (kernel_rtm_ipv4) Use lookup() instead of
+	  LOOKUP/mes_lookup() for rtm_type_str, as this is more
+	  appropriate for sparse code-spaces (#401).
+	* kernel_socket.c: (rtm_read, rtmsg_debug): Idem.
+	* kernel_socket.[ch]: We don't need rtm_type_str_max any more.
+	* main.c: (main) Don't call rib_sweep_route() before the
+	  pidfile is acquired, this fixes bug #402.
+	* zserv.h: Dropped old_pid, since it's useless now. This
+	  fixes bug #381.
+	* main.c: (main) Idem.
+	* test_main.c: (main) Idem.
+	* kernel_socket.c: (rtm_read) Idem.
+
+2007-09-12 Denis Ovsienko
+
+	* rt_socket.c: (kernel_rtm_ipv4) prefix_buf could be passed
+	  to zlog_err() uninitialized with debug disabled. Fixed.
+
 2007-09-06 Denis Ovsienko
 
 	* rtread_sysctl.c: (route_read) Set RTF_DONE on the routing
