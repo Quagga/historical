@@ -1,3 +1,34 @@
+2007-10-04 Denis Ovsienko
+
+	* zebra_rib.c: (rib_process) escape from the nexthop
+	  iteration cycle earliest possible to save CPU time.
+
+2007-10-03 Denis Ovsienko
+
+	* zebra_rib.c: (rib_process, rib_link, rib_addnode,
+	  rib_unlink, rib_delnode) log IPv6 prefixes same well
+	  as IPv4 ones are logged.
+
+2007-09-14 Denis Ovsienko
+
+	* rt_socket.c: (kernel_rtm_ipv4) Use lookup() instead of
+	  LOOKUP/mes_lookup() for rtm_type_str, as this is more
+	  appropriate for sparse code-spaces (#401).
+	* kernel_socket.c: (rtm_read, rtmsg_debug): Idem.
+	* kernel_socket.[ch]: We don't need rtm_type_str_max any more.
+	* main.c: (main) Don't call rib_sweep_route() before the
+	  pidfile is acquired, this fixes bug #402.
+	* zserv.h: Dropped old_pid, since it's useless now. This
+	  fixes bug #381.
+	* main.c: (main) Idem.
+	* test_main.c: (main) Idem.
+	* kernel_socket.c: (rtm_read) Idem.
+
+2007-09-12 Denis Ovsienko
+
+	* rt_socket.c: (kernel_rtm_ipv4) prefix_buf could be passed
+	  to zlog_err() uninitialized with debug disabled. Fixed.
+
 2007-09-06 Denis Ovsienko
 
 	* rtread_sysctl.c: (route_read) Set RTF_DONE on the routing
@@ -20,7 +51,7 @@
 2007-08-14 Denis Ovsienko
 
 	* zebra_rib.c: (nexthop_active_update) Added a comment
-          and rewrote nexthop iteration.
+	  and rewrote nexthop iteration.
 
 2007-08-13 Denis Ovsienko
 
