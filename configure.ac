@@ -906,6 +906,27 @@ AC_CHECK_HEADER([net/if.h],
     QUAGGA_INCLUDES)], 
   [], QUAGGA_INCLUDES )
 
+dnl ------------------------
+dnl TCP_MD5SIG socket option
+dnl ------------------------
+
+AC_CHECK_HEADER([netinet/tcp.h], 
+   [m4_define([MD5_INCLUDES],
+      QUAGGA_INCLUDES
+      [#include <netinet/tcp.h>
+    ])
+    AC_CHECK_DECLS([TCP_MD5SIG], [], [], MD5_INCLUDES)],
+   [],
+   QUAGGA_INCLUDES)
+if test $ac_cv_have_decl_TCP_MD5SIG = no; then
+  AC_CHECK_HEADER([linux/tcp.h],
+       [m4_define([MD5_INCLUDES],
+          QUAGGA_INCLUDES
+          [#include <linux/tcp.h>
+        ])
+       AC_CHECK_DECLS([TCP_MD5SIG], [], [], MD5_INCLUDES)])
+fi
+
 dnl -----------------------
 dnl check proc file system.
 dnl -----------------------
@@ -1186,7 +1207,9 @@ case "${enable_solaris}" in
 esac
 
 if test "${enable_bgp_announce}" = "no";then
-  AC_DEFINE(DISABLE_BGP_ANNOUNCE,,Disable BGP installation to zebra)
+  AC_DEFINE(DISABLE_BGP_ANNOUNCE,1,Disable BGP installation to zebra)
+else
+  AC_DEFINE(DISABLE_BGP_ANNOUNCE,0,Disable BGP installation to zebra)
 fi
 
 AC_SUBST(ZEBRA)
