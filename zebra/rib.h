@@ -40,7 +40,7 @@ struct rib
 {
   /* Status Flags for the *route_node*, but kept in the head RIB.. */
   u_char rn_status;
-#define RIB_ROUTE_QUEUED	(1 << 0)
+#define RIB_ROUTE_QUEUED(x)	(1 << (x))
 
   /* Link list. */
   struct rib *next;
@@ -81,6 +81,20 @@ struct rib
   u_char nexthop_num;
   u_char nexthop_active_num;
   u_char nexthop_fib_num;
+};
+
+/* meta-queue structure:
+ * sub-queue 0: connected, kernel
+ * sub-queue 1: static
+ * sub-queue 2: RIP, RIPng, OSPF, OSPF6, IS-IS
+ * sub-queue 3: iBGP, eBGP
+ * sub-queue 4: any other origin (if any)
+ */
+#define MQ_SIZE 5
+struct meta_queue
+{
+  struct list *subq[MQ_SIZE];
+  u_int32_t size; /* sum of lengths of all subqueues */
 };
 
 /* Static route information. */
@@ -212,6 +226,7 @@ extern struct nexthop *nexthop_blackhole_add (struct rib *);
 extern struct nexthop *nexthop_ipv4_add (struct rib *, struct in_addr *,
 					 struct in_addr *);
 extern void rib_lookup_and_dump (struct prefix_ipv4 *);
+extern void rib_lookup_and_pushup (struct prefix_ipv4 *);
 extern void rib_dump (const char *, const struct prefix_ipv4 *, const struct rib *);
 extern int rib_lookup_ipv4_route (struct prefix_ipv4 *, union sockunion *);
 #define ZEBRA_RIB_LOOKUP_ERROR -1

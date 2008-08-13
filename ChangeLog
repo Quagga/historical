@@ -1,3 +1,26 @@
+2008-07-22 Paul Jakma <paul.jakma@sun.com>
+
+	* HACKING: Document preference for compiler conditional code, over
+	  cpp conditional.
+	* configure.ac: DISABLE_BGP_ANNOUNCE always should be defined.
+
+2008-06-10 Paul Jakma <paul@jakma.org>
+
+	* configure.ac: Bump version to 0.99.10
+
+2008-05-29 Martin Nagy <mnagy@redhat.com>
+
+	* */*main.c: Sanity check port numbers before using.
+
+2008-01-30 Peter Szilagyi <sp615@hszk.bme.hu>
+
+	* lib/stream.h: Remove named 'new' parameter in prototype
+	  for c++ header compatibility.
+	* ospfd/ospf_opaque.h: ditto
+	* ospfd/ospfd.h: Renamed struct export to _export for c++
+	  header compatibility.
+	* ospf6d/ospf6_area.h: ditto
+
 2008-01-11 Ingo Flaschberger <if@xip.at>
 
 	* configure.ac: Improve HAVE_BSD_LINK_DETECT test.

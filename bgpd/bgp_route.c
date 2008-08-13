@@ -742,9 +742,8 @@ bgp_announce_check (struct bgp_info *ri, struct peer *peer, struct prefix *p,
   filter = &peer->filter[afi][safi];
   bgp = peer->bgp;
   
-#ifdef DISABLE_BGP_ANNOUNCE
-  return 0;
-#endif
+  if (DISABLE_BGP_ANNOUNCE)
+    return 0;
 
   /* Do not send announces to RS-clients from the 'normal' bgp_table. */
   if (CHECK_FLAG(peer->af_flags[afi][safi], PEER_FLAG_RSERVER_CLIENT))
@@ -1095,9 +1094,8 @@ bgp_announce_check_rsclient (struct bgp_info *ri, struct peer *rsclient,
   filter = &rsclient->filter[afi][safi];
   bgp = rsclient->bgp;
 
-#ifdef DISABLE_BGP_ANNOUNCE
-  return 0;
-#endif
+  if (DISABLE_BGP_ANNOUNCE)
+    return 0;
 
   /* Do not send back route to sender. */
   if (from == rsclient)
@@ -5694,7 +5692,7 @@ route_vty_out (struct vty *vty, struct prefix *p,
     
       /* Print aspath */
       if (attr->aspath)
-        aspath_print_vty (vty, "%s ", attr->aspath);
+        aspath_print_vty (vty, "%s", attr->aspath, " ");
 
       /* Print origin */
       vty_out (vty, "%s", bgp_origin_str[attr->origin]);
@@ -5759,7 +5757,7 @@ route_vty_out_tmp (struct vty *vty, struct prefix *p,
       
       /* Print aspath */
       if (attr->aspath)
-        aspath_print_vty (vty, "%s ", attr->aspath);
+        aspath_print_vty (vty, "%s", attr->aspath, " ");
 
       /* Print origin */
       vty_out (vty, "%s", bgp_origin_str[attr->origin]);
@@ -5859,7 +5857,7 @@ damp_route_vty_out (struct vty *vty, struct prefix *p,
     {
       /* Print aspath */
       if (attr->aspath)
-	aspath_print_vty (vty, "%s ", attr->aspath);
+	aspath_print_vty (vty, "%s", attr->aspath, " ");
 
       /* Print origin */
       vty_out (vty, "%s", bgp_origin_str[attr->origin]);
@@ -5922,7 +5920,7 @@ flap_route_vty_out (struct vty *vty, struct prefix *p,
     {
       /* Print aspath */
       if (attr->aspath)
-	aspath_print_vty (vty, "%s ", attr->aspath);
+	aspath_print_vty (vty, "%s", attr->aspath, " ");
 
       /* Print origin */
       vty_out (vty, "%s", bgp_origin_str[attr->origin]);
@@ -5950,7 +5948,7 @@ route_vty_out_detail (struct vty *vty, struct bgp *bgp, struct prefix *p,
 	  if (aspath_count_hops (attr->aspath) == 0)
 	    vty_out (vty, "Local");
 	  else
-	    aspath_print_vty (vty, "%s", attr->aspath);
+	    aspath_print_vty (vty, "%s", attr->aspath, "");
 	}
 
       if (CHECK_FLAG (binfo->flags, BGP_INFO_REMOVED))
